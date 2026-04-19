@@ -1,0 +1,17 @@
+{
+  "name": "kicialite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiny KB classifier bot for the Kicia main server.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}

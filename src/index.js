@@ -1,7 +1,47 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
 const { fetchKb } = require("./kb");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
+
+const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
+
+function acquireInstanceLock() {
+  try {
+    fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+    const existingPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
+    if (Number.isInteger(existingPid)) {
+      try {
+        process.kill(existingPid, 0);
+        throw new Error(`Another KiciaLite instance is already running (PID ${existingPid}).`);
+      } catch (probeErr) {
+        if (probeErr.code !== "ESRCH") throw probeErr;
+      }
+    }
+    fs.rmSync(LOCK_PATH, { force: true });
+    fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
+  }
+}
+
+function releaseInstanceLock() {
+  try {
+    if (fs.existsSync(LOCK_PATH) && fs.readFileSync(LOCK_PATH, "utf8") === String(process.pid)) {
+      fs.rmSync(LOCK_PATH, { force: true });
+    }
+  } catch {}
+}
+
+acquireInstanceLock();
+for (const signal of ["SIGINT", "SIGTERM", "exit"]) {
+  process.on(signal, () => {
+    releaseInstanceLock();
+    if (signal !== "exit") process.exit(0);
+  });
+}
 
 const client = new Client({
   intents: [

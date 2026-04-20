@@ -28,7 +28,7 @@ async function handleDm(message) {
   await message.reply({
     embeds: [
       buildPanel({
-        header: "Use Me In The Main Server",
+        header: "👋 Use Me In The Main Server",
         body: `I only work inside the ${BRAND.NAME} main server channels. Ping me there and I'll check the docs.`,
         color: INFO
       })
@@ -71,7 +71,7 @@ async function replyWithError(message) {
     .send({
       embeds: [
         buildPanel({
-          header: "Docs Lookup Is Down Right Now",
+          header: "⚠️ Docs Lookup Is Down Right Now",
           body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
           color: DANGER
         })

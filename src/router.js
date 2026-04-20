@@ -58,7 +58,7 @@ function buildExecutorReply(executor) {
   if (!executor) {
     return {
       kind: "executor_unknown",
-      header: "Couldn't Find That Executor",
+      header: "❓ Couldn't Find That Executor",
       body: "idk that exec, it's not in the documentation",
       color: "info"
     };
@@ -68,7 +68,7 @@ function buildExecutorReply(executor) {
     const recommended = /recommended/i.test(executor.compatibility || "");
     return {
       kind: "executor",
-      header: "Executor Status",
+      header: "🧩 Executor Status",
       body: recommended
         ? `yeah, ${executor.name} is supported and recommended`
         : `yeah, ${executor.name} is supported`,
@@ -80,7 +80,7 @@ function buildExecutorReply(executor) {
   if (executor.status === "not_recommended") {
     return {
       kind: "executor",
-      header: "Executor Status",
+      header: "🧩 Executor Status",
       body: `${executor.name} can still work, but it's not one we recommend`,
       color: "warn",
       links: executor.links || []
@@ -90,7 +90,7 @@ function buildExecutorReply(executor) {
   if (executor.status === "temporarily_not_working") {
     return {
       kind: "executor",
-      header: "Executor Status",
+      header: "🧩 Executor Status",
       body: `${executor.name} is listed, but it's not working rn`,
       color: "danger",
       links: executor.links || []
@@ -99,7 +99,7 @@ function buildExecutorReply(executor) {
 
   return {
     kind: "executor",
-    header: "Executor Status",
+    header: "🧩 Executor Status",
     body: `nah, ${executor.name} isn't supported`,
     color: "danger",
     links: executor.links || []
@@ -120,7 +120,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
   if (!normalized) {
     return {
       kind: "empty",
-      header: "Say What Happened First",
+      header: "⚠️ Say What Happened First",
       body: "Send a short message about the problem, then ping me again and I'll check the docs.",
       color: "warn"
     };
@@ -129,7 +129,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
   if (detectStatusQuestion(normalized)) {
     return {
       kind: "status",
-      header: "KiciaHook Status",
+      header: "📡 KiciaHook Status",
       body: runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY,
       color: runtimeStatus === "DOWN" ? "warn" : "success"
     };
@@ -146,9 +146,9 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     return maybeAppendDownNote(
       {
         kind: "docs",
-        header: "That One's In The Docs",
+        header: "📚 That One's In The Docs",
         body: `### Looks like this matches **${issueMatch.title}**.`,
-        tip: `[Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
+        tip: `📘 [Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
         tipLevel: "##",
         color: "success"
@@ -162,7 +162,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     {
       kind: "ticket",
       reason: supportOnly ? "support_only" : "fallback",
-      header: supportOnly ? "That One Needs Staff" : "Couldn't Pin That Down",
+      header: supportOnly ? "🎫 That One Needs Staff" : "🎫 Couldn't Pin That Down",
       body: supportOnly
         ? `Hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out.`
         : `Open a ticket here: **[ticket panel](${BRAND.TICKET_JUMP_URL})**.`,

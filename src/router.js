@@ -33,6 +33,13 @@ function sanitizeExecutorCandidate(candidate) {
     .trim();
 }
 
+function getTranscriptLines(text) {
+  return String(text || "")
+    .split(/\n+/)
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+}
+
 function detectStatusQuestion(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
@@ -53,6 +60,23 @@ function extractExecutorCandidate(text) {
     const candidate = sanitizeExecutorCandidate(match[1]);
     if (candidate) return candidate;
   }
+  return null;
+}
+
+function findLatestExplicitIntent(transcript) {
+  const lines = getTranscriptLines(transcript);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (detectStatusQuestion(line)) {
+      return { type: "status", line };
+    }
+
+    const candidate = extractExecutorCandidate(line);
+    if (candidate || hasExecutorIntent(line)) {
+      return { type: "executor", line, candidate };
+    }
+  }
+
   return null;
 }
 
@@ -128,7 +152,9 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     };
   }
 
-  if (detectStatusQuestion(normalized)) {
+  const explicitIntent = findLatestExplicitIntent(transcript);
+
+  if (explicitIntent?.type === "status") {
     return {
       kind: "status",
       header: "📡 KiciaHook Status",
@@ -137,9 +163,10 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     };
   }
 
-  const candidate = extractExecutorCandidate(normalized);
-  if (candidate || hasExecutorIntent(normalized)) {
-    const executor = findExecutorMatch(candidate || normalized, kb, { fallbackText: normalized });
+  if (explicitIntent?.type === "executor") {
+    const executor = findExecutorMatch(explicitIntent.candidate || explicitIntent.line, kb, {
+      fallbackText: explicitIntent.line
+    });
     return maybeAppendDownNote(buildExecutorReply(executor), runtimeStatus);
   }
 
@@ -179,6 +206,7 @@ module.exports = {
   classifyTranscript,
   detectStatusQuestion,
   extractExecutorCandidate,
+  getTranscriptLines,
   hasExecutorIntent,
   STATUS_UP_REPLY,
   STATUS_DOWN_REPLY,

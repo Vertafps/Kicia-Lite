@@ -133,6 +133,12 @@ test("routes does kiciahook work as status instead of executor", () => {
   assert.equal(route.body, "status says it's down rn");
 });
 
+test("executor routing prioritizes the most recent explicit question", () => {
+  const route = classifyTranscript("does madium work\n@kicialite does delta work", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /Delta can still work/i);
+});
+
 test("non-status phrases that mention kicia do not trigger status mode", () => {
   const route = classifyTranscript("kicia gui freezes in lobby", kb, "UP");
   assert.equal(route.kind, "docs");

@@ -1,6 +1,6 @@
 const { fetchWithTimeout } = require("./utils/fetch");
 const { KB_URL } = require("./config");
-const { containsPhrase, normalizeText, tokenize, uniqueNormalized } = require("./text");
+const { containsPhrase, fuzzyTokenMatch, normalizeText, tokenize, uniqueNormalized } = require("./text");
 
 let _cache = null;
 let _lastFetchOk = 0;
@@ -23,7 +23,12 @@ function normalizeKb(data) {
     strong_keywords: entry.strong_keywords || entry.match_phrases || [],
     _matchPhrases: uniqueNormalized(entry.match_phrases || entry.strong_keywords || []),
     _keywords: uniqueNormalized(entry.keywords || []),
-    _titleTokens: [...new Set(tokenize(entry.title).filter((token) => token.length > 2))]
+    _titleTokens: [...new Set(tokenize(entry.title).filter((token) => token.length > 2))],
+    _replyTokens: [
+      ...new Set(
+        tokenize(`${entry.reply || ""} ${(entry.steps || []).join(" ")}`).filter((token) => token.length > 2)
+      )
+    ]
   }));
 
   const executorsByStatus = Object.fromEntries(
@@ -102,6 +107,29 @@ function findExecutorMatch(candidate, kb, { fallbackText } = {}) {
   return null;
 }
 
+function countNearbyTokenMatches(termTokens, transcriptTokens) {
+  let matchCount = 0;
+  for (const termToken of termTokens) {
+    if (transcriptTokens.some((token) => fuzzyTokenMatch(termToken, token))) {
+      matchCount += 1;
+    }
+  }
+  return matchCount;
+}
+
+function scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase) {
+  if (!phrase) return 0;
+  if (containsPhrase(normalizedTranscript, phrase)) return 1;
+
+  const termTokens = tokenize(phrase).filter((token) => token.length > 2);
+  if (!termTokens.length) return 0;
+
+  const fuzzyMatches = countNearbyTokenMatches(termTokens, transcriptTokens);
+  if (termTokens.length >= 3 && fuzzyMatches >= termTokens.length - 1) return 0.7;
+  if (termTokens.length === 2 && fuzzyMatches === 2) return 0.55;
+  return 0;
+}
+
 function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
   if (!keyword) return null;
   if (containsPhrase(normalizedTranscript, keyword)) {
@@ -111,9 +139,31 @@ function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
   }
 
   const termTokens = tokenize(keyword).filter((token) => token.length > 2);
-  if (termTokens.length > 1 && termTokens.every((token) => transcriptTokens.has(token))) {
+  if (!termTokens.length) return null;
+
+  const exactMatches = termTokens.filter((token) => transcriptTokens.includes(token)).length;
+  if (termTokens.length === 1 && transcriptTokens.some((token) => fuzzyTokenMatch(termTokens[0], token))) {
+    return {
+      score: 1.75
+    };
+  }
+
+  if (termTokens.length > 1 && exactMatches === termTokens.length) {
     return {
       score: 4.5
+    };
+  }
+
+  const fuzzyMatches = countNearbyTokenMatches(termTokens, transcriptTokens);
+  if (termTokens.length > 1 && fuzzyMatches === termTokens.length) {
+    return {
+      score: 3.75
+    };
+  }
+
+  if (termTokens.length >= 3 && fuzzyMatches >= termTokens.length - 1) {
+    return {
+      score: 2.5
     };
   }
 
@@ -123,11 +173,14 @@ function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
 function tryIssueMatch(transcript, kb) {
   const normalizedTranscript = normalizeText(transcript);
   if (!normalizedTranscript) return null;
-  const transcriptTokens = new Set(tokenize(transcript));
+  const transcriptTokens = tokenize(transcript);
   const candidates = [];
 
   for (const entry of kb.issues || []) {
-    const strongHits = entry._matchPhrases.filter((phrase) => containsPhrase(normalizedTranscript, phrase));
+    const strongPhraseScores = entry._matchPhrases
+      .map((phrase) => scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase))
+      .filter((score) => score > 0);
+    const strongScore = strongPhraseScores.reduce((sum, score) => sum + score, 0);
     const keywordHits = [];
     const distinctKeywordHits = new Set();
 
@@ -138,28 +191,36 @@ function tryIssueMatch(transcript, kb) {
       distinctKeywordHits.add(keyword);
     }
 
-    if (!(strongHits.length >= 1 || distinctKeywordHits.size >= 2)) continue;
+    if (!(strongScore >= 1 || distinctKeywordHits.size >= 2 || (strongScore >= 0.55 && distinctKeywordHits.size >= 1))) {
+      continue;
+    }
 
-    const titleTokenHits = entry._titleTokens.filter((token) => transcriptTokens.has(token)).length;
+    const titleTokenHits = entry._titleTokens.filter((token) =>
+      transcriptTokens.some((transcriptToken) => fuzzyTokenMatch(token, transcriptToken))
+    ).length;
+    const replyTokenHits = entry._replyTokens.filter((token) =>
+      transcriptTokens.some((transcriptToken) => fuzzyTokenMatch(token, transcriptToken))
+    ).length;
     const score =
-      strongHits.length * 30 +
+      strongScore * 30 +
       keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
-      Math.min(titleTokenHits, 3) * 0.35;
+      Math.min(titleTokenHits, 3) * 0.35 +
+      Math.min(replyTokenHits, 4) * 0.2;
 
     candidates.push({
       entry,
       score,
-      strongHits: strongHits.length
+      strongScore
     });
   }
 
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) return null;
-  if (!best.strongHits && best.score < 6) return null;
+  if (!best.strongScore && best.score < 6) return null;
 
   const runnerUp = candidates[1];
-  if (runnerUp && best.score - runnerUp.score < (best.strongHits ? 1 : 3)) {
+  if (runnerUp && best.score - runnerUp.score < (best.strongScore ? 1 : 3)) {
     return null;
   }
 

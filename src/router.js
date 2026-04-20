@@ -36,17 +36,36 @@ const STATUS_PATTERNS = [
 const EXECUTOR_PATTERNS = [
   /\bis\s+(.+?)\s+supported\b/,
   /\bis\s+(.+?)\s+(?:working|compatible)\b/,
-  /\bdoes\s+(.+?)\s+work\b/,
+  /\bdoes\s+(.+?)\s+work(?:s|ing)?\b/,
+  /\bdoes\s+(?:kicia|kiciahook)\s+support\s+(.+?)$/,
+  /\bdoes\s+(.+?)\s+support\s+(?:kicia|kiciahook)\b/,
   /\bcan\s+i\s+use\s+(.+?)\b/,
   /\bwhat\s+about\s+(.+?)(?:\s+executor)?$/,
+  /\bsupport\s+(.+?)\s+with\s+(?:kicia|kiciahook)\b/,
   /\bsupport(?:ed)?\s+for\s+(.+?)$/,
   /\bcan\s+(.+?)\s+work\b/
 ];
+const FEATURE_PATTERNS = [
+  /\bdoes\s+(?:kicia|kiciahook)\s+have\s+(.+?)$/,
+  /\bwhere\s+is\s+(.+?)$/,
+  /\bwhere\s+do\s+i\s+find\s+(.+?)$/,
+  /\bwhere\s+can\s+i\s+find\s+(.+?)$/,
+  /\bwhich\s+tab\s+(?:is|has)\s+(.+?)$/,
+  /\bhow\s+do\s+i\s+find\s+(.+?)$/
+];
+const BAN_PATTERNS = [/\bban(?:ned)?\b/, /\bdetected\b/, /\banticheat\b/, /\bmod ban\b/];
 
 function sanitizeExecutorCandidate(candidate) {
   return normalizeText(candidate)
     .replace(/\b(?:the|an|a)\b/g, " ")
     .replace(/\b(?:executor|for kicia|with kicia)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeFeatureCandidate(candidate) {
+  return normalizeText(candidate)
+    .replace(/\b(?:the|an|a|feature|features|thing|stuff|option|setting)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -78,6 +97,12 @@ function detectStatusQuestion(text) {
   return STATUS_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+function detectBanQuestion(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+  return BAN_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 function hasExecutorIntent(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
@@ -95,6 +120,26 @@ function extractExecutorCandidate(text) {
   return null;
 }
 
+function extractFeatureCandidate(text) {
+  const normalized = normalizeText(text);
+  for (const pattern of FEATURE_PATTERNS) {
+    const match = normalized.match(pattern);
+    if (!match || !match[1]) continue;
+    const candidate = sanitizeFeatureCandidate(match[1]);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function buildFeatureSearchText(line, candidate) {
+  if (!candidate) return line;
+  return [line, `where is ${candidate}`, `where do i find ${candidate}`, candidate].join("\n");
+}
+
+function buildBanSearchText(line) {
+  return [line, "will i get banned", "is kicia detected", "got banned"].join("\n");
+}
+
 function findLatestExplicitIntent(transcript) {
   const lines = getTranscriptLines(transcript);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -106,6 +151,15 @@ function findLatestExplicitIntent(transcript) {
     const candidate = extractExecutorCandidate(line);
     if (candidate || hasExecutorIntent(line)) {
       return { type: "executor", line, candidate };
+    }
+
+    if (detectBanQuestion(line)) {
+      return { type: "ban", line };
+    }
+
+    const featureCandidate = extractFeatureCandidate(line);
+    if (featureCandidate) {
+      return { type: "feature", line, candidate: featureCandidate };
     }
   }
 
@@ -202,7 +256,13 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     return maybeAppendDownNote(buildExecutorReply(executor), runtimeStatus);
   }
 
-  const issueMatch = tryIssueMatch(normalized, kb);
+  const issueSearchText =
+    explicitIntent?.type === "feature"
+      ? buildFeatureSearchText(explicitIntent.line, explicitIntent.candidate)
+      : explicitIntent?.type === "ban"
+        ? buildBanSearchText(explicitIntent.line)
+        : normalized;
+  const issueMatch = tryIssueMatch(issueSearchText, kb);
   if (issueMatch && issueMatch.category !== "support_only") {
     return maybeAppendDownNote(
       {

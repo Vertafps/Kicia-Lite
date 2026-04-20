@@ -24,7 +24,10 @@ const kb = normalizeKb({
       }
     ],
     temporarily_not_working: [{ name: "Solar", aliases: ["solar"] }],
-    not_recommended: [{ name: "Delta", aliases: ["delta"] }],
+    not_recommended: [
+      { name: "Delta", aliases: ["delta"] },
+      { name: "Cosmic", aliases: ["cosmic"] }
+    ],
     unsupported: [{ name: "Wave", aliases: ["wave"] }]
   },
   issues: [
@@ -57,6 +60,56 @@ const kb = normalizeKb({
       category: "config",
       keywords: ["premium lost fight", "bad config", "premium weak"],
       match_phrases: ["premium bad"]
+    },
+    {
+      title: "Banned / Detected",
+      category: "ban",
+      keywords: [
+        "banned",
+        "detected",
+        "anticheat ban",
+        "mod ban",
+        "banned for no reason",
+        "got banned",
+        "kicia detected",
+        "account banned",
+        "i got banned"
+      ],
+      match_phrases: [
+        "got banned",
+        "i got banned",
+        "random ban",
+        "anticheat ban",
+        "mod ban",
+        "i got banned with only kicia",
+        "is kicia detected",
+        "will i get banned"
+      ]
+    },
+    {
+      title: "GUI Layout Guide",
+      category: "gui",
+      keywords: [
+        "where is",
+        "gui layout",
+        "which tab",
+        "what tab",
+        "where to find",
+        "where can i find",
+        "which menu"
+      ],
+      match_phrases: [
+        "where is",
+        "where do i find",
+        "which tab",
+        "where is legitbot",
+        "where is silent aim",
+        "where is anti aim",
+        "where is triggerbot",
+        "where is esp"
+      ],
+      reply:
+        "Combat: Legitbot, Silent Aim, Triggerbot, Rage. Visuals: ESP. Misc: Fly, Walkspeed, No Spread."
     }
   ]
 });
@@ -101,6 +154,17 @@ test("routes unknown executor with clear support intent", () => {
   const route = classifyTranscript("is phantom supported", kb, "UP");
   assert.equal(route.kind, "executor_unknown");
   assert.match(route.body, /not in the documentation/i);
+});
+
+test("handles bad executor wording like does cosmic executor works", () => {
+  const route = classifyTranscript("does cosmic executor works", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /Cosmic can still work/i);
+});
+
+test("handles does kicia support codex as an unknown executor question", () => {
+  const route = classifyTranscript("does kicia support codex", kb, "UP");
+  assert.equal(route.kind, "executor_unknown");
 });
 
 test("executor names without support intent do not hijack issue matching", () => {
@@ -184,6 +248,24 @@ test("exact issue phrase hits docs", () => {
 test("fuzzy natural phrasing can still hit docs", () => {
   const route = classifyTranscript("gui freezes in lobby", kb, "UP");
   assert.equal(route.kind, "docs");
+});
+
+test("ban questions with messy wording still hit docs", () => {
+  const route = classifyTranscript("do you get banned for using free script", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /Banned \/ Detected/i);
+});
+
+test("feature existence questions can route to the gui layout guide", () => {
+  const route = classifyTranscript("does kicia have rage", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /GUI Layout Guide/i);
+});
+
+test("where is esp routes to the gui layout guide", () => {
+  const route = classifyTranscript("where is esp", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /GUI Layout Guide/i);
 });
 
 test("vague one word input falls back to ticket", () => {

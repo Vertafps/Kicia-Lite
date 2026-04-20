@@ -1,5 +1,5 @@
 const { buildPanel, SUCCESS, DANGER, WARN, INFO } = require("../embed");
-const { BRAND, TRANSCRIPT_N } = require("../config");
+const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
 const { fetchKb } = require("../kb");
 const { classifyTranscript } = require("../router");
 const { getRuntimeStatus } = require("../runtime-status");
@@ -14,11 +14,13 @@ const COLOR_BY_NAME = {
 };
 
 async function buildTranscript(message) {
-  const recent = await message.channel.messages.fetch({ limit: 30 });
-  return recent
+  const recent = await message.channel.messages.fetch({ limit: RECENT_CHANNEL_MESSAGES_N });
+  const transcriptMessages = recent
     .filter((m) => m.author.id === message.author.id)
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .last(TRANSCRIPT_N)
+    .last(TRANSCRIPT_N);
+
+  return transcriptMessages
     .map((m) => cleanText(m.content))
     .filter(Boolean)
     .join("\n");

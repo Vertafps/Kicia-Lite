@@ -12,6 +12,34 @@ const EXECUTOR_STATUSES = [
   "unsupported"
 ];
 
+function normalizeExecutorLinks(entry) {
+  const seen = new Set();
+  const links = [];
+  const rawLinks = [
+    entry.link,
+    ...(Array.isArray(entry.links) ? entry.links : [])
+  ];
+
+  for (const rawLink of rawLinks) {
+    let url = null;
+    let label = null;
+
+    if (typeof rawLink === "string") {
+      url = rawLink.trim();
+      label = `Open ${entry.name}`;
+    } else if (rawLink && typeof rawLink === "object") {
+      url = typeof rawLink.url === "string" ? rawLink.url.trim() : "";
+      label = typeof rawLink.label === "string" && rawLink.label.trim() ? rawLink.label.trim() : `Open ${entry.name}`;
+    }
+
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    links.push({ label, url });
+  }
+
+  return links;
+}
+
 function normalizeKb(data) {
   const raw = Array.isArray(data) ? { issues: data } : data;
   if (!raw || !Array.isArray(raw.issues)) throw new Error("KB not an array");
@@ -39,6 +67,11 @@ function normalizeKb(data) {
         list.map((entry) => ({
           ...entry,
           status,
+          type: entry.type || null,
+          compatibility: entry.compatibility || null,
+          reply: entry.reply || null,
+          notes: Array.isArray(entry.notes) ? entry.notes.filter(Boolean) : entry.notes ? [entry.notes] : [],
+          links: normalizeExecutorLinks(entry),
           aliases: [...new Set([entry.name, ...(entry.aliases || [])])],
           normalizedAliases: uniqueNormalized([entry.name, ...(entry.aliases || [])])
         }))
@@ -94,6 +127,35 @@ function chooseLongestAlias(text, kb, { allowShort = false } = {}) {
   return best ? best.executor : null;
 }
 
+function chooseBestFuzzyAlias(text, kb) {
+  const textTokens = tokenize(text).filter((token) => token.length > 1);
+  if (!textTokens.length) return null;
+
+  let best = null;
+  for (const [alias, executor] of Object.entries(kb.executorAliasIndex || {})) {
+    const aliasTokens = tokenize(alias);
+    if (!aliasTokens.length) continue;
+
+    const matches = aliasTokens.filter((aliasToken) =>
+      textTokens.some((textToken) => aliasToken === textToken || fuzzyTokenMatch(aliasToken, textToken))
+    ).length;
+    if (!matches) continue;
+
+    const coverage = matches / aliasTokens.length;
+    const score =
+      (matches === aliasTokens.length ? 8 : aliasTokens.length >= 3 && matches >= aliasTokens.length - 1 ? 5 : 0) +
+      coverage +
+      alias.length * 0.01;
+
+    if (score < 5) continue;
+    if (!best || score > best.score) {
+      best = { score, executor };
+    }
+  }
+
+  return best ? best.executor : null;
+}
+
 function findExecutorMatch(candidate, kb, { fallbackText } = {}) {
   const normalizedCandidate = normalizeText(candidate);
   if (normalizedCandidate && kb.executorAliasIndex?.[normalizedCandidate]) {
@@ -103,7 +165,15 @@ function findExecutorMatch(candidate, kb, { fallbackText } = {}) {
   const candidateMatch = chooseLongestAlias(candidate, kb, { allowShort: true });
   if (candidateMatch) return candidateMatch;
 
-  if (fallbackText) return chooseLongestAlias(fallbackText, kb);
+  const fuzzyCandidateMatch = chooseBestFuzzyAlias(candidate, kb);
+  if (fuzzyCandidateMatch) return fuzzyCandidateMatch;
+
+  if (fallbackText) {
+    return (
+      chooseLongestAlias(fallbackText, kb) ||
+      chooseBestFuzzyAlias(fallbackText, kb)
+    );
+  }
   return null;
 }
 
@@ -167,6 +237,15 @@ function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
     };
   }
 
+  const nearMatches = termTokens.filter((termToken) =>
+    transcriptTokens.some((token) => token === termToken || fuzzyTokenMatch(termToken, token))
+  ).length;
+  if (termTokens.length >= 2 && nearMatches >= termTokens.length - 1) {
+    return {
+      score: 1.8
+    };
+  }
+
   return null;
 }
 
@@ -183,6 +262,12 @@ function tryIssueMatch(transcript, kb) {
     const strongScore = strongPhraseScores.reduce((sum, score) => sum + score, 0);
     const keywordHits = [];
     const distinctKeywordHits = new Set();
+    const titleTokenHits = entry._titleTokens.filter((token) =>
+      transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
+    ).length;
+    const replyTokenHits = entry._replyTokens.filter((token) =>
+      transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
+    ).length;
 
     for (const keyword of entry._keywords) {
       const hit = scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword);
@@ -191,21 +276,23 @@ function tryIssueMatch(transcript, kb) {
       distinctKeywordHits.add(keyword);
     }
 
-    if (!(strongScore >= 1 || distinctKeywordHits.size >= 2 || (strongScore >= 0.55 && distinctKeywordHits.size >= 1))) {
+    if (
+      !(
+        strongScore >= 1 ||
+        distinctKeywordHits.size >= 2 ||
+        (strongScore >= 0.55 && distinctKeywordHits.size >= 1) ||
+        (distinctKeywordHits.size >= 1 && titleTokenHits >= 2) ||
+        (titleTokenHits >= 2 && replyTokenHits >= 2)
+      )
+    ) {
       continue;
     }
 
-    const titleTokenHits = entry._titleTokens.filter((token) =>
-      transcriptTokens.some((transcriptToken) => fuzzyTokenMatch(token, transcriptToken))
-    ).length;
-    const replyTokenHits = entry._replyTokens.filter((token) =>
-      transcriptTokens.some((transcriptToken) => fuzzyTokenMatch(token, transcriptToken))
-    ).length;
     const score =
       strongScore * 30 +
       keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
-      Math.min(titleTokenHits, 3) * 0.35 +
-      Math.min(replyTokenHits, 4) * 0.2;
+      Math.min(titleTokenHits, 4) * 0.45 +
+      Math.min(replyTokenHits, 5) * 0.25;
 
     candidates.push({
       entry,

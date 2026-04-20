@@ -1,4 +1,42 @@
 const STRIP_USER_MENTIONS_RE = /<@!?\d+>/g;
+const TOKEN_CANONICAL_MAP = new Map([
+  ["cna", "can"],
+  ["cant", "can"],
+  ["couldnt", "could"],
+  ["recomend", "recommend"],
+  ["recomended", "recommended"],
+  ["reccomended", "recommended"],
+  ["recommened", "recommended"],
+  ["suport", "support"],
+  ["suported", "supported"],
+  ["suppported", "supported"],
+  ["exe", "executor"],
+  ["exec", "executor"],
+  ["execs", "executor"],
+  ["executer", "executor"],
+  ["executor", "executor"],
+  ["ececutor", "executor"],
+  ["ecxecutor", "executor"],
+  ["ecexutor", "executor"],
+  ["downlaod", "download"],
+  ["downlod", "download"],
+  ["dwonload", "download"],
+  ["wher", "where"],
+  ["wheres", "where"],
+  ["guii", "gui"],
+  ["loby", "lobby"],
+  ["bann", "banned"],
+  ["bannd", "banned"],
+  ["deteced", "detected"],
+  ["detectd", "detected"],
+  ["tripmin", "tripmine"],
+  ["esped", "esp"],
+  ["ragebot", "rage"],
+  ["beat", "fight"],
+  ["beats", "fight"],
+  ["fighting", "fight"],
+  ["losing", "lose"]
+]);
 
 function cleanText(text) {
   return String(text || "")
@@ -24,11 +62,16 @@ function stemToken(token) {
   return token;
 }
 
+function canonicalizeToken(token) {
+  const stemmed = stemToken(token);
+  return TOKEN_CANONICAL_MAP.get(stemmed) || stemmed;
+}
+
 function tokenize(text) {
   return normalizeText(text)
     .split(/\s+/)
     .filter(Boolean)
-    .map(stemToken);
+    .map(canonicalizeToken);
 }
 
 function escapeRegExp(value) {

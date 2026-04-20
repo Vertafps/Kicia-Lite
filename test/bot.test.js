@@ -16,19 +16,48 @@ const kb = normalizeKb({
       {
         name: "Isaeva",
         aliases: ["isaeva", "isava"],
-        compatibility: "fully compatible, recommended"
+        type: "paid",
+        compatibility: "fully compatible, recommended",
+        link: "https://getisaeva.xyz/"
       },
       {
         name: "Potassium",
-        aliases: ["potassium", "pot"]
+        aliases: ["potassium", "pot"],
+        type: "paid",
+        compatibility: "fully compatible",
+        link: "https://potassium.pro/"
+      },
+      {
+        name: "Yub X",
+        aliases: ["yub x", "yub-x", "yubx", "yub"],
+        type: "free",
+        compatibility: "fully compatible",
+        link: "https://yub-x.com/",
+        notes: ["Uses a key system."]
       }
     ],
     temporarily_not_working: [{ name: "Solar", aliases: ["solar"] }],
     not_recommended: [
-      { name: "Delta", aliases: ["delta"] },
-      { name: "Cosmic", aliases: ["cosmic"] }
+      {
+        name: "Delta",
+        aliases: ["delta"],
+        link: "https://deltaexploits.gg/",
+        reply: "Delta is experimental and can freeze after a few matches."
+      },
+      {
+        name: "Cosmic",
+        aliases: ["cosmic"],
+        link: "https://discord.gg/getcosmic",
+        reply: "Cosmic is experimental and may work, but is not officially supported."
+      }
     ],
-    unsupported: [{ name: "Wave", aliases: ["wave"] }]
+    unsupported: [
+      {
+        name: "Wave",
+        aliases: ["wave"],
+        reply: "Wave is unsupported and does not work with KiciaHook."
+      }
+    ]
   },
   issues: [
     {
@@ -162,9 +191,33 @@ test("handles bad executor wording like does cosmic executor works", () => {
   assert.match(route.body, /Cosmic can still work/i);
 });
 
+test("shows executor info for get/download style questions", () => {
+  const route = classifyTranscript("how can i get yub-x ececutor", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /### Yub X/i);
+  assert.match(route.body, /supported/i);
+  assert.match(route.body, /\*\*Type:\*\* free/i);
+  assert.match(route.tip || "", /Open Yub X/i);
+  assert.match(route.tip || "", /yub-x\.com/i);
+});
+
 test("handles does kicia support codex as an unknown executor question", () => {
   const route = classifyTranscript("does kicia support codex", kb, "UP");
   assert.equal(route.kind, "executor_unknown");
+});
+
+test("shows recommended executor picks when asked", () => {
+  const route = classifyTranscript("what executors are recommended", kb, "UP");
+  assert.equal(route.kind, "executor_list");
+  assert.match(route.body, /best picks/i);
+  assert.match(route.body, /Isaeva/i);
+});
+
+test("shows free supported executor picks when asked", () => {
+  const route = classifyTranscript("best free executor", kb, "UP");
+  assert.equal(route.kind, "executor_list");
+  assert.match(route.body, /supported picks/i);
+  assert.match(route.body, /Yub X/i);
 });
 
 test("executor names without support intent do not hijack issue matching", () => {
@@ -247,6 +300,11 @@ test("exact issue phrase hits docs", () => {
 
 test("fuzzy natural phrasing can still hit docs", () => {
   const route = classifyTranscript("gui freezes in lobby", kb, "UP");
+  assert.equal(route.kind, "docs");
+});
+
+test("messy typos can still hit docs", () => {
+  const route = classifyTranscript("gui frezes in loby", kb, "UP");
   assert.equal(route.kind, "docs");
 });
 

@@ -6,22 +6,22 @@ const STATUS_UP_REPLY = "status says it's up rn";
 const STATUS_DOWN_REPLY = "status says it's down rn";
 const DOWN_NOTE = "btw, kiciahook is down rn, so that might be why";
 const DOCS_HEADERS = [
-  "📚 Found It Ez",
-  "📚 Yeaaah Found It < 3",
-  "📚 I Pinned It Down",
-  "📚 Got It Right Here"
+  "\u{1F4DA} Found It Ez",
+  "\u{1F4DA} Yeaaah Found It < 3",
+  "\u{1F4DA} I Pinned It Down",
+  "\u{1F4DA} Got It Right Here"
 ];
 const FALLBACK_HEADERS = [
-  "🎫 Couldn't Pin That Down",
-  "🎫 Not Seeing That In Docs",
-  "🎫 Didn't Lock That One In",
-  "🎫 That One's Not Clicking Yet"
+  "\u{1F3AB} Couldn't Pin That Down",
+  "\u{1F3AB} Not Seeing That In Docs",
+  "\u{1F3AB} Didn't Lock That One In",
+  "\u{1F3AB} That One's Not Clicking Yet"
 ];
 const SUPPORT_ONLY_HEADERS = [
-  "🎫 That One Needs Staff",
-  "🎫 Staff Need To Handle That One",
-  "🎫 That's One For The Staff Team",
-  "🎫 This One Needs A Ticket"
+  "\u{1F3AB} That One Needs Staff",
+  "\u{1F3AB} Staff Need To Handle That One",
+  "\u{1F3AB} That's One For The Staff Team",
+  "\u{1F3AB} This One Needs A Ticket"
 ];
 
 const STATUS_PATTERNS = [
@@ -32,8 +32,7 @@ const STATUS_PATTERNS = [
   /\bdoes\s+(?:kicia|kiciahook)\s+work\b/,
   /\bcan\s+(?:kicia|kiciahook)\s+work\b/
 ];
-
-const EXECUTOR_PATTERNS = [
+const EXECUTOR_SUPPORT_PATTERNS = [
   /\bis\s+(.+?)\s+supported\b/,
   /\bis\s+(.+?)\s+(?:working|compatible)\b/,
   /\bdoes\s+(.+?)\s+work(?:s|ing)?\b/,
@@ -44,6 +43,20 @@ const EXECUTOR_PATTERNS = [
   /\bsupport\s+(.+?)\s+with\s+(?:kicia|kiciahook)\b/,
   /\bsupport(?:ed)?\s+for\s+(.+?)$/,
   /\bcan\s+(.+?)\s+work\b/
+];
+const EXECUTOR_INFO_PATTERNS = [
+  /\bhow\s+can\s+i\s+get\s+(.+?)$/,
+  /\bhow\s+do\s+i\s+get\s+(.+?)$/,
+  /\bwhere\s+can\s+i\s+get\s+(.+?)$/,
+  /\bwhere\s+do\s+i\s+get\s+(.+?)$/,
+  /\bhow\s+can\s+i\s+download\s+(.+?)$/,
+  /\bhow\s+do\s+i\s+download\s+(.+?)$/,
+  /\bwhere\s+can\s+i\s+download\s+(.+?)$/,
+  /\bwhere\s+do\s+i\s+download\s+(.+?)$/,
+  /\btell\s+me\s+about\s+(.+?)(?:\s+executor)?$/,
+  /\binfo(?:rmation)?\s+(?:on|about)\s+(.+?)(?:\s+executor)?$/,
+  /\bwhere\s+is\s+the\s+link\s+for\s+(.+?)$/,
+  /\bwhere\s+is\s+(.+?)\s+from\b/
 ];
 const FEATURE_PATTERNS = [
   /\bdoes\s+(?:kicia|kiciahook)\s+have\s+(.+?)$/,
@@ -57,8 +70,9 @@ const BAN_PATTERNS = [/\bban(?:ned)?\b/, /\bdetected\b/, /\banticheat\b/, /\bmod
 
 function sanitizeExecutorCandidate(candidate) {
   return normalizeText(candidate)
-    .replace(/\b(?:the|an|a)\b/g, " ")
-    .replace(/\b(?:executor|for kicia|with kicia)\b/g, " ")
+    .replace(/\b(?:the|an|a|pls|please)\b/g, " ")
+    .replace(/\b(?:executor|executors|exec|executer|ececutor|executor|for kicia|with kicia)\b/g, " ")
+    .replace(/\b(?:link|site|website|download|downloads|get|info|information)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -103,21 +117,34 @@ function detectBanQuestion(text) {
   return BAN_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+function containsExecutorishWord(text) {
+  const normalized = normalizeText(text);
+  return /\b(?:executor|executer|ececutor|executor|exec)\b/.test(normalized);
+}
+
 function hasExecutorIntent(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
-  return EXECUTOR_PATTERNS.some((pattern) => pattern.test(normalized));
+  return EXECUTOR_SUPPORT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-function extractExecutorCandidate(text) {
+function extractPatternCandidate(text, patterns) {
   const normalized = normalizeText(text);
-  for (const pattern of EXECUTOR_PATTERNS) {
+  for (const pattern of patterns) {
     const match = normalized.match(pattern);
     if (!match || !match[1]) continue;
     const candidate = sanitizeExecutorCandidate(match[1]);
     if (candidate) return candidate;
   }
   return null;
+}
+
+function extractExecutorCandidate(text) {
+  return extractPatternCandidate(text, EXECUTOR_SUPPORT_PATTERNS);
+}
+
+function extractExecutorInfoCandidate(text) {
+  return extractPatternCandidate(text, EXECUTOR_INFO_PATTERNS);
 }
 
 function extractFeatureCandidate(text) {
@@ -131,6 +158,72 @@ function extractFeatureCandidate(text) {
   return null;
 }
 
+function detectExecutorListIntent(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+
+  const asksChoice =
+    /\bwhat\s+executor\s+should\s+i\s+use\b/.test(normalized) ||
+    /\bwhich\s+executor\s+should\s+i\s+use\b/.test(normalized) ||
+    /\bany\s+good\s+executors?\b/.test(normalized);
+  const asksList =
+    /\b(?:recommended|supported|best|good|list|show)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
+    /\bwhat\s+(?:are\s+)?(?:the\s+)?(?:recommended|supported|best)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
+    /\bwhat\s+(?:free\s+|paid\s+)?executors?\s+are\s+(?:recommended|supported|best)\b/.test(normalized) ||
+    /\bwhich\s+(?:free\s+|paid\s+)?executors?\s+(?:are\s+)?(?:recommended|supported)\b/.test(normalized) ||
+    /\bshow\s+me\s+(?:the\s+)?(?:recommended|supported|best)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized);
+  const mentionsExecutorSet = /\bexecutors?\b/.test(normalized);
+
+  if (!asksChoice && !(asksList && mentionsExecutorSet)) return null;
+
+  return {
+    type: "executor_list",
+    recommendedOnly: asksChoice || /\b(?:recommended|best|good)\b/.test(normalized),
+    typeFilter: /\bfree\b/.test(normalized) ? "free" : /\bpaid\b/.test(normalized) ? "paid" : null
+  };
+}
+
+function detectExecutorQuestion(text, kb) {
+  const supportCandidate = extractExecutorCandidate(text);
+  if (supportCandidate || hasExecutorIntent(text)) {
+    return {
+      type: "executor",
+      line: normalizeText(text),
+      candidate: supportCandidate,
+      intent: "support"
+    };
+  }
+
+  const infoCandidate = extractExecutorInfoCandidate(text);
+  if (infoCandidate) {
+    const knownExecutor = findExecutorMatch(infoCandidate, kb, { fallbackText: text });
+    if (knownExecutor || containsExecutorishWord(text)) {
+      return {
+        type: "executor",
+        line: normalizeText(text),
+        candidate: infoCandidate,
+        intent: "info"
+      };
+    }
+  }
+
+  const normalized = normalizeText(text);
+  const knownExecutor = findExecutorMatch(normalized, kb);
+  if (
+    knownExecutor &&
+    /\b(?:download|get|link|site|website|info|information|about)\b/.test(normalized)
+  ) {
+    return {
+      type: "executor",
+      line: normalized,
+      candidate: knownExecutor.name,
+      intent: "info"
+    };
+  }
+
+  return null;
+}
+
 function buildFeatureSearchText(line, candidate) {
   if (!candidate) return line;
   return [line, `where is ${candidate}`, `where do i find ${candidate}`, candidate].join("\n");
@@ -140,7 +233,7 @@ function buildBanSearchText(line) {
   return [line, "will i get banned", "is kicia detected", "got banned"].join("\n");
 }
 
-function findLatestExplicitIntent(transcript) {
+function findLatestExplicitIntent(transcript, kb) {
   const lines = getTranscriptLines(transcript);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
@@ -148,10 +241,11 @@ function findLatestExplicitIntent(transcript) {
       return { type: "status", line };
     }
 
-    const candidate = extractExecutorCandidate(line);
-    if (candidate || hasExecutorIntent(line)) {
-      return { type: "executor", line, candidate };
-    }
+    const executorQuestion = detectExecutorQuestion(line, kb);
+    if (executorQuestion) return executorQuestion;
+
+    const executorList = detectExecutorListIntent(line);
+    if (executorList) return { ...executorList, line };
 
     if (detectBanQuestion(line)) {
       return { type: "ban", line };
@@ -166,55 +260,153 @@ function findLatestExplicitIntent(transcript) {
   return null;
 }
 
-function buildExecutorReply(executor) {
-  if (!executor) {
+function formatType(type) {
+  if (!type) return null;
+  return normalizeText(type) === "free" ? "free" : normalizeText(type) === "paid" ? "paid" : type;
+}
+
+function isRecommendedExecutor(executor) {
+  return /recommended/i.test(executor?.compatibility || "");
+}
+
+function filterExecutorsByType(executors, typeFilter) {
+  if (!typeFilter) return executors;
+  return executors.filter((executor) => normalizeText(executor.type) === normalizeText(typeFilter));
+}
+
+function getSuggestedExecutors(kb, { typeFilter = null, limit = 3 } = {}) {
+  const supported = filterExecutorsByType(kb.executorsByStatus?.supported || [], typeFilter);
+  const recommended = supported.filter(isRecommendedExecutor);
+  const pool = recommended.length ? recommended : supported;
+  return pool.slice(0, limit);
+}
+
+function formatExecutorListLine(executor) {
+  const tags = [];
+  if (executor.type) tags.push(formatType(executor.type));
+  tags.push(executor.status === "supported" ? "supported" : executor.status.replace(/_/g, " "));
+  if (isRecommendedExecutor(executor)) tags.push("recommended");
+  const firstLink = executor.links?.[0];
+  const linkText = firstLink ? ` - [link](${firstLink.url})` : "";
+  return `- **${executor.name}**${tags.length ? ` - ${tags.join(", ")}` : ""}${linkText}`;
+}
+
+function getSupportedExecutorSelection(kb, { recommendedOnly = false, typeFilter = null } = {}) {
+  const supported = filterExecutorsByType(kb.executorsByStatus?.supported || [], typeFilter);
+  const recommended = supported.filter(isRecommendedExecutor);
+
+  if (recommendedOnly) {
+    if (recommended.length) return { executors: recommended, source: "recommended" };
+    return { executors: supported, source: "supported_fallback" };
+  }
+
+  return { executors: supported, source: "supported" };
+}
+
+function buildExecutorListReply(kb, options = {}) {
+  const { executors, source } = getSupportedExecutorSelection(kb, options);
+  const typeLabel = options.typeFilter ? `${formatType(options.typeFilter)} ` : "";
+
+  if (!executors.length) {
     return {
-      kind: "executor_unknown",
-      header: "❓ Couldn't Find That Executor",
-      body: "idk that exec, it's not in the documentation",
+      kind: "executor_list",
+      header: "\u{1F9E9} Executor Picks",
+      body: `not seeing a ${typeLabel}supported executor listed in the documentation rn`,
       color: "info"
     };
   }
 
-  if (executor.status === "supported") {
-    const recommended = /recommended/i.test(executor.compatibility || "");
+  let intro = `here are the ${typeLabel}supported executors in docs rn:`;
+  if (options.recommendedOnly && source === "recommended") {
+    intro = `these are the best ${typeLabel}picks in docs rn:`;
+  } else if (options.recommendedOnly && source === "supported_fallback") {
+    intro = `not seeing a ${typeLabel}one marked recommended rn, so here are the ${typeLabel}supported picks instead:`;
+  }
+
+  const lines = executors.slice(0, 5).map(formatExecutorListLine);
+  const remaining = executors.length - lines.length;
+  if (remaining > 0) {
+    lines.push(`- and ${remaining} more in docs`);
+  }
+
+  return {
+    kind: "executor_list",
+    header: "\u{1F9E9} Executor Picks",
+    body: `${intro}\n\n${lines.join("\n")}`,
+    color: "success"
+  };
+}
+
+function buildExecutorDetails(executor) {
+  const details = [];
+  if (executor.type) details.push(`**Type:** ${formatType(executor.type)}`);
+  if (executor.compatibility) details.push(`**Compatibility:** ${executor.compatibility}`);
+  if (executor.notes?.length) details.push(`**Notes:** ${executor.notes.join(" ")}`);
+  if (executor.reply) details.push(executor.reply);
+  if (executor.links?.length > 1) {
+    details.push(
+      `**More links:** ${executor.links
+        .slice(1)
+        .map((link) => `[${link.label}](${link.url})`)
+        .join(" | ")}`
+    );
+  }
+  return details;
+}
+
+function buildSuggestedExecutorsText(kb, options = {}) {
+  const suggestions = getSuggestedExecutors(kb, options);
+  if (!suggestions.length) return null;
+  return ["### Better picks rn", ...suggestions.map(formatExecutorListLine)].join("\n");
+}
+
+function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
+  if (!executor) {
     return {
-      kind: "executor",
-      header: "🧩 Executor Status",
-      body: recommended
-        ? `yeah, ${executor.name} is supported and recommended`
-        : `yeah, ${executor.name} is supported`,
-      color: "success",
-      links: executor.links || []
+      kind: "executor_unknown",
+      header: "\u2753 Couldn't Find That Executor",
+      body: "idk that exec, it's not in the documentation",
+      tip: buildSuggestedExecutorsText(kb),
+      tipStyle: "plain",
+      color: "info"
     };
   }
 
-  if (executor.status === "not_recommended") {
-    return {
-      kind: "executor",
-      header: "🧩 Executor Status",
-      body: `${executor.name} can still work, but it's not one we recommend`,
-      color: "warn",
-      links: executor.links || []
-    };
+  const details = buildExecutorDetails(executor);
+  const firstLink = executor.links?.[0];
+  const suggestionText = buildSuggestedExecutorsText(kb);
+  let statusLine = `yeah, ${executor.name} is supported`;
+  let color = "success";
+
+  if (executor.status === "supported" && isRecommendedExecutor(executor)) {
+    statusLine = `yeah, ${executor.name} is supported and recommended`;
+  } else if (executor.status === "not_recommended") {
+    statusLine = `${executor.name} can still work, but it's not one we recommend`;
+    color = "warn";
+  } else if (executor.status === "temporarily_not_working") {
+    statusLine = `${executor.name} is listed, but it's not working rn`;
+    color = "danger";
+  } else if (executor.status === "unsupported") {
+    statusLine = `nah, ${executor.name} isn't supported`;
+    color = "danger";
   }
 
-  if (executor.status === "temporarily_not_working") {
-    return {
-      kind: "executor",
-      header: "🧩 Executor Status",
-      body: `${executor.name} is listed, but it's not working rn`,
-      color: "danger",
-      links: executor.links || []
-    };
+  const bodyLines = [`### ${executor.name}`, statusLine];
+  if (intent === "info" || executor.status !== "supported" || details.length) {
+    bodyLines.push(...details);
+  }
+  if (executor.status !== "supported" && suggestionText) {
+    bodyLines.push(suggestionText);
   }
 
   return {
     kind: "executor",
-    header: "🧩 Executor Status",
-    body: `nah, ${executor.name} isn't supported`,
-    color: "danger",
-    links: executor.links || []
+    header: "\u{1F9E9} Executor Info",
+    body: bodyLines.join("\n\n"),
+    tip: firstLink ? `## \u{1F517} [Open ${executor.name}](${firstLink.url})` : suggestionText,
+    tipStyle: firstLink ? "heading" : "plain",
+    tipLevel: "##",
+    color
   };
 }
 
@@ -232,28 +424,32 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
   if (!normalized) {
     return {
       kind: "empty",
-      header: "⚠️ Say What Happened First",
+      header: "\u26A0\uFE0F Say What Happened First",
       body: "Send a short message about the problem, then ping me again and I'll check the docs.",
       color: "warn"
     };
   }
 
-  const explicitIntent = findLatestExplicitIntent(transcript);
+  const explicitIntent = findLatestExplicitIntent(transcript, kb);
 
   if (explicitIntent?.type === "status") {
     return {
       kind: "status",
-      header: "📡 KiciaHook Status",
+      header: "\u{1F4E1} KiciaHook Status",
       body: runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY,
       color: runtimeStatus === "DOWN" ? "warn" : "success"
     };
+  }
+
+  if (explicitIntent?.type === "executor_list") {
+    return maybeAppendDownNote(buildExecutorListReply(kb, explicitIntent), runtimeStatus);
   }
 
   if (explicitIntent?.type === "executor") {
     const executor = findExecutorMatch(explicitIntent.candidate || explicitIntent.line, kb, {
       fallbackText: explicitIntent.line
     });
-    return maybeAppendDownNote(buildExecutorReply(executor), runtimeStatus);
+    return maybeAppendDownNote(buildExecutorReply(executor, kb, explicitIntent), runtimeStatus);
   }
 
   const issueSearchText =
@@ -269,7 +465,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         kind: "docs",
         header: pickVariant(DOCS_HEADERS, issueMatch.title || normalized),
         body: `### Looks like this matches **${issueMatch.title}**.`,
-        tip: `📘 [Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
+        tip: `\u{1F4D8} [Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
         tipLevel: "##",
         color: "success"

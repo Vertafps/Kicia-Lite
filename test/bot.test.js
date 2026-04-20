@@ -139,6 +139,28 @@ test("executor routing prioritizes the most recent explicit question", () => {
   assert.match(route.body, /Delta can still work/i);
 });
 
+test("docs titles vary deterministically by match context", () => {
+  const routeA = classifyTranscript("gui not loading", kb, "UP");
+  const routeB = classifyTranscript("load config", kb, "UP");
+  const routeARepeat = classifyTranscript("gui not loading", kb, "UP");
+
+  assert.equal(routeA.kind, "docs");
+  assert.equal(routeB.kind, "docs");
+  assert.equal(routeA.header, routeARepeat.header);
+  assert.notEqual(routeA.header, routeB.header);
+});
+
+test("ticket titles vary deterministically by transcript context", () => {
+  const routeA = classifyTranscript("premium", kb, "UP");
+  const routeB = classifyTranscript("some random weird thing", kb, "UP");
+  const routeARepeat = classifyTranscript("premium", kb, "UP");
+
+  assert.equal(routeA.kind, "ticket");
+  assert.equal(routeB.kind, "ticket");
+  assert.equal(routeA.header, routeARepeat.header);
+  assert.notEqual(routeA.header, routeB.header);
+});
+
 test("non-status phrases that mention kicia do not trigger status mode", () => {
   const route = classifyTranscript("kicia gui freezes in lobby", kb, "UP");
   assert.equal(route.kind, "docs");

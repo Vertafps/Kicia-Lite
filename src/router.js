@@ -5,6 +5,24 @@ const { normalizeText } = require("./text");
 const STATUS_UP_REPLY = "status says it's up rn";
 const STATUS_DOWN_REPLY = "status says it's down rn";
 const DOWN_NOTE = "btw, kiciahook is down rn, so that might be why";
+const DOCS_HEADERS = [
+  "📚 Found It Ez",
+  "📚 Yeaaah Found It < 3",
+  "📚 I Pinned It Down",
+  "📚 Got It Right Here"
+];
+const FALLBACK_HEADERS = [
+  "🎫 Couldn't Pin That Down",
+  "🎫 Not Seeing That In Docs",
+  "🎫 Didn't Lock That One In",
+  "🎫 That One's Not Clicking Yet"
+];
+const SUPPORT_ONLY_HEADERS = [
+  "🎫 That One Needs Staff",
+  "🎫 Staff Need To Handle That One",
+  "🎫 That's One For The Staff Team",
+  "🎫 This One Needs A Ticket"
+];
 
 const STATUS_PATTERNS = [
   /^(?:kicia|kiciahook)?\s*status$/,
@@ -38,6 +56,20 @@ function getTranscriptLines(text) {
     .split(/\n+/)
     .map((line) => normalizeText(line))
     .filter(Boolean);
+}
+
+function hashText(text) {
+  let hash = 0;
+  const normalized = normalizeText(text);
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function pickVariant(variants, seedText) {
+  if (!Array.isArray(variants) || variants.length === 0) return "";
+  return variants[hashText(seedText) % variants.length];
 }
 
 function detectStatusQuestion(text) {
@@ -175,7 +207,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     return maybeAppendDownNote(
       {
         kind: "docs",
-        header: "📚 That One's In The Docs",
+        header: pickVariant(DOCS_HEADERS, issueMatch.title || normalized),
         body: `### Looks like this matches **${issueMatch.title}**.`,
         tip: `📘 [Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
@@ -191,7 +223,9 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     {
       kind: "ticket",
       reason: supportOnly ? "support_only" : "fallback",
-      header: supportOnly ? "🎫 That One Needs Staff" : "🎫 Couldn't Pin That Down",
+      header: supportOnly
+        ? pickVariant(SUPPORT_ONLY_HEADERS, issueMatch?.title || normalized)
+        : pickVariant(FALLBACK_HEADERS, normalized),
       body: supportOnly
         ? `Hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out.`
         : `Open a ticket here: **[ticket panel](${BRAND.TICKET_JUMP_URL})**.`,

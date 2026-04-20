@@ -10,7 +10,9 @@ const STATUS_PATTERNS = [
   /^(?:kicia|kiciahook)?\s*status$/,
   /\b(?:is|was)\s+(?:kicia|kiciahook)\s+(?:down|up|working|online|offline)\b/,
   /\b(?:kicia|kiciahook)\s+(?:down|up|working|online|offline)\b/,
-  /\b(?:is|was)\s+(?:kicia|kiciahook)\s+work(?:ing)?\b/
+  /\b(?:is|was)\s+(?:kicia|kiciahook)\s+work(?:ing)?\b/,
+  /\bdoes\s+(?:kicia|kiciahook)\s+work\b/,
+  /\bcan\s+(?:kicia|kiciahook)\s+work\b/
 ];
 
 const EXECUTOR_PATTERNS = [

@@ -121,6 +121,18 @@ test("routes status questions for up wording", () => {
   assert.equal(route.body, "status says it's down rn");
 });
 
+test("routes does kicia work as status instead of executor", () => {
+  const route = classifyTranscript("does kicia work", kb, "UP");
+  assert.equal(route.kind, "status");
+  assert.equal(route.body, "status says it's up rn");
+});
+
+test("routes does kiciahook work as status instead of executor", () => {
+  const route = classifyTranscript("does kiciahook work", kb, "DOWN");
+  assert.equal(route.kind, "status");
+  assert.equal(route.body, "status says it's down rn");
+});
+
 test("non-status phrases that mention kicia do not trigger status mode", () => {
   const route = classifyTranscript("kicia gui freezes in lobby", kb, "UP");
   assert.equal(route.kind, "docs");

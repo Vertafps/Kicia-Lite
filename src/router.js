@@ -58,7 +58,7 @@ function buildExecutorReply(executor) {
   if (!executor) {
     return {
       kind: "executor_unknown",
-      body: "idk that exec, it's not in the KB",
+      body: "idk that exec, it's not in the documentation",
       color: "info"
     };
   }
@@ -115,8 +115,8 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
   if (!normalized) {
     return {
       kind: "empty",
-      header: "say what happened first",
-      body: "send a short message about the problem, then ping me again and i'll check the docs.",
+      header: "Say What Happened First",
+      body: "Send a short message about the problem, then ping me again and I'll check the docs.",
       color: "warn"
     };
   }
@@ -140,9 +140,9 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     return maybeAppendDownNote(
       {
         kind: "docs",
-        header: "that one's in the docs",
-        body: `looks like **${issueMatch.title}**`,
-        tip: `[jump to docs](${BRAND.DOCS_JUMP_URL})`,
+        header: "That One's In The Docs",
+        body: `Looks like this matches **${issueMatch.title}**.`,
+        tip: `[click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
         color: "success"
       },
       runtimeStatus
@@ -154,11 +154,11 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     {
       kind: "ticket",
       reason: supportOnly ? "support_only" : "fallback",
-      header: supportOnly ? "that one needs staff" : "couldn't pin that down",
+      header: supportOnly ? "That One Needs Staff" : "Couldn't Pin That Down",
       body: supportOnly
-        ? `hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out`
-        : `open a ticket here: **[ticket panel](${BRAND.TICKET_JUMP_URL})**`,
-      tip: "drop screenshots and what you've already tried",
+        ? `Hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out.`
+        : `Open a ticket here: **[ticket panel](${BRAND.TICKET_JUMP_URL})**.`,
+      tip: "Drop screenshots and what you've already tried.",
       color: supportOnly ? "warn" : "info"
     },
     runtimeStatus

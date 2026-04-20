@@ -28,8 +28,8 @@ async function handleDm(message) {
   await message.reply({
     embeds: [
       buildPanel({
-        header: "use me in the main server",
-        body: `i only work inside the ${BRAND.NAME} main server channels. ping me there and i'll check the docs.`,
+        header: "Use Me In The Main Server",
+        body: `I only work inside the ${BRAND.NAME} main server channels. Ping me there and I'll check the docs.`,
         color: INFO
       })
     ],
@@ -69,8 +69,8 @@ async function replyWithError(message) {
     .send({
       embeds: [
         buildPanel({
-          header: "kb lookup is down rn",
-          body: `i couldn't reach the docs index just now.\n\nuse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
+          header: "Docs Lookup Is Down Right Now",
+          body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
           color: DANGER
         })
       ]

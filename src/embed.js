@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require("discord.js");
+const { BRAND } = require("./config");
 
 const SURFACE = 0x2B2D31;
 const SUCCESS = 0x57F287;
@@ -14,23 +15,23 @@ function truncate(s) {
   return `${s.slice(0, cut > 0 ? cut : MAX_DESC - 50)}\n\n*(trimmed)*`;
 }
 
-function buildPanel({ header, body, tip, rows = [], extra, footer, color = SURFACE, level = "##" } = {}) {
+function buildPanel({ header, body, tip, rows = [], extra, footer, color = SURFACE } = {}) {
   const parts = [];
-  if (header) parts.push(`${level} ${header}`);
   if (body) parts.push(body);
   if (tip) parts.push(`> *${tip}*`);
   if (rows.length) {
     const bullets = rows
       .filter(([, v]) => v != null && String(v).trim() !== "")
-      .map(([label, v]) => `* **${label}:** \n\`${v}\``)
+      .map(([label, v]) => `**${label}**\n\`${v}\``)
       .join("\n");
     if (bullets) parts.push(bullets);
   }
-  if (extra) parts.push(extra);
+  if (extra) parts.push(`*${extra}*`);
 
   const e = new EmbedBuilder().setColor(color);
-  e.setDescription(truncate(parts.join("\n\n")));
-  if (footer && String(footer).trim()) e.setFooter({ text: footer });
+  if (header && String(header).trim()) e.setTitle(String(header).trim());
+  if (parts.length) e.setDescription(truncate(parts.join("\n\n")));
+  e.setFooter({ text: footer && String(footer).trim() ? footer : BRAND.NAME });
   return e;
 }
 

@@ -100,7 +100,7 @@ test("routes unsupported executor", () => {
 test("routes unknown executor with clear support intent", () => {
   const route = classifyTranscript("is phantom supported", kb, "UP");
   assert.equal(route.kind, "executor_unknown");
-  assert.match(route.body, /not in the KB/i);
+  assert.match(route.body, /not in the documentation/i);
 });
 
 test("executor names without support intent do not hijack issue matching", () => {

@@ -112,13 +112,13 @@ test("executor names without support intent do not hijack issue matching", () =>
 test("routes status questions for down wording", () => {
   const route = classifyTranscript("is kicia down", kb, "UP");
   assert.equal(route.kind, "status");
-  assert.equal(route.body, "nah bro <3, it's up");
+  assert.equal(route.body, "status says it's up rn");
 });
 
 test("routes status questions for up wording", () => {
   const route = classifyTranscript("kicia up?", kb, "DOWN");
   assert.equal(route.kind, "status");
-  assert.equal(route.body, "yeah, kiciahook is down rn");
+  assert.equal(route.body, "status says it's down rn");
 });
 
 test("non-status phrases that mention kicia do not trigger status mode", () => {

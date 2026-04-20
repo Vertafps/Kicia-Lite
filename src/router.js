@@ -2,8 +2,8 @@ const { BRAND } = require("./config");
 const { findExecutorMatch, tryIssueMatch } = require("./kb");
 const { normalizeText } = require("./text");
 
-const STATUS_UP_REPLY = "nah bro <3, it's up";
-const STATUS_DOWN_REPLY = "yeah, kiciahook is down rn";
+const STATUS_UP_REPLY = "status says it's up rn";
+const STATUS_DOWN_REPLY = "status says it's down rn";
 const DOWN_NOTE = "btw, kiciahook is down rn, so that might be why";
 
 const STATUS_PATTERNS = [

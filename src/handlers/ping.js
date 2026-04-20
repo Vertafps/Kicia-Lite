@@ -53,6 +53,8 @@ async function handleGuildPing(message) {
     header: route.header,
     body: route.body,
     tip: route.tip,
+    tipStyle: route.tipStyle,
+    tipLevel: route.tipLevel,
     extra: route.extra,
     color: COLOR_BY_NAME[route.color] || INFO
   });

@@ -15,10 +15,30 @@ function truncate(s) {
   return `${s.slice(0, cut > 0 ? cut : MAX_DESC - 50)}\n\n*(trimmed)*`;
 }
 
-function buildPanel({ header, body, tip, rows = [], extra, footer, color = SURFACE } = {}) {
+function buildPanel({
+  header,
+  body,
+  tip,
+  tipStyle = "quote",
+  tipLevel = "##",
+  rows = [],
+  extra,
+  footer,
+  color = SURFACE,
+  headerLevel = "#"
+} = {}) {
   const parts = [];
+  if (header) parts.push(`${headerLevel} ${header}`);
   if (body) parts.push(body);
-  if (tip) parts.push(`> *${tip}*`);
+  if (tip) {
+    if (tipStyle === "heading") {
+      parts.push(`${tipLevel} ${tip}`);
+    } else if (tipStyle === "plain") {
+      parts.push(tip);
+    } else {
+      parts.push(`> *${tip}*`);
+    }
+  }
   if (rows.length) {
     const bullets = rows
       .filter(([, v]) => v != null && String(v).trim() !== "")
@@ -29,7 +49,6 @@ function buildPanel({ header, body, tip, rows = [], extra, footer, color = SURFA
   if (extra) parts.push(`*${extra}*`);
 
   const e = new EmbedBuilder().setColor(color);
-  if (header && String(header).trim()) e.setTitle(String(header).trim());
   if (parts.length) e.setDescription(truncate(parts.join("\n\n")));
   e.setFooter({ text: footer && String(footer).trim() ? footer : BRAND.NAME });
   return e;

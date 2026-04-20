@@ -5,7 +5,8 @@
   "description": "Tiny KB classifier bot for the Kicia main server.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test --experimental-test-isolation=none"
   },
   "engines": {
     "node": ">=20"

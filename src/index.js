@@ -5,6 +5,7 @@ const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
 const { fetchKb } = require("./kb");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
+const { maybeHandleStatusCommand } = require("./handlers/status");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
 
@@ -76,6 +77,7 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
   try {
+    if (await maybeHandleStatusCommand(message)) return;
     if (message.channel.isDMBased()) {
       await handleDm(message);
       return;

@@ -1,19 +1,61 @@
 const { fetchWithTimeout } = require("./utils/fetch");
 const { KB_URL } = require("./config");
+const { containsPhrase, normalizeText, tokenize, uniqueNormalized } = require("./text");
 
 let _cache = null;
 let _lastFetchOk = 0;
 const REFRESH_MS = 10 * 60 * 1000;
+const EXECUTOR_STATUSES = [
+  "supported",
+  "temporarily_not_working",
+  "not_recommended",
+  "unsupported"
+];
 
 function normalizeKb(data) {
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray(data.issues)) {
-    return data.issues.map((entry) => ({
-      ...entry,
-      strong_keywords: entry.strong_keywords || entry.match_phrases || []
-    }));
+  const raw = Array.isArray(data) ? { issues: data } : data;
+  if (!raw || !Array.isArray(raw.issues)) throw new Error("KB not an array");
+
+  const issues = raw.issues.map((entry) => ({
+    ...entry,
+    category: entry.category || null,
+    match_phrases: entry.match_phrases || entry.strong_keywords || [],
+    strong_keywords: entry.strong_keywords || entry.match_phrases || [],
+    _matchPhrases: uniqueNormalized(entry.match_phrases || entry.strong_keywords || []),
+    _keywords: uniqueNormalized(entry.keywords || []),
+    _titleTokens: [...new Set(tokenize(entry.title).filter((token) => token.length > 2))]
+  }));
+
+  const executorsByStatus = Object.fromEntries(
+    EXECUTOR_STATUSES.map((status) => {
+      const list = Array.isArray(raw.executors?.[status]) ? raw.executors[status] : [];
+      return [
+        status,
+        list.map((entry) => ({
+          ...entry,
+          status,
+          aliases: [...new Set([entry.name, ...(entry.aliases || [])])],
+          normalizedAliases: uniqueNormalized([entry.name, ...(entry.aliases || [])])
+        }))
+      ];
+    })
+  );
+
+  const executorAliasIndex = Object.create(null);
+  for (const status of EXECUTOR_STATUSES) {
+    for (const executor of executorsByStatus[status]) {
+      for (const alias of executor.normalizedAliases) {
+        if (!executorAliasIndex[alias]) executorAliasIndex[alias] = executor;
+      }
+    }
   }
-  throw new Error("KB not an array");
+
+  return {
+    issues,
+    executorsByStatus,
+    executorAliasIndex,
+    botRules: raw.bot_rules || raw.meta?.bot_rules || []
+  };
 }
 
 async function fetchKb() {
@@ -32,77 +74,101 @@ async function fetchKb() {
   }
 }
 
-function hasWord(text, word) {
-  const re = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-  return re.test(text);
-}
-
-function normalizeText(text) {
-  return String(text || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function stemToken(token) {
-  if (token.length > 5 && token.endsWith("ing")) return token.slice(0, -3);
-  if (token.length > 4 && token.endsWith("ed")) return token.slice(0, -2);
-  if (token.length > 4 && token.endsWith("es")) return token.slice(0, -2);
-  if (token.length > 3 && token.endsWith("s")) return token.slice(0, -1);
-  return token;
-}
-
-function tokenize(text) {
-  return normalizeText(text)
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(stemToken);
-}
-
-function scoreTermMatch(normalizedTranscript, transcriptTokens, term) {
-  const normalizedTerm = normalizeText(term);
-  if (!normalizedTerm) return 0;
-  if (hasWord(normalizedTranscript, normalizedTerm)) {
-    return normalizedTerm.includes(" ") ? 1.25 : 1;
-  }
-
-  const termTokens = tokenize(term).filter((token) => token.length > 2);
-  if (!termTokens.length) return 0;
-
-  const overlap = termTokens.filter((token) => transcriptTokens.has(token)).length;
-  if (overlap === termTokens.length) return 0.75;
-  if (termTokens.length >= 3 && overlap >= termTokens.length - 1) return 0.4;
-  return 0;
-}
-
-function tryKeywordMatch(transcript, kb) {
-  const normalizedTranscript = normalizeText(transcript);
-  const transcriptTokens = new Set(tokenize(transcript));
+function chooseLongestAlias(text, kb, { allowShort = false } = {}) {
+  const normalizedText = normalizeText(text);
   let best = null;
-  let bestScore = 0;
 
-  for (const entry of kb) {
-    const kws = [...new Set((entry.keywords || []).map(normalizeText).filter(Boolean))];
-    const strong = [...new Set((entry.strong_keywords || []).map(normalizeText).filter(Boolean))];
-    const keywordScore = kws.reduce(
-      (sum, keyword) => sum + scoreTermMatch(normalizedTranscript, transcriptTokens, keyword),
-      0
-    );
-    const strongScore = strong.reduce(
-      (sum, keyword) => sum + scoreTermMatch(normalizedTranscript, transcriptTokens, keyword),
-      0
-    );
-    const qualifies = keywordScore >= 2 || strongScore >= 1;
-    if (!qualifies) continue;
-
-    const score = keywordScore + strongScore * 3;
-    if (score > bestScore) {
-      best = entry;
-      bestScore = score;
+  for (const [alias, executor] of Object.entries(kb.executorAliasIndex || {})) {
+    if (!allowShort && alias.length < 4 && !alias.includes(" ")) continue;
+    if (!containsPhrase(normalizedText, alias)) continue;
+    if (!best || alias.length > best.alias.length) {
+      best = { alias, executor };
     }
   }
 
-  return best;
+  return best ? best.executor : null;
 }
 
-module.exports = { fetchKb, tryKeywordMatch };
+function findExecutorMatch(candidate, kb, { fallbackText } = {}) {
+  const normalizedCandidate = normalizeText(candidate);
+  if (normalizedCandidate && kb.executorAliasIndex?.[normalizedCandidate]) {
+    return kb.executorAliasIndex[normalizedCandidate];
+  }
+
+  const candidateMatch = chooseLongestAlias(candidate, kb, { allowShort: true });
+  if (candidateMatch) return candidateMatch;
+
+  if (fallbackText) return chooseLongestAlias(fallbackText, kb);
+  return null;
+}
+
+function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
+  if (!keyword) return null;
+  if (containsPhrase(normalizedTranscript, keyword)) {
+    return {
+      score: keyword.includes(" ") ? 7 : 3
+    };
+  }
+
+  const termTokens = tokenize(keyword).filter((token) => token.length > 2);
+  if (termTokens.length > 1 && termTokens.every((token) => transcriptTokens.has(token))) {
+    return {
+      score: 4.5
+    };
+  }
+
+  return null;
+}
+
+function tryIssueMatch(transcript, kb) {
+  const normalizedTranscript = normalizeText(transcript);
+  if (!normalizedTranscript) return null;
+  const transcriptTokens = new Set(tokenize(transcript));
+  const candidates = [];
+
+  for (const entry of kb.issues || []) {
+    const strongHits = entry._matchPhrases.filter((phrase) => containsPhrase(normalizedTranscript, phrase));
+    const keywordHits = [];
+    const distinctKeywordHits = new Set();
+
+    for (const keyword of entry._keywords) {
+      const hit = scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword);
+      if (!hit) continue;
+      keywordHits.push(hit);
+      distinctKeywordHits.add(keyword);
+    }
+
+    if (!(strongHits.length >= 1 || distinctKeywordHits.size >= 2)) continue;
+
+    const titleTokenHits = entry._titleTokens.filter((token) => transcriptTokens.has(token)).length;
+    const score =
+      strongHits.length * 30 +
+      keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
+      Math.min(titleTokenHits, 3) * 0.35;
+
+    candidates.push({
+      entry,
+      score,
+      strongHits: strongHits.length
+    });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  if (!best) return null;
+  if (!best.strongHits && best.score < 6) return null;
+
+  const runnerUp = candidates[1];
+  if (runnerUp && best.score - runnerUp.score < (best.strongHits ? 1 : 3)) {
+    return null;
+  }
+
+  return best.entry;
+}
+
+module.exports = {
+  fetchKb,
+  normalizeKb,
+  findExecutorMatch,
+  tryIssueMatch
+};

@@ -1,13 +1,31 @@
-const { COOLDOWN_MS } = require("../config");
+const {
+  USER_COOLDOWN_MS,
+  GLOBAL_COOLDOWN_MS,
+  USER_COOLDOWN_EMOJI,
+  GLOBAL_COOLDOWN_EMOJI
+} = require("../config");
 
 const lastReplyByUser = new Map();
+let lastGlobalReplyAt = 0;
 
-function isCoolingDown(userId) {
-  return Date.now() - (lastReplyByUser.get(userId) || 0) < COOLDOWN_MS;
+function getCooldownReaction(userId, now = Date.now()) {
+  if (lastReplyByUser.has(userId) && now - lastReplyByUser.get(userId) < USER_COOLDOWN_MS) {
+    return USER_COOLDOWN_EMOJI;
+  }
+  if (now - lastGlobalReplyAt < GLOBAL_COOLDOWN_MS) {
+    return GLOBAL_COOLDOWN_EMOJI;
+  }
+  return null;
 }
 
-function markReplied(userId) {
-  lastReplyByUser.set(userId, Date.now());
+function markGuildReply(userId, now = Date.now()) {
+  lastReplyByUser.set(userId, now);
+  lastGlobalReplyAt = now;
 }
 
-module.exports = { isCoolingDown, markReplied };
+function resetCooldowns() {
+  lastReplyByUser.clear();
+  lastGlobalReplyAt = 0;
+}
+
+module.exports = { getCooldownReaction, markGuildReply, resetCooldowns };

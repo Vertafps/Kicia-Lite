@@ -319,11 +319,7 @@ function buildExecutorListReply(kb, options = {}) {
     intro = `these are the ${typeLabel}supported picks I'd point to first rn:`;
   }
 
-  const lines = executors.slice(0, 5).map((executor) => formatExecutorListLine(executor, { includeStatus: false }));
-  const remaining = executors.length - lines.length;
-  if (remaining > 0) {
-    lines.push(`- and ${remaining} more in docs`);
-  }
+  const lines = executors.map((executor) => formatExecutorListLine(executor, { includeStatus: false }));
 
   return {
     kind: "executor_list",

@@ -34,6 +34,27 @@ const kb = normalizeKb({
         compatibility: "fully compatible",
         link: "https://yub-x.com/",
         notes: ["Uses a key system."]
+      },
+      {
+        name: "Madium",
+        aliases: ["madium", "mad"],
+        type: "free",
+        compatibility: "fully compatible",
+        link: "https://discord.gg/olemad"
+      },
+      {
+        name: "Synapse Z",
+        aliases: ["synapse z", "synz"],
+        type: "paid",
+        compatibility: "fully compatible",
+        link: "https://discord.gg/synz"
+      },
+      {
+        name: "Velocity Pro",
+        aliases: ["velocity pro", "vpro"],
+        type: "paid",
+        compatibility: "fully compatible",
+        link: "https://example.com/velocity-pro"
       }
     ],
     temporarily_not_working: [{ name: "Solar", aliases: ["solar"] }],
@@ -213,6 +234,10 @@ test("shows recommended executor picks when asked", () => {
   assert.match(route.body, /Isaeva/i);
   assert.match(route.body, /Potassium/i);
   assert.match(route.body, /Yub X/i);
+  assert.match(route.body, /Madium/i);
+  assert.match(route.body, /Synapse Z/i);
+  assert.match(route.body, /Velocity Pro/i);
+  assert.doesNotMatch(route.body, /and \d+ more in docs/i);
 });
 
 test("shows free supported executor picks when asked", () => {

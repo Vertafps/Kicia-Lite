@@ -406,3 +406,73 @@ test("owner status command bypasses cooldown logic", async () => {
   assert.equal(replied, true);
   assert.equal(getRuntimeStatus(), "DOWN");
 });
+
+test("owner fetch command refreshes kb immediately", async () => {
+  let replied = false;
+  let refreshCalls = 0;
+
+  const handled = await maybeHandleStatusCommand(
+    {
+      content: "$fetch",
+      author: { id: "847703912932311091" },
+      reply: async () => {
+        replied = true;
+      }
+    },
+    {
+      refreshKb: async () => {
+        refreshCalls += 1;
+      }
+    }
+  );
+
+  assert.equal(handled, true);
+  assert.equal(refreshCalls, 1);
+  assert.equal(replied, true);
+});
+
+test("unauthorized fetch command is ignored silently", async () => {
+  let replied = false;
+  let refreshCalls = 0;
+
+  const handled = await maybeHandleStatusCommand(
+    {
+      content: "$fetch",
+      author: { id: "not-owner" },
+      reply: async () => {
+        replied = true;
+      }
+    },
+    {
+      refreshKb: async () => {
+        refreshCalls += 1;
+      }
+    }
+  );
+
+  assert.equal(handled, true);
+  assert.equal(refreshCalls, 0);
+  assert.equal(replied, false);
+});
+
+test("owner fetch command replies cleanly on kb refresh failure", async () => {
+  let replied = false;
+
+  const handled = await maybeHandleStatusCommand(
+    {
+      content: "$fetch",
+      author: { id: "847703912932311091" },
+      reply: async () => {
+        replied = true;
+      }
+    },
+    {
+      refreshKb: async () => {
+        throw new Error("nope");
+      }
+    }
+  );
+
+  assert.equal(handled, true);
+  assert.equal(replied, true);
+});

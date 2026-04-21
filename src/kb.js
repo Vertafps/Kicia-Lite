@@ -132,8 +132,8 @@ function normalizeKb(data) {
   };
 }
 
-async function fetchKb() {
-  if (_cache && Date.now() - _lastFetchOk < REFRESH_MS) return _cache;
+async function fetchKb({ force = false } = {}) {
+  if (!force && _cache && Date.now() - _lastFetchOk < REFRESH_MS) return _cache;
   try {
     const res = await fetchWithTimeout(KB_URL, {}, 8000);
     if (!res.ok) throw new Error(`KB fetch ${res.status}`);
@@ -146,6 +146,10 @@ async function fetchKb() {
     if (_cache) return _cache;
     throw err;
   }
+}
+
+async function forceRefreshKb() {
+  return fetchKb({ force: true });
 }
 
 function chooseLongestAlias(text, kb, { allowShort = false } = {}) {
@@ -352,6 +356,7 @@ function tryIssueMatch(transcript, kb) {
 
 module.exports = {
   fetchKb,
+  forceRefreshKb,
   normalizeKb,
   findExecutorMatch,
   tryIssueMatch

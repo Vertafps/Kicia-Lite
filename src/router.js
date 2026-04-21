@@ -158,6 +158,26 @@ function extractFeatureCandidate(text) {
   return null;
 }
 
+function findBareExecutorCandidate(text, kb) {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+
+  if ((normalized.includes(" ") || normalized.length >= 4) && kb.executorAliasIndex?.[normalized]) {
+    return kb.executorAliasIndex[normalized];
+  }
+
+  const sanitized = sanitizeExecutorCandidate(normalized);
+  if (!sanitized || sanitized === normalized || !kb.executorAliasIndex?.[sanitized]) {
+    return null;
+  }
+
+  if (sanitized.includes(" ") || sanitized.length >= 4 || containsExecutorishWord(normalized)) {
+    return kb.executorAliasIndex[sanitized];
+  }
+
+  return null;
+}
+
 function detectExecutorListIntent(text) {
   const normalized = normalizeText(text);
   if (!normalized) return null;
@@ -217,6 +237,16 @@ function detectExecutorQuestion(text, kb) {
       type: "executor",
       line: normalized,
       candidate: knownExecutor.name,
+      intent: "info"
+    };
+  }
+
+  const bareExecutor = findBareExecutorCandidate(text, kb);
+  if (bareExecutor) {
+    return {
+      type: "executor",
+      line: normalized,
+      candidate: bareExecutor.name,
       intent: "info"
     };
   }

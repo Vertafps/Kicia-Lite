@@ -222,6 +222,23 @@ test("shows executor info for get/download style questions", () => {
   assert.match(route.tip || "", /yub-x\.com/i);
 });
 
+test("bare exact executor alias routes to executor info", () => {
+  const route = classifyTranscript("yub x", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /### Yub X/i);
+});
+
+test("bare executor mention with executor word routes to executor info", () => {
+  const route = classifyTranscript("yub-x executor", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /### Yub X/i);
+});
+
+test("short ambiguous alias alone does not hijack routing", () => {
+  const route = classifyTranscript("mad", kb, "UP");
+  assert.equal(route.kind, "ticket");
+});
+
 test("handles does kicia support codex as an unknown executor question", () => {
   const route = classifyTranscript("does kicia support codex", kb, "UP");
   assert.equal(route.kind, "executor_unknown");

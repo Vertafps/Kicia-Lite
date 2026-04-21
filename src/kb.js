@@ -11,6 +11,42 @@ const EXECUTOR_STATUSES = [
   "not_recommended",
   "unsupported"
 ];
+const LOW_SIGNAL_TOKENS = new Set([
+  "how",
+  "what",
+  "why",
+  "where",
+  "when",
+  "which",
+  "does",
+  "is",
+  "can",
+  "use",
+  "using",
+  "with",
+  "about",
+  "help",
+  "need",
+  "want",
+  "that",
+  "this",
+  "from",
+  "have",
+  "has",
+  "get",
+  "got",
+  "just",
+  "into",
+  "your",
+  "you",
+  "for",
+  "the",
+  "and"
+]);
+
+function keepSignalToken(token) {
+  return token.length > 2 && !LOW_SIGNAL_TOKENS.has(token);
+}
 
 function normalizeExecutorLinks(entry) {
   const seen = new Set();
@@ -51,10 +87,10 @@ function normalizeKb(data) {
     strong_keywords: entry.strong_keywords || entry.match_phrases || [],
     _matchPhrases: uniqueNormalized(entry.match_phrases || entry.strong_keywords || []),
     _keywords: uniqueNormalized(entry.keywords || []),
-    _titleTokens: [...new Set(tokenize(entry.title).filter((token) => token.length > 2))],
+    _titleTokens: [...new Set(tokenize(entry.title).filter(keepSignalToken))],
     _replyTokens: [
       ...new Set(
-        tokenize(`${entry.reply || ""} ${(entry.steps || []).join(" ")}`).filter((token) => token.length > 2)
+        tokenize(`${entry.reply || ""} ${(entry.steps || []).join(" ")}`).filter(keepSignalToken)
       )
     ]
   }));

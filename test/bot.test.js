@@ -209,15 +209,28 @@ test("handles does kicia support codex as an unknown executor question", () => {
 test("shows recommended executor picks when asked", () => {
   const route = classifyTranscript("what executors are recommended", kb, "UP");
   assert.equal(route.kind, "executor_list");
-  assert.match(route.body, /best picks/i);
+  assert.match(route.body, /point to first/i);
   assert.match(route.body, /Isaeva/i);
+  assert.match(route.body, /Potassium/i);
+  assert.match(route.body, /Yub X/i);
 });
 
 test("shows free supported executor picks when asked", () => {
   const route = classifyTranscript("best free executor", kb, "UP");
   assert.equal(route.kind, "executor_list");
-  assert.match(route.body, /supported picks/i);
+  assert.match(route.body, /point to first/i);
   assert.match(route.body, /Yub X/i);
+});
+
+test("non recommended executor suggestions show multiple supported picks once", () => {
+  const route = classifyTranscript("is wave supported", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /Better picks rn/i);
+  assert.equal((route.body.match(/Better picks rn/g) || []).length, 1);
+  assert.match(route.body, /Isaeva/i);
+  assert.match(route.body, /Potassium/i);
+  assert.match(route.body, /Yub X/i);
+  assert.equal(route.tip, undefined);
 });
 
 test("executor names without support intent do not hijack issue matching", () => {
@@ -306,6 +319,11 @@ test("fuzzy natural phrasing can still hit docs", () => {
 test("messy typos can still hit docs", () => {
   const route = classifyTranscript("gui frezes in loby", kb, "UP");
   assert.equal(route.kind, "docs");
+});
+
+test("fresh vague question does not inherit an older docs match from transcript", () => {
+  const route = classifyTranscript("load config\nhow to do lootlabs", kb, "UP");
+  assert.equal(route.kind, "ticket");
 });
 
 test("ban questions with messy wording still hit docs", () => {

@@ -274,37 +274,35 @@ function filterExecutorsByType(executors, typeFilter) {
   return executors.filter((executor) => normalizeText(executor.type) === normalizeText(typeFilter));
 }
 
-function getSuggestedExecutors(kb, { typeFilter = null, limit = 3 } = {}) {
-  const supported = filterExecutorsByType(kb.executorsByStatus?.supported || [], typeFilter);
-  const recommended = supported.filter(isRecommendedExecutor);
-  const pool = recommended.length ? recommended : supported;
-  return pool.slice(0, limit);
+function sortExecutorsByPreference(executors) {
+  return [...executors].sort((a, b) => Number(isRecommendedExecutor(b)) - Number(isRecommendedExecutor(a)));
 }
 
-function formatExecutorListLine(executor) {
+function getSuggestedExecutors(kb, { typeFilter = null, limit = 4 } = {}) {
+  const supported = filterExecutorsByType(kb.executorsByStatus?.supported || [], typeFilter);
+  return sortExecutorsByPreference(supported).slice(0, limit);
+}
+
+function formatExecutorListLine(executor, { includeStatus = true } = {}) {
   const tags = [];
   if (executor.type) tags.push(formatType(executor.type));
-  tags.push(executor.status === "supported" ? "supported" : executor.status.replace(/_/g, " "));
-  if (isRecommendedExecutor(executor)) tags.push("recommended");
+  if (executor.compatibility) {
+    tags.push(executor.compatibility);
+  } else if (includeStatus) {
+    tags.push(executor.status === "supported" ? "supported" : executor.status.replace(/_/g, " "));
+  }
   const firstLink = executor.links?.[0];
   const linkText = firstLink ? ` - [link](${firstLink.url})` : "";
   return `- **${executor.name}**${tags.length ? ` - ${tags.join(", ")}` : ""}${linkText}`;
 }
 
-function getSupportedExecutorSelection(kb, { recommendedOnly = false, typeFilter = null } = {}) {
+function getSupportedExecutorSelection(kb, { typeFilter = null } = {}) {
   const supported = filterExecutorsByType(kb.executorsByStatus?.supported || [], typeFilter);
-  const recommended = supported.filter(isRecommendedExecutor);
-
-  if (recommendedOnly) {
-    if (recommended.length) return { executors: recommended, source: "recommended" };
-    return { executors: supported, source: "supported_fallback" };
-  }
-
-  return { executors: supported, source: "supported" };
+  return sortExecutorsByPreference(supported);
 }
 
 function buildExecutorListReply(kb, options = {}) {
-  const { executors, source } = getSupportedExecutorSelection(kb, options);
+  const executors = getSupportedExecutorSelection(kb, options);
   const typeLabel = options.typeFilter ? `${formatType(options.typeFilter)} ` : "";
 
   if (!executors.length) {
@@ -317,13 +315,11 @@ function buildExecutorListReply(kb, options = {}) {
   }
 
   let intro = `here are the ${typeLabel}supported executors in docs rn:`;
-  if (options.recommendedOnly && source === "recommended") {
-    intro = `these are the best ${typeLabel}picks in docs rn:`;
-  } else if (options.recommendedOnly && source === "supported_fallback") {
-    intro = `not seeing a ${typeLabel}one marked recommended rn, so here are the ${typeLabel}supported picks instead:`;
+  if (options.recommendedOnly) {
+    intro = `these are the ${typeLabel}supported picks I'd point to first rn:`;
   }
 
-  const lines = executors.slice(0, 5).map(formatExecutorListLine);
+  const lines = executors.slice(0, 5).map((executor) => formatExecutorListLine(executor, { includeStatus: false }));
   const remaining = executors.length - lines.length;
   if (remaining > 0) {
     lines.push(`- and ${remaining} more in docs`);
@@ -357,24 +353,39 @@ function buildExecutorDetails(executor) {
 function buildSuggestedExecutorsText(kb, options = {}) {
   const suggestions = getSuggestedExecutors(kb, options);
   if (!suggestions.length) return null;
-  return ["### Better picks rn", ...suggestions.map(formatExecutorListLine)].join("\n");
+  return ["### Better picks rn", ...suggestions.map((executor) => formatExecutorListLine(executor, { includeStatus: false }))].join("\n");
+}
+
+function isFreshStandaloneQuestion(line) {
+  return /^(?:how|what|why|where|when|which|can|does|is|are|do|did|will)\b/.test(line);
+}
+
+function shouldRejectIssueMatchForLatestLine(transcript, issueMatch, kb) {
+  const lines = getTranscriptLines(transcript);
+  if (lines.length < 2 || !issueMatch) return false;
+
+  const latestLine = lines[lines.length - 1];
+  if (!isFreshStandaloneQuestion(latestLine)) return false;
+
+  const latestLineMatch = tryIssueMatch(latestLine, kb);
+  return !latestLineMatch || latestLineMatch.title !== issueMatch.title;
 }
 
 function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
+  const suggestionText = buildSuggestedExecutorsText(kb);
   if (!executor) {
+    const bodyLines = ["idk that exec, it's not in the documentation"];
+    if (suggestionText) bodyLines.push(suggestionText);
     return {
       kind: "executor_unknown",
       header: "\u2753 Couldn't Find That Executor",
-      body: "idk that exec, it's not in the documentation",
-      tip: buildSuggestedExecutorsText(kb),
-      tipStyle: "plain",
+      body: bodyLines.join("\n\n"),
       color: "info"
     };
   }
 
   const details = buildExecutorDetails(executor);
   const firstLink = executor.links?.[0];
-  const suggestionText = buildSuggestedExecutorsText(kb);
   let statusLine = `yeah, ${executor.name} is supported`;
   let color = "success";
 
@@ -403,8 +414,8 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
     kind: "executor",
     header: "\u{1F9E9} Executor Info",
     body: bodyLines.join("\n\n"),
-    tip: firstLink ? `## \u{1F517} [Open ${executor.name}](${firstLink.url})` : suggestionText,
-    tipStyle: firstLink ? "heading" : "plain",
+    tip: firstLink ? `## \u{1F517} [Open ${executor.name}](${firstLink.url})` : undefined,
+    tipStyle: "heading",
     tipLevel: "##",
     color
   };
@@ -459,12 +470,13 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         ? buildBanSearchText(explicitIntent.line)
         : normalized;
   const issueMatch = tryIssueMatch(issueSearchText, kb);
-  if (issueMatch && issueMatch.category !== "support_only") {
+  const safeIssueMatch = shouldRejectIssueMatchForLatestLine(transcript, issueMatch, kb) ? null : issueMatch;
+  if (safeIssueMatch && safeIssueMatch.category !== "support_only") {
     return maybeAppendDownNote(
       {
         kind: "docs",
-        header: pickVariant(DOCS_HEADERS, issueMatch.title || normalized),
-        body: `### Looks like this matches **${issueMatch.title}**.`,
+        header: pickVariant(DOCS_HEADERS, safeIssueMatch.title || normalized),
+        body: `### Looks like this matches **${safeIssueMatch.title}**.`,
         tip: `\u{1F4D8} [Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
         tipLevel: "##",
@@ -474,13 +486,13 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     );
   }
 
-  const supportOnly = issueMatch && issueMatch.category === "support_only";
+  const supportOnly = safeIssueMatch && safeIssueMatch.category === "support_only";
   return maybeAppendDownNote(
     {
       kind: "ticket",
       reason: supportOnly ? "support_only" : "fallback",
       header: supportOnly
-        ? pickVariant(SUPPORT_ONLY_HEADERS, issueMatch?.title || normalized)
+        ? pickVariant(SUPPORT_ONLY_HEADERS, safeIssueMatch?.title || normalized)
         : pickVariant(FALLBACK_HEADERS, normalized),
       body: supportOnly
         ? `Hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out.`

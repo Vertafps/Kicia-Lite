@@ -84,10 +84,10 @@ function containsPhrase(normalizedText, normalizedPhrase) {
   return re.test(normalizedText);
 }
 
-function isEditDistanceAtMostOne(a, b) {
+function isEditDistanceAtMost(a, b, maxEdits = 1) {
   if (a === b) return true;
   if (!a || !b) return false;
-  if (Math.abs(a.length - b.length) > 1) return false;
+  if (Math.abs(a.length - b.length) > maxEdits) return false;
 
   let i = 0;
   let j = 0;
@@ -101,7 +101,7 @@ function isEditDistanceAtMostOne(a, b) {
     }
 
     edits += 1;
-    if (edits > 1) return false;
+    if (edits > maxEdits) return false;
 
     if (a.length > b.length) {
       i += 1;
@@ -114,7 +114,7 @@ function isEditDistanceAtMostOne(a, b) {
   }
 
   if (i < a.length || j < b.length) edits += 1;
-  return edits <= 1;
+  return edits <= maxEdits;
 }
 
 function fuzzyTokenMatch(a, b) {
@@ -122,7 +122,7 @@ function fuzzyTokenMatch(a, b) {
   if (!a || !b) return false;
   if (Math.min(a.length, b.length) < 4) return false;
   if (a[0] !== b[0]) return false;
-  return isEditDistanceAtMostOne(a, b);
+  return isEditDistanceAtMost(a, b, 1);
 }
 
 function uniqueNormalized(values) {
@@ -135,5 +135,6 @@ module.exports = {
   tokenize,
   containsPhrase,
   fuzzyTokenMatch,
+  isEditDistanceAtMost,
   uniqueNormalized
 };

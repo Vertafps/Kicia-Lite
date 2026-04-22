@@ -1,6 +1,6 @@
 const { fetchWithTimeout } = require("./utils/fetch");
 const { KB_URL } = require("./config");
-const { containsPhrase, fuzzyTokenMatch, normalizeText, tokenize, uniqueNormalized } = require("./text");
+const { containsPhrase, fuzzyTokenMatch, isEditDistanceAtMost, normalizeText, tokenize, uniqueNormalized } = require("./text");
 
 let _cache = null;
 let _lastFetchOk = 0;
@@ -176,8 +176,18 @@ function chooseBestFuzzyAlias(text, kb) {
     const aliasTokens = tokenize(alias);
     if (!aliasTokens.length) continue;
 
+    const matchesToken = (aliasToken, textToken) =>
+      aliasToken === textToken ||
+      fuzzyTokenMatch(aliasToken, textToken) ||
+      (
+        aliasToken.length >= 8 &&
+        textToken.length >= 8 &&
+        aliasToken.slice(0, 3) === textToken.slice(0, 3) &&
+        isEditDistanceAtMost(aliasToken, textToken, 2)
+      );
+
     const matches = aliasTokens.filter((aliasToken) =>
-      textTokens.some((textToken) => aliasToken === textToken || fuzzyTokenMatch(aliasToken, textToken))
+      textTokens.some((textToken) => matchesToken(aliasToken, textToken))
     ).length;
     if (!matches) continue;
 

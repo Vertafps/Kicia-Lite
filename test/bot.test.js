@@ -222,6 +222,12 @@ test("shows executor info for get/download style questions", () => {
   assert.match(route.tip || "", /yub-x\.com/i);
 });
 
+test("slightly rough long executor typos still resolve", () => {
+  const route = classifyTranscript("does pottasium work", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /### Potassium/i);
+});
+
 test("bare exact executor alias routes to executor info", () => {
   const route = classifyTranscript("yub x", kb, "UP");
   assert.equal(route.kind, "executor");

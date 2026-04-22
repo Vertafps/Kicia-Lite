@@ -35,6 +35,7 @@ const STATUS_PATTERNS = [
 const EXECUTOR_SUPPORT_PATTERNS = [
   /\bis\s+(.+?)\s+supported\b/,
   /\bis\s+(.+?)\s+(?:working|compatible)\b/,
+  /\bis\s+(.+?)\s+(?:good|okay|ok|fine)\s+(?:with|for)\s+(?:kicia|kiciahook)\b/,
   /\bdoes\s+(.+?)\s+work(?:s|ing)?\b/,
   /\bdoes\s+(?:kicia|kiciahook)\s+support\s+(.+?)$/,
   /\bdoes\s+(.+?)\s+support\s+(?:kicia|kiciahook)\b/,
@@ -71,7 +72,7 @@ const BAN_PATTERNS = [/\bban(?:ned)?\b/, /\bdetected\b/, /\banticheat\b/, /\bmod
 function sanitizeExecutorCandidate(candidate) {
   return normalizeText(candidate)
     .replace(/\b(?:the|an|a|pls|please)\b/g, " ")
-    .replace(/\b(?:executor|executors|exec|executer|ececutor|executor|for kicia|with kicia)\b/g, " ")
+    .replace(/\b(?:executor|executors|exec|executer|ececutor|executor|for kicia(?:hook)?|with kicia(?:hook)?)\b/g, " ")
     .replace(/\b(?:link|site|website|download|downloads|get|info|information)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();

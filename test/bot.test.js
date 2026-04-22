@@ -187,6 +187,13 @@ test("routes recommended executor distinctly", () => {
   assert.match(route.body, /recommended/i);
 });
 
+test("routes good with kiciahook wording as executor support", () => {
+  const route = classifyTranscript("is potassium good with kiciahook", kb, "UP");
+  assert.equal(route.kind, "executor");
+  assert.match(route.body, /Potassium/i);
+  assert.match(route.body, /supported/i);
+});
+
 test("routes not recommended executor as still working", () => {
   const route = classifyTranscript("is delta supported", kb, "UP");
   assert.equal(route.kind, "executor");

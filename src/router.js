@@ -67,12 +67,15 @@ const FEATURE_PATTERNS = [
   /\bwhich\s+tab\s+(?:is|has)\s+(.+?)$/,
   /\bhow\s+do\s+i\s+find\s+(.+?)$/
 ];
+// BUG FIX: removed duplicate "executor" entry from original
+const EXECUTOR_WORD_RE = /\b(?:executor|executer|ececutor|exec)\b/;
 const BAN_PATTERNS = [/\bban(?:ned)?\b/, /\bdetected\b/, /\banticheat\b/, /\bmod ban\b/];
 
 function sanitizeExecutorCandidate(candidate) {
+  // BUG FIX: removed duplicate "executor" in alternation from original
   return normalizeText(candidate)
     .replace(/\b(?:the|an|a|pls|please)\b/g, " ")
-    .replace(/\b(?:executor|executors|exec|executer|ececutor|executor|for kicia(?:hook)?|with kicia(?:hook)?)\b/g, " ")
+    .replace(/\b(?:executors?|exec|executer|ececutor|for kicia(?:hook)?|with kicia(?:hook)?)\b/g, " ")
     .replace(/\b(?:link|site|website|download|downloads|get|info|information)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -119,8 +122,8 @@ function detectBanQuestion(text) {
 }
 
 function containsExecutorishWord(text) {
-  const normalized = normalizeText(text);
-  return /\b(?:executor|executer|ececutor|executor|exec)\b/.test(normalized);
+  // BUG FIX: removed duplicate "executor" from original regex
+  return EXECUTOR_WORD_RE.test(normalizeText(text));
 }
 
 function hasExecutorIntent(text) {
@@ -448,6 +451,37 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
   };
 }
 
+/**
+ * Build the inline answer body from a matched KB issue.
+ * IMPROVEMENT: Shows the actual reply + steps + links inline instead of
+ * just linking to docs, making the bot actually answer questions.
+ */
+function buildIssueBody(issue) {
+  const parts = [];
+
+  if (issue.reply) {
+    parts.push(issue.reply);
+  }
+
+  if (Array.isArray(issue.steps) && issue.steps.length > 0) {
+    const numbered = issue.steps.map((step, i) => `${i + 1}. ${step}`).join("\n");
+    parts.push(numbered);
+  }
+
+  if (Array.isArray(issue.links) && issue.links.length > 0) {
+    const linkLines = issue.links
+      .map((link) => {
+        if (typeof link === "string") return link;
+        if (link && link.url) return link.label ? `[${link.label}](${link.url})` : link.url;
+        return null;
+      })
+      .filter(Boolean);
+    if (linkLines.length) parts.push(linkLines.join("\n"));
+  }
+
+  return parts.join("\n\n") || null;
+}
+
 function maybeAppendDownNote(route, runtimeStatus) {
   if (runtimeStatus !== "DOWN") return route;
   if (route.kind === "status") return route;
@@ -496,15 +530,31 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
       : explicitIntent?.type === "ban"
         ? buildBanSearchText(explicitIntent.line)
         : normalized;
+
   const issueMatch = tryIssueMatch(issueSearchText, kb);
-  const safeIssueMatch = shouldRejectIssueMatchForLatestLine(transcript, issueMatch, kb) ? null : issueMatch;
+
+  // IMPROVEMENT: if multi-line transcript didn't match, also try just the
+  // latest line on its own — catches cases where older messages pollute the
+  // transcript and the real question is in the last message only.
+  let safeIssueMatch = shouldRejectIssueMatchForLatestLine(transcript, issueMatch, kb) ? null : issueMatch;
+  if (!safeIssueMatch && issueSearchText === normalized) {
+    const lines = getTranscriptLines(transcript);
+    if (lines.length > 1) {
+      const lastLineMatch = tryIssueMatch(lines[lines.length - 1], kb);
+      if (lastLineMatch) safeIssueMatch = lastLineMatch;
+    }
+  }
+
   if (safeIssueMatch && safeIssueMatch.category !== "support_only") {
+    // IMPROVEMENT: show the actual KB reply + steps inline instead of just
+    // linking to docs — the bot now actually answers the question.
+    const issueBody = buildIssueBody(safeIssueMatch);
     return maybeAppendDownNote(
       {
         kind: "docs",
         header: pickVariant(DOCS_HEADERS, safeIssueMatch.title || normalized),
-        body: `### Looks like this matches **${safeIssueMatch.title}**.`,
-        tip: `\u{1F4D8} [Click this to jump to docs](${BRAND.DOCS_JUMP_URL})`,
+        body: issueBody || `**${safeIssueMatch.title}**`,
+        tip: `## \u{1F4D8} [Full docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
         tipLevel: "##",
         color: "success"

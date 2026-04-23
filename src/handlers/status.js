@@ -1,5 +1,5 @@
 const { OWNER_USER_ID } = require("../config");
-const { buildPanel, DANGER, SUCCESS, WARN } = require("../embed");
+const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { forceRefreshKb } = require("../kb");
 const { setRuntimeStatus } = require("../runtime-status");
 
@@ -15,7 +15,9 @@ function isStatusCommandMessage(content) {
 }
 
 function isFetchCommandMessage(content) {
-  return String(content || "").trim().toLowerCase() === "$fetch";
+  const normalized = String(content || "").trim().toLowerCase();
+  // IMPROVEMENT: accept $refresh as an alias for $fetch
+  return normalized === "$fetch" || normalized === "$refresh";
 }
 
 function isOwnerCommandMessage(content) {
@@ -24,6 +26,7 @@ function isOwnerCommandMessage(content) {
 
 async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } = {}) {
   if (!isOwnerCommandMessage(message.content)) return false;
+  // Silently swallow owner commands from non-owners so the command isn't revealed
   if (message.author?.id !== OWNER_USER_ID) return true;
 
   if (isFetchCommandMessage(message.content)) {
@@ -53,7 +56,21 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   }
 
   const nextStatus = parseStatusCommand(message.content);
-  if (!nextStatus) return true;
+
+  // BUG FIX: previously returned true with no reply when owner sent $status
+  // with an invalid/missing argument — silent failure. Now sends usage hint.
+  if (!nextStatus) {
+    await message.reply({
+      embeds: [
+        buildPanel({
+          body: "usage: `$status up` or `$status down`",
+          color: INFO
+        })
+      ],
+      allowedMentions: { repliedUser: false }
+    });
+    return true;
+  }
 
   setRuntimeStatus(nextStatus);
   await message.reply({

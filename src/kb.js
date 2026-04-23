@@ -124,11 +124,20 @@ function normalizeKb(data) {
     }
   }
 
+  // BUG FIX: bot_rules in the KB JSON is an object, not an array. The old
+  // code did `|| []` as fallback which is fine, but the returned value was
+  // inconsistently typed (object when present, array when absent). Normalise
+  // to always be an object or null so callers don't have to guess.
+  const rawBotRules = raw.bot_rules || raw.meta?.bot_rules || null;
+  const botRules = rawBotRules && typeof rawBotRules === "object" && !Array.isArray(rawBotRules)
+    ? rawBotRules
+    : null;
+
   return {
     issues,
     executorsByStatus,
     executorAliasIndex,
-    botRules: raw.bot_rules || raw.meta?.bot_rules || []
+    botRules
   };
 }
 

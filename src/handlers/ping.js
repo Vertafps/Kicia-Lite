@@ -13,17 +13,28 @@ const COLOR_BY_NAME = {
   info: INFO
 };
 
+// BUG FIX: wrapped channel.messages.fetch in try/catch so a permission error
+// or API hiccup doesn't crash the entire message handler. Falls back to just
+// the current message content so the bot can still attempt a reply.
 async function buildTranscript(message) {
-  const recent = await message.channel.messages.fetch({ limit: RECENT_CHANNEL_MESSAGES_N });
-  const transcriptMessages = recent
-    .filter((m) => m.author.id === message.author.id)
-    .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .last(TRANSCRIPT_N);
+  try {
+    const recent = await message.channel.messages.fetch({ limit: RECENT_CHANNEL_MESSAGES_N });
+    const transcriptMessages = recent
+      .filter((m) => m.author.id === message.author.id)
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .last(TRANSCRIPT_N);
 
-  return transcriptMessages
-    .map((m) => cleanText(m.content))
-    .filter(Boolean)
-    .join("\n");
+    const lines = transcriptMessages
+      .map((m) => cleanText(m.content))
+      .filter(Boolean);
+
+    if (lines.length) return lines.join("\n");
+  } catch (err) {
+    console.warn("buildTranscript: channel fetch failed, falling back to message content:", err.message);
+  }
+
+  // Fallback: use just the current message so we still have something to classify
+  return cleanText(message.content);
 }
 
 async function handleDm(message) {
@@ -46,7 +57,7 @@ async function handleGuildPing(message) {
     return;
   }
 
-  await message.channel.sendTyping();
+  await message.channel.sendTyping().catch(() => null);
 
   const transcript = await buildTranscript(message);
   const kb = await fetchKb();
@@ -65,21 +76,28 @@ async function handleGuildPing(message) {
   markGuildReply(message.author.id);
 }
 
+// BUG FIX: try message.reply first (keeps thread context), fall back to
+// channel.send if the message was deleted or reply throws, and swallow
+// errors from the fallback too so nothing propagates.
 async function replyWithError(message) {
-  const channel = message.channel;
-  const target = channel && typeof channel.send === "function" ? channel : null;
-  if (!target) return;
-  await target
-    .send({
-      embeds: [
-        buildPanel({
-          header: "⚠️ Docs Lookup Is Down Right Now",
-          body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
-          color: DANGER
-        })
-      ]
-    })
-    .catch(() => null);
+  const errorEmbed = buildPanel({
+    header: "⚠️ Docs Lookup Is Down Right Now",
+    body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
+    color: DANGER
+  });
+
+  try {
+    await message.reply({ embeds: [errorEmbed], allowedMentions: { repliedUser: false } });
+    return;
+  } catch {
+    // Message may have been deleted — try channel.send instead
+  }
+
+  try {
+    await message.channel?.send({ embeds: [errorEmbed] });
+  } catch {
+    // Nothing we can do at this point
+  }
 }
 
 module.exports = { handleDm, handleGuildPing, replyWithError };

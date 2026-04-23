@@ -35,7 +35,29 @@ const TOKEN_CANONICAL_MAP = new Map([
   ["beat", "fight"],
   ["beats", "fight"],
   ["fighting", "fight"],
-  ["losing", "lose"]
+  ["losing", "lose"],
+  ["config", "configuration"],
+  ["configs", "configuration"],
+  ["cfg", "configuration"],
+  ["cfgs", "configuration"],
+  ["workin", "working"],
+  ["worj", "working"],
+  ["fix", "fixed"],
+  ["fixing", "fixed"],
+  ["update", "updated"],
+  ["updating", "updated"],
+  ["crash", "crashing"],
+  ["crashed", "crashing"],
+  ["error", "err"],
+  ["msg", "message"],
+  ["txt", "text"],
+  ["idk", "know"],
+  ["dunno", "know"],
+  ["pls", "please"],
+  ["plz", "please"],
+  ["thx", "thanks"],
+  ["ty", "thanks"],
+  ["rly", "really"]
 ]);
 
 function cleanText(text) {
@@ -54,6 +76,8 @@ function normalizeText(text) {
 
 function stemToken(token) {
   if (token.length > 5 && token.endsWith("ing")) return token.slice(0, -3);
+  if (token.length > 5 && token.endsWith("ive")) return token.slice(0, -3);
+  if (token.length > 4 && token.endsWith("ly")) return token.slice(0, -2);
   if (token.length > 4 && token.endsWith("ied")) return `${token.slice(0, -3)}y`;
   if (token.length > 4 && token.endsWith("ies")) return `${token.slice(0, -3)}y`;
   if (token.length > 4 && token.endsWith("ed")) return token.slice(0, -2);

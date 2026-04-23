@@ -335,9 +335,13 @@ function tryIssueMatch(transcript, kb) {
       distinctKeywordHits.add(keyword);
     }
 
+    const titlePhraseMatch = containsPhrase(normalizedTranscript, normalizeText(entry.title));
+    const titleTokensCount = tokenize(entry.title).length;
+
     if (
       !(
         strongScore >= 1 ||
+        (titlePhraseMatch && titleTokensCount >= 2) ||
         distinctKeywordHits.size >= 2 ||
         (strongScore >= 0.55 && distinctKeywordHits.size >= 1) ||
         (distinctKeywordHits.size >= 1 && titleTokenHits >= 2) ||
@@ -349,21 +353,29 @@ function tryIssueMatch(transcript, kb) {
 
     const score =
       strongScore * 30 +
+      (titlePhraseMatch ? (titleTokensCount >= 2 ? 15 : 5) : 0) +
       keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
-      Math.min(titleTokenHits, 4) * 0.45 +
-      Math.min(replyTokenHits, 5) * 0.25;
+      Math.min(titleTokenHits, 4) * 0.6 +
+      Math.min(replyTokenHits, 5) * 0.3;
+
+    // Vague input penalty: if transcript is just one or two words and we don't
+    // have a strong phrase match or a multi-word title match, require a higher score.
+    const isVagueInput = transcriptTokens.length <= 2 && !strongScore;
 
     candidates.push({
       entry,
       score,
-      strongScore
+      strongScore,
+      isVagueInput
     });
   }
 
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) return null;
-  if (!best.strongScore && best.score < 6) return null;
+
+  const threshold = best.isVagueInput ? 10 : 6;
+  if (!best.strongScore && best.score < threshold) return null;
 
   const runnerUp = candidates[1];
   if (runnerUp && best.score - runnerUp.score < (best.strongScore ? 1 : 3)) {

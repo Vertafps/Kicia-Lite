@@ -14,7 +14,14 @@ function acquireInstanceLock() {
     fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
   } catch (err) {
     if (err.code !== "EEXIST") throw err;
-    const existingPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
+    let existingPid;
+    try {
+      existingPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
+    } catch (readErr) {
+      // If we can't read it, it might be corrupted or locked by another process
+      // Just try to overwrite if it's old, but for safety we'll just try to rm it
+    }
+    
     if (Number.isInteger(existingPid)) {
       try {
         process.kill(existingPid, 0);
@@ -23,8 +30,13 @@ function acquireInstanceLock() {
         if (probeErr.code !== "ESRCH") throw probeErr;
       }
     }
-    fs.rmSync(LOCK_PATH, { force: true });
-    fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
+    
+    try {
+      fs.rmSync(LOCK_PATH, { force: true });
+      fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
+    } catch (rmErr) {
+      console.warn("Could not clean up stale lock file:", rmErr.message);
+    }
   }
 }
 

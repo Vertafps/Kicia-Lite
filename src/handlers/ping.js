@@ -17,10 +17,12 @@ const COLOR_BY_NAME = {
 // or API hiccup doesn't crash the entire message handler. Falls back to just
 // the current message content so the bot can still attempt a reply.
 async function buildTranscript(message) {
+  const TEN_MINUTES_MS = 10 * 60 * 1000;
+  const now = Date.now();
   try {
     const recent = await message.channel.messages.fetch({ limit: RECENT_CHANNEL_MESSAGES_N });
     const transcriptMessages = recent
-      .filter((m) => m.author.id === message.author.id)
+      .filter((m) => m.author.id === message.author.id && (now - m.createdTimestamp) < TEN_MINUTES_MS)
       .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
       .last(TRANSCRIPT_N);
 

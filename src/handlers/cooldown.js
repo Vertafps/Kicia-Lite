@@ -8,7 +8,16 @@ const {
 const lastReplyByUser = new Map();
 let lastGlobalReplyAt = 0;
 
+function cleanupCooldowns(now = Date.now()) {
+  for (const [userId, lastTime] of lastReplyByUser.entries()) {
+    if (now - lastTime > USER_COOLDOWN_MS) {
+      lastReplyByUser.delete(userId);
+    }
+  }
+}
+
 function getCooldownReaction(userId, now = Date.now()) {
+  cleanupCooldowns(now);
   if (lastReplyByUser.has(userId) && now - lastReplyByUser.get(userId) < USER_COOLDOWN_MS) {
     return USER_COOLDOWN_EMOJI;
   }

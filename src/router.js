@@ -9,19 +9,23 @@ const DOCS_HEADERS = [
   "\u{1F4DA} Found It Ez",
   "\u{1F4DA} Yeaaah Found It < 3",
   "\u{1F4DA} I Pinned It Down",
-  "\u{1F4DA} Got It Right Here"
+  "\u{1F4DA} Got It Right Here",
+  "\u{1F4DA} Check This Out",
+  "\u{1F4DA} I've Got The Docs"
 ];
 const FALLBACK_HEADERS = [
   "\u{1F3AB} Couldn't Pin That Down",
   "\u{1F3AB} Not Seeing That In Docs",
   "\u{1F3AB} Didn't Lock That One In",
-  "\u{1F3AB} That One's Not Clicking Yet"
+  "\u{1F3AB} That One's Not Clicking Yet",
+  "\u{1F3AB} Still Looking Into It"
 ];
 const SUPPORT_ONLY_HEADERS = [
   "\u{1F3AB} That One Needs Staff",
   "\u{1F3AB} Staff Need To Handle That One",
   "\u{1F3AB} That's One For The Staff Team",
-  "\u{1F3AB} This One Needs A Ticket"
+  "\u{1F3AB} This One Needs A Ticket",
+  "\u{1F3AB} Staff Intervention Required"
 ];
 
 const STATUS_PATTERNS = [
@@ -30,7 +34,9 @@ const STATUS_PATTERNS = [
   /\b(?:kicia|kiciahook)\s+(?:down|up|working|online|offline)\b/,
   /\b(?:is|was)\s+(?:kicia|kiciahook)\s+work(?:ing)?\b/,
   /\bdoes\s+(?:kicia|kiciahook)\s+work\b/,
-  /\bcan\s+(?:kicia|kiciahook)\s+work\b/
+  /\bcan\s+(?:kicia|kiciahook)\s+work\b/,
+  /\bis\s+it\s+(?:down|up)\b/,
+  /\bcurrent\s+status\b/
 ];
 const EXECUTOR_SUPPORT_PATTERNS = [
   /\bis\s+(.+?)\s+supported\b/,
@@ -43,7 +49,8 @@ const EXECUTOR_SUPPORT_PATTERNS = [
   /\bwhat\s+about\s+(.+?)(?:\s+executor)?$/,
   /\bsupport\s+(.+?)\s+with\s+(?:kicia|kiciahook)\b/,
   /\bsupport(?:ed)?\s+for\s+(.+?)$/,
-  /\bcan\s+(.+?)\s+work\b/
+  /\bcan\s+(.+?)\s+work\b/,
+  /\b(?:what|which)\s+execs?\s+(?:are|is)\s+supported\b/
 ];
 const EXECUTOR_INFO_PATTERNS = [
   /\bhow\s+can\s+i\s+get\s+(.+?)$/,
@@ -57,7 +64,8 @@ const EXECUTOR_INFO_PATTERNS = [
   /\btell\s+me\s+about\s+(.+?)(?:\s+executor)?$/,
   /\binfo(?:rmation)?\s+(?:on|about)\s+(.+?)(?:\s+executor)?$/,
   /\bwhere\s+is\s+the\s+link\s+for\s+(.+?)$/,
-  /\bwhere\s+is\s+(.+?)\s+from\b/
+  /\bwhere\s+is\s+(.+?)\s+from\b/,
+  /\blink\s+to\s+(.+?)$/
 ];
 const FEATURE_PATTERNS = [
   /\bdoes\s+(?:kicia|kiciahook)\s+have\s+(.+?)$/,
@@ -65,11 +73,12 @@ const FEATURE_PATTERNS = [
   /\bwhere\s+do\s+i\s+find\s+(.+?)$/,
   /\bwhere\s+can\s+i\s+find\s+(.+?)$/,
   /\bwhich\s+tab\s+(?:is|has)\s+(.+?)$/,
-  /\bhow\s+do\s+i\s+find\s+(.+?)$/
+  /\bhow\s+do\s+i\s+find\s+(.+?)$/,
+  /\bhow\s+to\s+use\s+(.+?)$/
 ];
 // BUG FIX: removed duplicate "executor" entry from original
 const EXECUTOR_WORD_RE = /\b(?:executor|executer|ececutor|exec)\b/;
-const BAN_PATTERNS = [/\bban(?:ned)?\b/, /\bdetected\b/, /\banticheat\b/, /\bmod ban\b/];
+const BAN_PATTERNS = [/\bban(?:ned)?\b/, /\bdetected\b/, /\banticheat\b/, /\bmod ban\b/, /\bgetting banned\b/];
 
 function sanitizeExecutorCandidate(candidate) {
   // BUG FIX: removed duplicate "executor" in alternation from original
@@ -83,7 +92,7 @@ function sanitizeExecutorCandidate(candidate) {
 
 function sanitizeFeatureCandidate(candidate) {
   return normalizeText(candidate)
-    .replace(/\b(?:the|an|a|feature|features|thing|stuff|option|setting)\b/g, " ")
+    .replace(/\b(?:the|an|a|feature|features|thing|stuff|option|setting|please|pls)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -191,11 +200,12 @@ function detectExecutorListIntent(text) {
     /\bwhich\s+executor\s+should\s+i\s+use\b/.test(normalized) ||
     /\bany\s+good\s+executors?\b/.test(normalized);
   const asksList =
-    /\b(?:recommended|supported|best|good|list|show)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
-    /\bwhat\s+(?:are\s+)?(?:the\s+)?(?:recommended|supported|best)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
-    /\bwhat\s+(?:free\s+|paid\s+)?executors?\s+are\s+(?:recommended|supported|best)\b/.test(normalized) ||
-    /\bwhich\s+(?:free\s+|paid\s+)?executors?\s+(?:are\s+)?(?:recommended|supported)\b/.test(normalized) ||
-    /\bshow\s+me\s+(?:the\s+)?(?:recommended|supported|best)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized);
+    /\b(?:recommended|supported|best|good|list|show|working|work)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
+    /\bwhat\s+(?:are\s+)?(?:the\s+)?(?:recommended|supported|best|working)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
+    /\bwhat\s+(?:free\s+|paid\s+)?executors?\s+are\s+(?:recommended|supported|best|working|work)\b/.test(normalized) ||
+    /\bwhich\s+(?:free\s+|paid\s+)?executors?\s+(?:are\s+)?(?:recommended|supported|working|work)\b/.test(normalized) ||
+    /\bshow\s+me\s+(?:the\s+)?(?:recommended|supported|best|working)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
+    /\bexecutors?\s+(?:that|which)?\s*(?:are\s+)?(?:working|work|supported)\b/.test(normalized);
   const mentionsExecutorSet = /\bexecutors?\b/.test(normalized);
 
   if (!asksChoice && !(asksList && mentionsExecutorSet)) return null;
@@ -553,7 +563,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
       {
         kind: "docs",
         header: pickVariant(DOCS_HEADERS, safeIssueMatch.title || normalized),
-        body: issueBody || `**${safeIssueMatch.title}**`,
+        body: issueBody ? `### ${safeIssueMatch.title}\n\n${issueBody}` : `**${safeIssueMatch.title}**`,
         tip: `## \u{1F4D8} [Full docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
         tipLevel: "##",

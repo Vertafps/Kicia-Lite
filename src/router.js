@@ -191,9 +191,15 @@ function findBareExecutorCandidate(text, kb) {
   return null;
 }
 
-function detectExecutorListIntent(text) {
+function detectExecutorListIntent(text, kb) {
   const normalized = normalizeText(text);
   if (!normalized) return null;
+
+  // If a specific known executor is mentioned, don't trigger the generic list
+  const knownExecutor = findExecutorMatch(normalized, kb);
+  if (knownExecutor && !normalized.includes("list") && !normalized.includes("show")) {
+    return null;
+  }
 
   const asksChoice =
     /\bwhat\s+executor\s+should\s+i\s+use\b/.test(normalized) ||
@@ -205,7 +211,8 @@ function detectExecutorListIntent(text) {
     /\bwhat\s+(?:free\s+|paid\s+)?executors?\s+are\s+(?:recommended|supported|best|working|work)\b/.test(normalized) ||
     /\bwhich\s+(?:free\s+|paid\s+)?executors?\s+(?:are\s+)?(?:recommended|supported|working|work)\b/.test(normalized) ||
     /\bshow\s+me\s+(?:the\s+)?(?:recommended|supported|best|working)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
-    /\bexecutors?\s+(?:that|which)?\s*(?:are\s+)?(?:working|work|supported)\b/.test(normalized);
+    /\bexecutors?\s+(?:that|which)?\s*(?:are\s+)?(?:working|work|supported)\b/.test(normalized) ||
+    /^executors?$/.test(normalized); // Support "executors" or "executor" alone
   const mentionsExecutorSet = /\bexecutors?\b/.test(normalized);
 
   if (!asksChoice && !(asksList && mentionsExecutorSet)) return null;
@@ -288,7 +295,7 @@ function findLatestExplicitIntent(transcript, kb) {
     const executorQuestion = detectExecutorQuestion(line, kb);
     if (executorQuestion) return executorQuestion;
 
-    const executorList = detectExecutorListIntent(line);
+    const executorList = detectExecutorListIntent(line, kb);
     if (executorList) return { ...executorList, line };
 
     if (detectBanQuestion(line)) {

@@ -3,10 +3,12 @@ process.env.KB_URL = process.env.KB_URL || "https://example.com/kb.json";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 
 const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
+const { maybeHandleLockCommand, parseLockCommand } = require("../src/handlers/lockdown");
 const { maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
 const { resetRuntimeStatus, getRuntimeStatus } = require("../src/runtime-status");
 
@@ -163,6 +165,87 @@ const kb = normalizeKb({
     }
   ]
 });
+
+function buildMockLockChannel(id, { sendMessagesState = true, botPermissions = [] } = {}) {
+  let state = sendMessagesState;
+
+  return {
+    id,
+    permissionsFor: () => new PermissionsBitField(botPermissions),
+    permissionOverwrites: {
+      cache: {
+        get: () => {
+          if (state === null) return null;
+          return {
+            allow: {
+              has: (permission) => state === true && permission === PermissionFlagsBits.SendMessages
+            },
+            deny: {
+              has: (permission) => state === false && permission === PermissionFlagsBits.SendMessages
+            }
+          };
+        }
+      },
+      edit: async (_roleId, options) => {
+        state = options.SendMessages ?? null;
+        return null;
+      }
+    },
+    getSendMessagesState: () => state
+  };
+}
+
+function buildLockCommandMessage(content, {
+  authorId = "mod-user",
+  roleIds = ["1484218511797784576"],
+  displayName = "Kernel",
+  channels = []
+} = {}) {
+  const channelMap = new Map(channels.map((channel) => [channel.id, channel]));
+  const reactions = [];
+  const replies = [];
+
+  return {
+    content,
+    author: {
+      id: authorId,
+      username: displayName.toLowerCase(),
+      tag: `${displayName}#0001`
+    },
+    member: {
+      displayName,
+      roles: {
+        cache: {
+          has: (roleId) => roleIds.includes(roleId)
+        }
+      }
+    },
+    guild: {
+      members: {
+        me: { id: "bot-user" }
+      },
+      channels: {
+        cache: {
+          get: (id) => channelMap.get(id) || null
+        },
+        fetch: async (id) => channelMap.get(id) || null
+      }
+    },
+    inGuild: () => true,
+    react: async (emoji) => {
+      reactions.push(emoji);
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+    },
+    get reactions() {
+      return reactions;
+    },
+    get replies() {
+      return replies;
+    }
+  };
+}
 
 test.afterEach(() => {
   resetCooldowns();
@@ -420,6 +503,137 @@ test("same user inside 30 seconds gets user cooldown reaction", () => {
 test("different user inside 5 seconds gets global cooldown reaction", () => {
   markGuildReply("user-a", 1_000);
   assert.equal(getCooldownReaction("user-b", 4_000), "🚧");
+});
+
+test("parses lock command aliases", () => {
+  assert.equal(parseLockCommand("$lock"), "toggle");
+  assert.equal(parseLockCommand("$lockdown"), "lock");
+  assert.equal(parseLockCommand("$lock on"), "lock");
+  assert.equal(parseLockCommand("$unlock"), "unlock");
+  assert.equal(parseLockCommand("$lock off"), "unlock");
+});
+
+test("unauthorized users only get a cross reaction for lock commands", async () => {
+  const general = buildMockLockChannel("1484218577589637233", {
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$lock", {
+    authorId: "random-user",
+    roleIds: [],
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.deepEqual(message.reactions, ["❌"]);
+  assert.equal(message.replies.length, 0);
+});
+
+test("lock command disables send messages for the member role in both channels", async () => {
+  const general = buildMockLockChannel("1484218577589637233", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$lockdown", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getSendMessagesState(), false);
+  assert.equal(support.getSendMessagesState(), false);
+  assert.match(message.replies[0].embeds[0].data.description, /locked channels/i);
+  assert.match(message.replies[0].embeds[0].data.description, /1484218577589637233/);
+  assert.match(message.replies[0].embeds[0].data.description, /1489747706980339773/);
+});
+
+test("toggle lock command unlocks when both channels are already locked", async () => {
+  const general = buildMockLockChannel("1484218577589637233", {
+    sendMessagesState: false,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: false,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$lock", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getSendMessagesState(), true);
+  assert.equal(support.getSendMessagesState(), true);
+  assert.match(message.replies[0].embeds[0].data.description, /unlocked channels/i);
+});
+
+test("explicit lock command reports when channels are already locked", async () => {
+  const general = buildMockLockChannel("1484218577589637233", {
+    sendMessagesState: false,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: false,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$lock on", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.match(message.replies[0].embeds[0].data.description, /already locked/i);
+});
+
+test("explicit unlock command reports when channels are already unlocked", async () => {
+  const general = buildMockLockChannel("1484218577589637233", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$unlock", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.match(message.replies[0].embeds[0].data.description, /already unlocked/i);
+});
+
+test("lock command reports missing bot permissions before changing anything", async () => {
+  const general = buildMockLockChannel("1484218577589637233", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel]
+  });
+  const message = buildLockCommandMessage("$lockdown", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getSendMessagesState(), true);
+  assert.equal(support.getSendMessagesState(), true);
+  assert.match(message.replies[0].embeds[0].data.description, /Manage Channels/i);
 });
 
 test("owner status command bypasses cooldown logic", async () => {

@@ -7,7 +7,7 @@ const assert = require("node:assert/strict");
 const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
-const { maybeHandleStatusCommand } = require("../src/handlers/status");
+const { maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
 const { resetRuntimeStatus, getRuntimeStatus } = require("../src/runtime-status");
 
 const kb = normalizeKb({
@@ -297,25 +297,27 @@ test("executor names without support intent do not hijack issue matching", () =>
 test("routes status questions for down wording", () => {
   const route = classifyTranscript("is kicia down", kb, "UP");
   assert.equal(route.kind, "status");
-  assert.equal(route.body, "status says it's up rn");
+  assert.match(route.body, /status says it's up rn/i);
+  assert.match(route.body, /1496596246851354735/);
+  assert.match(route.body, /\$status/);
 });
 
 test("routes status questions for up wording", () => {
   const route = classifyTranscript("kicia up?", kb, "DOWN");
   assert.equal(route.kind, "status");
-  assert.equal(route.body, "status says it's down rn");
+  assert.match(route.body, /status says it's down rn/i);
 });
 
 test("routes does kicia work as status instead of executor", () => {
   const route = classifyTranscript("does kicia work", kb, "UP");
   assert.equal(route.kind, "status");
-  assert.equal(route.body, "status says it's up rn");
+  assert.match(route.body, /status says it's up rn/i);
 });
 
 test("routes does kiciahook work as status instead of executor", () => {
   const route = classifyTranscript("does kiciahook work", kb, "DOWN");
   assert.equal(route.kind, "status");
-  assert.equal(route.body, "status says it's down rn");
+  assert.match(route.body, /status says it's down rn/i);
 });
 
 test("executor routing prioritizes the most recent explicit question", () => {
@@ -435,6 +437,56 @@ test("owner status command bypasses cooldown logic", async () => {
   assert.equal(handled, true);
   assert.equal(replied, true);
   assert.equal(getRuntimeStatus(), "DOWN");
+});
+
+test("public status command replies for non-owners", async () => {
+  let replyPayload = null;
+
+  const handled = await maybeHandleStatusCommand({
+    content: "$status",
+    author: { id: "not-owner" },
+    inGuild: () => true,
+    react: async () => {
+      throw new Error("should not react");
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /status says it'?s up rn/i);
+  assert.match(replyPayload.embeds[0].data.description, /1496596246851354735/);
+  assert.match(replyPayload.embeds[0].data.description, /\$status/);
+});
+
+test("generic no-ping working prompt auto-replies with status", async () => {
+  let replyPayload = null;
+
+  const handled = await maybeHandleStatusCommand({
+    content: "working?",
+    author: { id: "user-working" },
+    inGuild: () => true,
+    react: async () => {
+      throw new Error("should not react");
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /status channel/i);
+});
+
+test("auto status matcher stays focused on actual status prompts", () => {
+  assert.equal(shouldAutoReplyStatus("does it work?"), true);
+  assert.equal(shouldAutoReplyStatus("working"), true);
+  assert.equal(shouldAutoReplyStatus("borken"), true);
+  assert.equal(shouldAutoReplyStatus("does delta work"), false);
+  assert.equal(shouldAutoReplyStatus("gui not working"), false);
 });
 
 test("owner fetch command refreshes kb immediately", async () => {

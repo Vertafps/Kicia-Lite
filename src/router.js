@@ -5,6 +5,8 @@ const { normalizeText } = require("./text");
 const STATUS_UP_REPLY = "status says it's up rn";
 const STATUS_DOWN_REPLY = "status says it's down rn";
 const DOWN_NOTE = "btw, kiciahook is down rn, so that might be why";
+const STATUS_CHANNEL_REPLY = `status updates are posted in the [status channel](${BRAND.STATUS_JUMP_URL})`;
+const STATUS_COMMAND_REPLY = "you can also use `$status` anytime";
 const DOCS_HEADERS = [
   "\u{1F4DA} Found It Ez",
   "\u{1F4DA} Yeaaah Found It < 3",
@@ -122,6 +124,14 @@ function detectStatusQuestion(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
   return STATUS_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function buildStatusReplyBody(runtimeStatus = "UP") {
+  return [
+    runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY,
+    STATUS_CHANNEL_REPLY,
+    STATUS_COMMAND_REPLY
+  ].join("\n\n");
 }
 
 function detectBanQuestion(text) {
@@ -525,7 +535,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
     return {
       kind: "status",
       header: "\u{1F4E1} KiciaHook Status",
-      body: runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY,
+      body: buildStatusReplyBody(runtimeStatus),
       color: runtimeStatus === "DOWN" ? "warn" : "success"
     };
   }
@@ -604,7 +614,10 @@ module.exports = {
   extractExecutorCandidate,
   getTranscriptLines,
   hasExecutorIntent,
+  buildStatusReplyBody,
   STATUS_UP_REPLY,
   STATUS_DOWN_REPLY,
+  STATUS_CHANNEL_REPLY,
+  STATUS_COMMAND_REPLY,
   DOWN_NOTE
 };

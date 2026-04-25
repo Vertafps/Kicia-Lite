@@ -34,7 +34,8 @@ function requiredUrl(name) {
 const BRAND = {
   NAME: "KiciaHook Director",
   DOCS_JUMP_URL: "https://discord.com/channels/1279483425002361003/1484218540499140891",
-  TICKET_JUMP_URL: "https://discord.com/channels/1279483425002361003/1484218571478532147"
+  TICKET_JUMP_URL: "https://discord.com/channels/1279483425002361003/1484218571478532147",
+  STATUS_JUMP_URL: "https://discord.com/channels/1279483425002361003/1496596246851354735"
 };
 
 module.exports = {

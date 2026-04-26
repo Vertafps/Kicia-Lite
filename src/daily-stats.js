@@ -137,12 +137,16 @@ function buildDailyServerStatsBody(snapshot, windowStartedAt, now) {
   const activeChannels = snapshot.channels.length;
   const averageMessagesPerUser = activeUsers ? (totalMessages / activeUsers).toFixed(1) : "0.0";
   const busiestHour = snapshot.hours[0] || null;
+  const latestUser = [...snapshot.users].sort((a, b) => b.lastMessageAt - a.lastMessageAt)[0] || null;
 
   const topUsersText = topList(snapshot.users)
     .map((entry) => `- **${formatUserLabel(entry)}** - ${entry.messageCount}`)
     .join("\n") || "none";
   const topChannelsText = topList(snapshot.channels)
     .map((entry) => `- <#${entry.channelId}> - ${entry.messageCount}`)
+    .join("\n") || "none";
+  const topHoursText = topList(snapshot.hours, 3)
+    .map((entry) => `- ${formatLocalHourLabel(entry.localHour)} - ${entry.messageCount}`)
     .join("\n") || "none";
 
   return [
@@ -155,6 +159,12 @@ function buildDailyServerStatsBody(snapshot, windowStartedAt, now) {
     busiestHour
       ? `**Busiest Hour (UTC+5:30):** ${formatLocalHourLabel(busiestHour.localHour)} - ${busiestHour.messageCount} messages`
       : "**Busiest Hour (UTC+5:30):** none",
+    latestUser
+      ? `**Most Recent Message:** ${formatUserLabel(latestUser)} in <#${latestUser.lastChannelId}> ${formatDuration(Math.max(0, now - latestUser.lastMessageAt))} ago`
+      : "**Most Recent Message:** none",
+    "",
+    "## Peak Hours",
+    topHoursText,
     "",
     "## Top Users",
     topUsersText,
@@ -168,10 +178,13 @@ function buildDailyStaffStatsBody(snapshot, staffRoster, windowStartedAt, now) {
   const staffById = new Map(snapshot.staff.map((entry) => [entry.userId, entry]));
   const rosterMembers = staffRoster.members || [];
   const staffMessages = sumMessageCounts(snapshot.staff);
+  const totalMessages = sumMessageCounts(snapshot.users);
   const activeStaffCount = rosterMembers.filter((member) => {
     const entry = staffById.get(member.id);
     return entry && entry.messageCount > 0;
   }).length;
+  const mostRecentStaffEntry = [...snapshot.staff].sort((a, b) => b.lastMessageAt - a.lastMessageAt)[0] || null;
+  const staffShare = totalMessages ? ((staffMessages / totalMessages) * 100).toFixed(1) : "0.0";
 
   const silentMembers = rosterMembers
     .filter((member) => {
@@ -213,6 +226,10 @@ function buildDailyStaffStatsBody(snapshot, staffRoster, windowStartedAt, now) {
     `**Staff-Only Messages:** ${staffMessages}`,
     `**Staff Active Today:** ${activeStaffCount}`,
     `**Staff Silent Whole Window:** ${silentMembers.length}`,
+    `**Staff Share of Server Messages:** ${staffShare}%`,
+    mostRecentStaffEntry
+      ? `**Most Recent Staff Message:** ${formatUserLabel(mostRecentStaffEntry)} in <#${mostRecentStaffEntry.lastChannelId}> ${formatDuration(Math.max(0, now - mostRecentStaffEntry.lastMessageAt))} ago`
+      : "**Most Recent Staff Message:** none",
     "",
     "## Top Staff Talkers",
     topStaffText,

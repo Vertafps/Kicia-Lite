@@ -1,15 +1,18 @@
 const {
+  LINK_MODERATION_TIMEOUT_MS,
   RAID_WINDOW_MS,
   RAID_MIN_DISTINCT_USERS,
   RAID_ALERT_COOLDOWN_MS
 } = require("../config");
 const { buildPanel, DANGER, WARN } = require("../embed");
 const { fetchKb } = require("../kb");
+const { detectBlockedLinkSignal, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText, normalizeText } = require("../text");
+const { safeSend } = require("../utils/respond");
 
 const raidBuckets = new Map();
 const lastRaidAlertAt = new Map();
@@ -95,6 +98,50 @@ function buildMessageUrl(message) {
   if (message?.url) return message.url;
   if (!message?.guildId || !message?.channelId || !message?.id) return null;
   return `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`;
+}
+
+async function tryDeleteMessage(message) {
+  if (!message?.delete) {
+    return {
+      deleted: false,
+      reason: "message delete unavailable"
+    };
+  }
+
+  try {
+    await message.delete();
+    return {
+      deleted: true,
+      reason: "deleted"
+    };
+  } catch (err) {
+    return {
+      deleted: false,
+      reason: err?.message || "delete failed"
+    };
+  }
+}
+
+async function tryTimeoutMessageMember(member, durationMs, reason) {
+  if (!member?.timeout || member.moderatable === false) {
+    return {
+      applied: false,
+      reason: "bot cannot moderate that member"
+    };
+  }
+
+  try {
+    await member.timeout(durationMs, reason);
+    return {
+      applied: true,
+      reason: `timed out for ${Math.round(durationMs / 1000)}s`
+    };
+  } catch (err) {
+    return {
+      applied: false,
+      reason: err?.message || "timeout failed"
+    };
+  }
 }
 
 function buildRecentUserMessageKey(message) {
@@ -427,6 +474,7 @@ function observeRaidMessage(message, now = Date.now()) {
 }
 
 function buildPrimaryAlertHeader(signals) {
+  if (signals.some((signal) => signal.type === "blocked_link")) return "Blocked Link Alert";
   if (signals.some((signal) => signal.type === "selling")) return "Selling Alert";
   if (signals.some((signal) => signal.type === "suspicious")) return "Suspicious Message Alert";
   return "Fake Info Alert";
@@ -447,6 +495,61 @@ function buildSignalAlertPanel(message, signals) {
       `**Message:** ${trimExcerpt(message.content)}`
     ].filter(Boolean).join("\n\n"),
     color: signals.some((signal) => signal.type === "selling") ? DANGER : WARN
+  };
+}
+
+function buildBlockedLinkTimeoutPayload({ message, signal, durationMs }) {
+  const shownLinks = signal.blockedLinks
+    .slice(0, 3)
+    .map((entry) => `- ${entry.raw}`)
+    .join("\n");
+
+  return {
+    embeds: [
+      buildPanel({
+        header: "Link Timeout",
+        body: [
+          "you sent a link that isn't on the approved docs allowlist",
+          `**Timeout:** ${Math.round(durationMs / 1000)}s`,
+          `**Channel:** <#${message.channelId}>`,
+          "**Blocked Link(s):**",
+          shownLinks,
+          "tenor gifs and links already listed in docs are allowed"
+        ].join("\n"),
+        color: WARN
+      })
+    ]
+  };
+}
+
+function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult, dmSent, durationMs }) {
+  const link = buildMessageUrl(message);
+  const shownLinks = signal.blockedLinks
+    .slice(0, 5)
+    .map((entry) => `- ${entry.raw}`)
+    .join("\n");
+
+  return {
+    header: timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert",
+    body: [
+      timeoutResult.applied
+        ? "link guard triggered and action was applied"
+        : "link guard triggered, but the action did not fully apply",
+      `**User:** <@${message.author?.id}>`,
+      `**Channel:** <#${message.channelId}>`,
+      `**Action:** delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | timeout ${
+        timeoutResult.applied ? `${Math.round(durationMs / 1000)}s` : timeoutResult.reason
+      } | dm ${dmSent ? "sent" : "not sent"}`,
+      `**Policy:** only docs-listed links and tenor gifs are allowed`,
+      `**Blocked Link Count:** ${signal.blockedCount}`,
+      "**Blocked Link(s):**",
+      shownLinks,
+      `**Message Excerpt:** ${trimExcerpt(message.content)}`
+    ].filter(Boolean).join("\n\n"),
+    tip: link ? `[Open message](${link})` : undefined,
+    tipStyle: "heading",
+    tipLevel: "##",
+    color: timeoutResult.applied ? DANGER : WARN
   };
 }
 
@@ -482,15 +585,63 @@ function collectContentSignals(content, { kb, runtimeStatus }) {
   return signals;
 }
 
-async function maybeHandleModerationWatch(message, { kb, runtimeStatus, fetchKbFn = fetchKb } = {}) {
+function mightContainLink(content) {
+  return extractUrlsFromText(content).length > 0;
+}
+
+async function handleBlockedLinkMessage(message, signal, { sendLog = sendLogPanel, timeoutMs = LINK_MODERATION_TIMEOUT_MS } = {}) {
+  const deleteResult = await tryDeleteMessage(message);
+  const timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "unapproved link");
+  const dmSent = timeoutResult.applied
+    ? await safeSend(message.author, buildBlockedLinkTimeoutPayload({
+        message,
+        signal,
+        durationMs: timeoutMs
+      }))
+    : false;
+
+  if (!deleteResult.deleted) {
+    recordRuntimeEvent("warn", "blocked-link-delete", deleteResult.reason);
+  }
+  if (!timeoutResult.applied) {
+    recordRuntimeEvent("warn", "blocked-link-timeout", timeoutResult.reason);
+  }
+
+  await sendLog(message.guild, buildBlockedLinkLogPanel({
+    message,
+    signal,
+    deleteResult,
+    timeoutResult,
+    dmSent,
+    durationMs: timeoutMs
+  })).catch(() => null);
+
+  return true;
+}
+
+async function maybeHandleModerationWatch(message, {
+  kb,
+  runtimeStatus,
+  fetchKbFn = fetchKb,
+  sendLog = sendLogPanel
+} = {}) {
   if (!message?.inGuild?.() || message.author?.bot) return false;
   if (hasBypassPermission(message)) return false;
 
   try {
     const recentMessages = rememberRecentUserMessage(message);
     let resolvedKb = kb || null;
-    if (!resolvedKb && mightContainFakeInfo(message.content)) {
+    const hasLink = mightContainLink(message.content);
+    if (!resolvedKb && (hasLink || mightContainFakeInfo(message.content))) {
       resolvedKb = await fetchKbFn().catch(() => null);
+    }
+
+    if (hasLink && resolvedKb) {
+      const blockedLinkSignal = detectBlockedLinkSignal(message.content, { kb: resolvedKb });
+      if (blockedLinkSignal) {
+        await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog });
+        return true;
+      }
     }
 
     const signals = collectContentSignals(message.content, {
@@ -506,12 +657,12 @@ async function maybeHandleModerationWatch(message, { kb, runtimeStatus, fetchKbF
     }
 
     if (signals.length) {
-      await sendLogPanel(message.guild, buildSignalAlertPanel(message, signals));
+      await sendLog(message.guild, buildSignalAlertPanel(message, signals));
     }
 
     const raidAlert = observeRaidMessage(message);
     if (raidAlert) {
-      await sendLogPanel(message.guild, buildRaidAlertPanel(message, raidAlert));
+      await sendLog(message.guild, buildRaidAlertPanel(message, raidAlert));
     }
   } catch (err) {
     console.warn("Moderation watcher failed:", err.message);
@@ -532,6 +683,7 @@ module.exports = {
   detectContextualSellingSignal,
   detectSuspiciousSignal,
   detectFakeInfoSignal,
+  detectBlockedLinkSignal,
   collectContentSignals,
   hasBypassPermission,
   observeRaidMessage,

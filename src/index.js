@@ -1,8 +1,8 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
-const { DISCORD_TOKEN } = require("./config");
+const { ActivityType, Client, Events, GatewayIntentBits, Partials } = require("discord.js");
+const { BOT_PRESENCE_TEXT, DISCORD_TOKEN } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
 const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-stats");
 const { buildPanel, DANGER } = require("./embed");
@@ -86,6 +86,9 @@ function isBotPing(message) {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready as ${readyClient.user.tag}`);
+  readyClient.user.setActivity(BOT_PRESENCE_TEXT, {
+    type: ActivityType.Custom
+  });
   try {
     await fetchKb();
     console.log("KB cache primed");
@@ -188,7 +191,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (await maybeHandleLockCommand(message)) return;
     if (await maybeHandleControlCommand(message)) return;
-    await maybeHandleModerationWatch(message);
+    if (await maybeHandleModerationWatch(message)) return;
 
     if (isNoResponseMessage(message)) {
       if (isBotPing(message)) {

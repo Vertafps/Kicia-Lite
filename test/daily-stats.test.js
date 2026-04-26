@@ -173,8 +173,11 @@ test("daily stats embeds show top users and silent staff without counting mods",
   const staffDescription = report.embeds[1].data.description;
 
   assert.match(serverDescription, /Top Users/i);
+  assert.match(serverDescription, /Peak Hours/i);
+  assert.match(serverDescription, /Most Recent Message/i);
   assert.match(serverDescription, /Alpha/i);
   assert.match(staffDescription, /Staff Silent/i);
+  assert.match(staffDescription, /Staff Share of Server Messages/i);
   assert.match(staffDescription, /no staff messages this window/i);
   assert.doesNotMatch(staffDescription, /Mod Beta/i);
 

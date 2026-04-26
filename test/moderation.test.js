@@ -16,11 +16,13 @@ const {
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
 const {
+  detectBlockedLinkSignal,
   detectSellingSignal,
   detectContextualSellingSignal,
   detectSuspiciousSignal,
   detectFakeInfoSignal,
   hasBypassPermission,
+  maybeHandleModerationWatch,
   observeRaidMessage,
   resetModerationState
 } = require("../src/handlers/moderation");
@@ -70,6 +72,82 @@ function buildRaidMessage(content, userId, { permissions = [] } = {}) {
       permissions: new PermissionsBitField(permissions)
     },
     inGuild: () => true
+  };
+}
+
+function buildModerationMessage(content, {
+  userId = "regular-user",
+  roleIds = [],
+  permissions = [],
+  moderatable = true
+} = {}) {
+  const deleted = [];
+  const timeouts = [];
+  const dms = [];
+  const logs = [];
+
+  const member = {
+    id: userId,
+    displayName: "Regular User",
+    roles: {
+      cache: {
+        has: (roleId) => roleIds.includes(roleId)
+      }
+    },
+    permissions: new PermissionsBitField(permissions),
+    moderatable,
+    timeout: async (durationMs, reason) => {
+      timeouts.push({ durationMs, reason });
+    }
+  };
+
+  const guild = {
+    channels: {
+      cache: new Map(),
+      fetch: async () => null
+    },
+    members: {
+      cache: {
+        get: (id) => (id === userId ? member : null)
+      },
+      fetch: async (id) => (id === userId ? member : null)
+    }
+  };
+
+  const author = {
+    id: userId,
+    bot: false,
+    username: "regularuser",
+    send: async (payload) => {
+      dms.push(payload);
+    }
+  };
+
+  const message = {
+    id: "message-1",
+    content,
+    guildId: "guild-1",
+    channelId: "channel-1",
+    url: "https://discord.com/channels/guild-1/channel-1/message-1",
+    guild,
+    author,
+    member,
+    inGuild: () => true,
+    delete: async () => {
+      deleted.push(true);
+    }
+  };
+
+  return {
+    message,
+    deleted,
+    timeouts,
+    dms,
+    logs,
+    sendLog: async (_guild, panel) => {
+      logs.push(panel);
+      return true;
+    }
   };
 }
 
@@ -221,6 +299,16 @@ test("suspicious detection catches dm-for-link wording", () => {
   assert.match(signal.reason, /links privately/i);
 });
 
+test("link detection allows docs-listed links and tenor while blocking others", () => {
+  assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://tenor.com/view/cat-123", { kb }), null);
+
+  const signal = detectBlockedLinkSignal("check https://google.com", { kb });
+  assert.ok(signal);
+  assert.equal(signal.blockedCount, 1);
+  assert.equal(signal.blockedLinks[0].hostname, "google.com");
+});
+
 test("fake info guard catches wrong status claims", () => {
   const signal = detectFakeInfoSignal("kicia is down", {
     kb,
@@ -262,6 +350,24 @@ test("raid detector alerts on repeated copy-paste by multiple users", () => {
   const alert = observeRaidMessage(buildRaidMessage(content, "u4"), now + 6_000);
   assert.ok(alert);
   assert.match(alert.reason, /4 users/i);
+});
+
+test("blocked links are deleted, logged, and timed out", async () => {
+  const fixture = buildModerationMessage("check this https://google.com now");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 60 * 1000);
+  assert.equal(fixture.dms.length, 1);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Blocked Link Timeout/i);
 });
 
 test("restricted emoji database adds and removes emojis", async () => {

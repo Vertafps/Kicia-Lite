@@ -2,6 +2,7 @@ const { PermissionFlagsBits } = require("discord.js");
 const {
   BRAND,
   DAILY_STATS_CHANNEL_ID,
+  LINK_MODERATION_TIMEOUT_MS,
   LOG_CHANNEL_ID,
   NO_RESPONSE_CHANNEL_IDS,
   CHANNEL_LOCK_TARGETS
@@ -198,6 +199,9 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
     securityLines.push(
       `**Daily Tracking DB:** users ${emojiDb.tableCounts.dailyUsers} | channels ${emojiDb.tableCounts.dailyChannels} | staff ${emojiDb.tableCounts.dailyStaff}`
+    );
+    securityLines.push(
+      `**Link Guard:** docs allowlist + tenor | timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`
     );
   } catch (err) {
     securityLines.push(`**Emoji DB:** failed (${err.message})`);

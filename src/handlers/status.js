@@ -2,30 +2,11 @@ const { OWNER_USER_ID, CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
-const { buildStatusReplyBody, detectStatusQuestion } = require("../router");
+const { buildStatusReplyBody } = require("../router");
+const { detectLongStatusPrompt, detectShortStatusPrompt } = require("../status-prompts");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
-const { normalizeText } = require("../text");
 const { safeEdit, safeReact, safeReply } = require("../utils/respond");
 const { getCooldownReaction, markGuildReply } = require("./cooldown");
-
-const SHORT_STATUS_PATTERNS = [
-  /^status$/,
-  /^does\s+it\s+work$/,
-  /^does\s+it\s+works$/,
-  /^is\s+it\s+work(?:ing)?$/,
-  /^it\s+work(?:ing)?$/,
-  /^still\s+work(?:ing|s)?$/,
-  /^work(?:ing|s)?\s+rn$/,
-  /^work(?:ing|s)?$/,
-  /^not\s+work(?:ing)?$/,
-  /^(?:doesnt|doesn\s+t|does\s+not)\s+work$/,
-  /^(?:isnt|isn\s+t|is\s+not)\s+work(?:ing)?$/,
-  /^(?:is\s+it\s+)?(?:borken|broken)$/,
-  /^(?:is\s+it\s+)?(?:up|down)\s+rn$/,
-  /^still\s+(?:up|down)$/,
-  /^is\s+it\s+(?:up|down)$/,
-  /^(?:up|down)$/
-];
 
 function parseStatusCommand(content) {
   const normalized = String(content || "").trim().toLowerCase();
@@ -56,13 +37,11 @@ function isOwnerCommandMessage(content) {
 }
 
 function isShortStatusPrompt(content) {
-  const normalized = normalizeText(content);
-  if (!normalized) return false;
-  return SHORT_STATUS_PATTERNS.some((pattern) => pattern.test(normalized));
+  return detectShortStatusPrompt(content);
 }
 
 function shouldAutoReplyStatus(content) {
-  return isPublicStatusQueryMessage(content) || detectStatusQuestion(content) || isShortStatusPrompt(content);
+  return isPublicStatusQueryMessage(content) || detectLongStatusPrompt(content) || isShortStatusPrompt(content);
 }
 
 function buildStatusEmbed(status = getRuntimeStatus()) {

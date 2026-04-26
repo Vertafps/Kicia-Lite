@@ -405,6 +405,18 @@ test("routes does kiciahook work as status instead of executor", () => {
   assert.match(route.body, /status says it's down rn/i);
 });
 
+test("routes bare works as status instead of docs", () => {
+  const route = classifyTranscript("works", kb, "UP");
+  assert.equal(route.kind, "status");
+  assert.match(route.body, /status says it's up rn/i);
+});
+
+test("latest bare works line wins over older docs-looking transcript", () => {
+  const route = classifyTranscript("gui not loading\nworks", kb, "UP");
+  assert.equal(route.kind, "status");
+  assert.match(route.body, /status says it's up rn/i);
+});
+
 test("executor routing prioritizes the most recent explicit question", () => {
   const route = classifyTranscript("does madium work\n@kicialite does delta work", kb, "UP");
   assert.equal(route.kind, "executor");

@@ -1,5 +1,6 @@
 const { BRAND } = require("./config");
 const { findExecutorMatch, tryIssueMatch } = require("./kb");
+const { detectStatusPrompt } = require("./status-prompts");
 const { normalizeText } = require("./text");
 
 const STATUS_UP_REPLY = "status says it's up rn";
@@ -30,16 +31,6 @@ const SUPPORT_ONLY_HEADERS = [
   "\u{1F3AB} Staff Intervention Required"
 ];
 
-const STATUS_PATTERNS = [
-  /^(?:kicia|kiciahook)?\s*status$/,
-  /\b(?:is|was)\s+(?:kicia|kiciahook)\s+(?:down|up|working|online|offline)\b/,
-  /\b(?:kicia|kiciahook)\s+(?:down|up|working|online|offline)\b/,
-  /\b(?:is|was)\s+(?:kicia|kiciahook)\s+work(?:ing)?\b/,
-  /\bdoes\s+(?:kicia|kiciahook)\s+work\b/,
-  /\bcan\s+(?:kicia|kiciahook)\s+work\b/,
-  /\bis\s+it\s+(?:down|up)\b/,
-  /\bcurrent\s+status\b/
-];
 const EXECUTOR_SUPPORT_PATTERNS = [
   /\bis\s+(.+?)\s+supported\b/,
   /\bis\s+(.+?)\s+(?:working|compatible)\b/,
@@ -121,9 +112,7 @@ function pickVariant(variants, seedText) {
 }
 
 function detectStatusQuestion(text) {
-  const normalized = normalizeText(text);
-  if (!normalized) return false;
-  return STATUS_PATTERNS.some((pattern) => pattern.test(normalized));
+  return detectStatusPrompt(text);
 }
 
 function buildStatusReplyBody(runtimeStatus = "UP") {

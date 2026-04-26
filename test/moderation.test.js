@@ -300,6 +300,8 @@ test("suspicious detection catches dm-for-link wording", () => {
 });
 
 test("link detection allows docs links and gif links while blocking other files", () => {
+  assert.equal(detectBlockedLinkSignal("example.com", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("some random word like thing.gg but not a link", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://tenor.com/view/cat-123", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", { kb }), null);
@@ -314,6 +316,7 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.ok(signal);
   assert.equal(signal.blockedCount, 1);
   assert.equal(signal.blockedLinks[0].hostname, "google.com");
+  assert.ok(detectBlockedLinkSignal("gofile.io/d/abc123", { kb }));
   assert.ok(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/not-a-gif.png", { kb }));
   assert.ok(detectBlockedLinkSignal("https://klipy.com/videos/not-a-gif", { kb }));
 });

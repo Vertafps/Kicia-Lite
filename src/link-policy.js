@@ -1,7 +1,7 @@
 const { BRAND } = require("./config");
 
 const BRAND_URLS = [BRAND.DOCS_JUMP_URL, BRAND.TICKET_JUMP_URL, BRAND.STATUS_JUMP_URL];
-const URL_CANDIDATE_RE = /<?(?:https?:\/\/|www\.|discord\.gg\/|discord(?:app)?\.com\/invite\/|(?:[a-z0-9-]+\.)+[a-z]{2,})(?:[^\s<>"'`|]*)>?/gi;
+const URL_CANDIDATE_RE = /<?(?:https?:\/\/[^\s<>"'`|]+|www\.[^\s<>"'`|]+|discord\.gg\/[^\s<>"'`|]+|discord(?:app)?\.com\/invite\/[^\s<>"'`|]+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>"'`|]+)>?/gi;
 const TRAILING_PUNCTUATION_RE = /[),.!?;:\]>]+$/;
 const EXACT_ONLY_HOSTS = new Set([
   "discord.com",

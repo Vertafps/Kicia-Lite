@@ -303,6 +303,8 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("example.com", { kb }), null);
   assert.equal(detectBlockedLinkSignal("some random word like thing.gg but not a link", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://google.com/search?q=kicia", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://docs.google.com/document/d/abc123", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://tenor.com/view/cat-123", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://example.com/memes/dancing-cat.gif", { kb }), null);
@@ -312,10 +314,10 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("https://raw.githubusercontent.com/user/repo/main/script.lua", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://gist.githubusercontent.com/user/abc123/raw/script.lua", { kb }), null);
 
-  const signal = detectBlockedLinkSignal("check https://google.com", { kb });
+  const signal = detectBlockedLinkSignal("check https://bing.com/search?q=kicia", { kb });
   assert.ok(signal);
   assert.equal(signal.blockedCount, 1);
-  assert.equal(signal.blockedLinks[0].hostname, "google.com");
+  assert.equal(signal.blockedLinks[0].hostname, "bing.com");
   assert.ok(detectBlockedLinkSignal("gofile.io/d/abc123", { kb }));
   assert.ok(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/not-a-gif.png", { kb }));
   assert.ok(detectBlockedLinkSignal("https://klipy.com/videos/not-a-gif", { kb }));
@@ -365,7 +367,7 @@ test("raid detector alerts on repeated copy-paste by multiple users", () => {
 });
 
 test("blocked links are deleted, logged, and timed out", async () => {
-  const fixture = buildModerationMessage("check this https://google.com now");
+  const fixture = buildModerationMessage("check this https://bing.com/search?q=kicia now");
 
   const handled = await maybeHandleModerationWatch(fixture.message, {
     kb,

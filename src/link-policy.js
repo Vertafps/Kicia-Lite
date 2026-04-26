@@ -144,6 +144,15 @@ function isGithubLikeHost(hostname) {
   );
 }
 
+function isGoogleHost(hostname) {
+  return (
+    hostname === "g.co" ||
+    hostname.endsWith(".g.co") ||
+    /^google\.[a-z.]+$/i.test(hostname) ||
+    /\.google\.[a-z.]+$/i.test(hostname)
+  );
+}
+
 function isGifLikeUrl(url) {
   if (!url) return false;
   if (/\.gif$/i.test(url.pathname || "")) return true;
@@ -155,6 +164,7 @@ function isAllowedLink(url, rules) {
   if (!url) return false;
   if (isGifLikeUrl(url)) return true;
   if (isGithubLikeHost(url.hostname)) return true;
+  if (isGoogleHost(url.hostname)) return true;
   if (rules.exactKeys.has(url.key)) return true;
   if (rules.rootHosts.has(url.hostname)) return true;
   return false;

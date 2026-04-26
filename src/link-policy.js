@@ -120,18 +120,26 @@ function buildAllowedLinkRules(kb) {
   return rules;
 }
 
-function isTenorHost(hostname) {
-  return hostname === "tenor.com" || hostname.endsWith(".tenor.com");
+function isGifHost(hostname) {
+  return (
+    hostname === "tenor.com" ||
+    hostname.endsWith(".tenor.com") ||
+    hostname === "giphy.com" ||
+    hostname.endsWith(".giphy.com") ||
+    hostname === "gph.is" ||
+    hostname.endsWith(".gph.is")
+  );
 }
 
-function isAllowedDiscordGifCdn(url) {
-  return url?.hostname === "cdn.discordapp.com" && /\.gif$/i.test(url.pathname || "");
+function isGifLikeUrl(url) {
+  if (!url) return false;
+  if (/\.gif$/i.test(url.pathname || "")) return true;
+  return isGifHost(url.hostname);
 }
 
 function isAllowedLink(url, rules) {
   if (!url) return false;
-  if (isTenorHost(url.hostname)) return true;
-  if (isAllowedDiscordGifCdn(url)) return true;
+  if (isGifLikeUrl(url)) return true;
   if (rules.exactKeys.has(url.key)) return true;
   if (rules.rootHosts.has(url.hostname)) return true;
   return false;

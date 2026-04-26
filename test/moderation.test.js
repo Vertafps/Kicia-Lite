@@ -299,10 +299,12 @@ test("suspicious detection catches dm-for-link wording", () => {
   assert.match(signal.reason, /links privately/i);
 });
 
-test("link detection allows docs-listed links and tenor while blocking others", () => {
+test("link detection allows docs links and gif links while blocking other files", () => {
   assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://tenor.com/view/cat-123", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://example.com/memes/dancing-cat.gif", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://giphy.com/gifs/cat-funny-abc123", { kb }), null);
 
   const signal = detectBlockedLinkSignal("check https://google.com", { kb });
   assert.ok(signal);

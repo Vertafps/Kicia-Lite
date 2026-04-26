@@ -10,7 +10,7 @@ const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
 const { maybeHandleLockCommand, parseLockCommand } = require("../src/handlers/lockdown");
-const { maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
+const { isOwnerCommandMessage, maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
 const { resetRuntimeStatus, getRuntimeStatus } = require("../src/runtime-status");
 
 const kb = normalizeKb({
@@ -382,7 +382,7 @@ test("routes status questions for down wording", () => {
   const route = classifyTranscript("is kicia down", kb, "UP");
   assert.equal(route.kind, "status");
   assert.match(route.body, /status says it's up rn/i);
-  assert.match(route.body, /1496596246851354735/);
+  assert.match(route.body, /1497703492012347412/);
   assert.match(route.body, /\$status/);
 });
 
@@ -507,7 +507,7 @@ test("different user inside 5 seconds gets global cooldown reaction", () => {
 });
 
 test("parses lock command aliases", () => {
-  assert.equal(parseLockCommand("$lock"), "toggle");
+  assert.equal(parseLockCommand("$lock"), "lock");
   assert.equal(parseLockCommand("$lockdown"), "lock");
   assert.equal(parseLockCommand("$lock on"), "lock");
   assert.equal(parseLockCommand("$unlock"), "unlock");
@@ -557,7 +557,7 @@ test("lock command disables send messages for the member role in both channels",
   assert.match(message.replies[0].embeds[0].data.description, /1489747706980339773/);
 });
 
-test("toggle lock command unlocks when both channels are already locked", async () => {
+test("$lock no longer toggles and stays locked when both channels are already locked", async () => {
   const general = buildMockLockChannel("1484218577589637233", {
     sendMessagesState: false,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
@@ -573,9 +573,9 @@ test("toggle lock command unlocks when both channels are already locked", async 
   const handled = await maybeHandleLockCommand(message);
 
   assert.equal(handled, true);
-  assert.equal(general.getSendMessagesState(), true);
-  assert.equal(support.getSendMessagesState(), true);
-  assert.match(message.replies[0].embeds[0].data.description, /unlocked channels/i);
+  assert.equal(general.getSendMessagesState(), false);
+  assert.equal(support.getSendMessagesState(), false);
+  assert.match(message.replies[0].embeds[0].data.description, /already locked/i);
 });
 
 test("explicit lock command reports when channels are already locked", async () => {
@@ -672,7 +672,7 @@ test("public status command replies for non-owners", async () => {
   assert.equal(handled, true);
   assert.ok(replyPayload);
   assert.match(replyPayload.embeds[0].data.description, /status says it'?s up rn/i);
-  assert.match(replyPayload.embeds[0].data.description, /1496596246851354735/);
+  assert.match(replyPayload.embeds[0].data.description, /1497703492012347412/);
   assert.match(replyPayload.embeds[0].data.description, /\$status/);
 });
 
@@ -793,4 +793,8 @@ test("owner fetch command replies cleanly on kb refresh failure", async () => {
 
   assert.equal(handled, true);
   assert.equal(replied, true);
+});
+
+test("jarvis counts as an owner-only command", () => {
+  assert.equal(isOwnerCommandMessage("$jarvis"), true);
 });

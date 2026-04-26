@@ -1,5 +1,6 @@
-const { OWNER_USER_ID } = require("../config");
+const { OWNER_USER_ID, CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
+const { buildJarvisReport } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
 const { buildStatusReplyBody, detectStatusQuestion } = require("../router");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
@@ -46,8 +47,12 @@ function isFetchCommandMessage(content) {
   return normalized === "$fetch" || normalized === "$refresh";
 }
 
+function isJarvisCommandMessage(content) {
+  return String(content || "").trim().toLowerCase() === "$jarvis";
+}
+
 function isOwnerCommandMessage(content) {
-  return isStatusCommandMessage(content) || isFetchCommandMessage(content);
+  return isStatusCommandMessage(content) || isFetchCommandMessage(content) || isJarvisCommandMessage(content);
 }
 
 function isShortStatusPrompt(content) {
@@ -89,12 +94,39 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
   return true;
 }
 
+async function handleJarvisCommand(message, refreshKb) {
+  if (message.author?.id !== OWNER_USER_ID) return true;
+
+  const report = await buildJarvisReport(message, {
+    refreshKb,
+    channelLockRoleId: CHANNEL_LOCK_ROLE_ID
+  });
+
+  await safeReply(message, {
+    embeds: [
+      buildPanel({
+        header: "Jarvis Report",
+        body: report,
+        color: INFO
+      })
+    ],
+    allowedMentions: { repliedUser: false }
+  });
+
+  return true;
+}
+
 async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } = {}) {
   const nextStatus = parseStatusCommand(message.content);
   const fetchCommand = isFetchCommandMessage(message.content);
+  const jarvisCommand = isJarvisCommandMessage(message.content);
 
-  if (nextStatus || fetchCommand) {
+  if (nextStatus || fetchCommand || jarvisCommand) {
     if (message.author?.id !== OWNER_USER_ID) return true;
+  }
+
+  if (jarvisCommand) {
+    return handleJarvisCommand(message, refreshKb);
   }
 
   if (fetchCommand) {
@@ -146,7 +178,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
       await safeReply(message, {
         embeds: [
           buildPanel({
-            body: "usage: `$status`, `$status up`, or `$status down`",
+            body: "usage: `$status`, `$status up`, `$status down`, `$fetch`, or `$jarvis`",
             color: INFO
           })
         ],
@@ -169,6 +201,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
 module.exports = {
   parseStatusCommand,
   isFetchCommandMessage,
+  isJarvisCommandMessage,
   isStatusCommandMessage,
   isPublicStatusQueryMessage,
   isOwnerCommandMessage,

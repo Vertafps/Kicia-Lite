@@ -6,6 +6,7 @@ const {
   CHANNEL_LOCK_OPERATOR_USER_IDS
 } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
+const { safeReact, safeReply } = require("../utils/respond");
 
 const LOCK_REACTION = "\u274C";
 const CHANNEL_PERMISSION_BITS = [
@@ -14,14 +15,12 @@ const CHANNEL_PERMISSION_BITS = [
 ];
 const PERMISSION_LABELS = new Map([
   [PermissionFlagsBits.ViewChannel, "View Channel"],
-  [PermissionFlagsBits.ManageChannels, "Manage Channels"],
-  [PermissionFlagsBits.ManageRoles, "Manage Roles"]
+  [PermissionFlagsBits.ManageChannels, "Manage Channels"]
 ]);
 
 function parseLockCommand(content) {
   const normalized = String(content || "").trim().toLowerCase();
-  if (normalized === "$lock") return "toggle";
-  if (normalized === "$lockdown" || normalized === "$lock on") return "lock";
+  if (normalized === "$lock" || normalized === "$lockdown" || normalized === "$lock on") return "lock";
   if (normalized === "$unlock" || normalized === "$lock off") return "unlock";
   return null;
 }
@@ -62,20 +61,11 @@ function getOverwriteSendMessagesState(channel) {
 
 function getAggregateLockState(channels) {
   const states = channels.map((channel) => getOverwriteSendMessagesState(channel));
-  const allLocked = states.every((state) => state === false);
-  const allUnlocked = states.every((state) => state === true);
-
   return {
     states,
-    allLocked,
-    allUnlocked
+    allLocked: states.every((state) => state === false),
+    allUnlocked: states.every((state) => state === true)
   };
-}
-
-function getDesiredLockState(command, aggregateState) {
-  if (command === "lock") return false;
-  if (command === "unlock") return true;
-  return aggregateState.allLocked;
 }
 
 function getMissingChannelPermissionLabels(channel, botMember) {
@@ -98,10 +88,14 @@ function buildActorLabel(message) {
 }
 
 async function replyWithPanel(message, panel) {
-  await message.reply({
+  await safeReply(message, {
     embeds: [buildPanel(panel)],
     allowedMentions: { repliedUser: false }
   });
+}
+
+function getNextSendMessagesState(command) {
+  return command === "unlock";
 }
 
 async function maybeHandleLockCommand(message) {
@@ -110,7 +104,7 @@ async function maybeHandleLockCommand(message) {
   if (!message.inGuild?.()) return false;
 
   if (!isLockOperator(message)) {
-    await message.react(LOCK_REACTION).catch(() => null);
+    await safeReact(message, LOCK_REACTION);
     return true;
   }
 
@@ -126,10 +120,11 @@ async function maybeHandleLockCommand(message) {
   }
 
   const aggregateState = getAggregateLockState(channels);
-  const desiredLockedState = getDesiredLockState(command, aggregateState);
-  const actionLabel = desiredLockedState ? "unlocked" : "locked";
+  const nextSendMessagesState = getNextSendMessagesState(command);
+  const actionLabel = nextSendMessagesState ? "unlock" : "lock";
+  const pastTenseLabel = nextSendMessagesState ? "unlocked" : "locked";
 
-  if (!desiredLockedState && aggregateState.allLocked && command !== "toggle") {
+  if (!nextSendMessagesState && aggregateState.allLocked) {
     await replyWithPanel(message, {
       body: `those channels are already locked: ${buildTargetChannelMentions(channels)}`,
       color: INFO
@@ -137,7 +132,7 @@ async function maybeHandleLockCommand(message) {
     return true;
   }
 
-  if (desiredLockedState && aggregateState.allUnlocked && command !== "toggle") {
+  if (nextSendMessagesState && aggregateState.allUnlocked) {
     await replyWithPanel(message, {
       body: `those channels are already unlocked: ${buildTargetChannelMentions(channels)}`,
       color: INFO
@@ -149,7 +144,7 @@ async function maybeHandleLockCommand(message) {
   const missingPermissions = [...new Set(channels.flatMap((channel) => getMissingChannelPermissionLabels(channel, botMember)))];
   if (missingPermissions.length) {
     await replyWithPanel(message, {
-      body: `I dont have ${missingPermissions.join(" / ")} yet so i cannto do that bro </3`,
+      body: `I dont have ${missingPermissions.join(" / ")} yet so i cannot do that bro </3`,
       color: DANGER
     });
     return true;
@@ -159,24 +154,28 @@ async function maybeHandleLockCommand(message) {
 
   try {
     for (const channel of channels) {
-      await channel.permissionOverwrites.edit(CHANNEL_LOCK_ROLE_ID, { SendMessages: desiredLockedState }, {
-        reason: `${actionLabel} by ${message.author?.id || "unknown"}`
-      });
+      await channel.permissionOverwrites.edit(
+        CHANNEL_LOCK_ROLE_ID,
+        { SendMessages: nextSendMessagesState },
+        { reason: `${actionLabel} by ${message.author?.id || "unknown"}` }
+      );
     }
   } catch (err) {
     for (const channel of channels) {
       const previousState = previousStates.get(channel.id);
       if (getOverwriteSendMessagesState(channel) === previousState) continue;
 
-      await channel.permissionOverwrites.edit(CHANNEL_LOCK_ROLE_ID, { SendMessages: previousState }, {
-        reason: `rollback after failed ${actionLabel}`
-      }).catch(() => null);
+      await channel.permissionOverwrites.edit(
+        CHANNEL_LOCK_ROLE_ID,
+        { SendMessages: previousState },
+        { reason: `rollback after failed ${actionLabel}` }
+      ).catch(() => null);
     }
 
     const missingAfterFailure = [...new Set(channels.flatMap((channel) => getMissingChannelPermissionLabels(channel, botMember)))];
     if (missingAfterFailure.length || err.code === 50013) {
       await replyWithPanel(message, {
-        body: `I dont have ${(missingAfterFailure.length ? missingAfterFailure : ["the required perms"]).join(" / ")} yet so i cannto do that bro </3`,
+        body: `I dont have ${(missingAfterFailure.length ? missingAfterFailure : ["the required perms"]).join(" / ")} yet so i cannot do that bro </3`,
         color: DANGER
       });
       return true;
@@ -186,8 +185,8 @@ async function maybeHandleLockCommand(message) {
   }
 
   await replyWithPanel(message, {
-    body: `${actionLabel} channels: ${buildTargetChannelMentions(channels)} successfully\nby: ${buildActorLabel(message)}`,
-    color: desiredLockedState ? SUCCESS : WARN
+    body: `${pastTenseLabel} channels: ${buildTargetChannelMentions(channels)} successfully\nby: ${buildActorLabel(message)}`,
+    color: nextSendMessagesState ? SUCCESS : WARN
   });
   return true;
 }
@@ -198,6 +197,6 @@ module.exports = {
   isLockOperator,
   getOverwriteSendMessagesState,
   getAggregateLockState,
-  getDesiredLockState,
+  getNextSendMessagesState,
   maybeHandleLockCommand
 };

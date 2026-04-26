@@ -5,9 +5,11 @@ const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
 const { fetchKb } = require("./kb");
+const { maybeHandleModerationWatch } = require("./handlers/moderation");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
 const { isOwnerCommandMessage, maybeHandleStatusCommand } = require("./handlers/status");
+const { recordRuntimeEvent } = require("./runtime-health");
 const { safeReact } = require("./utils/respond");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
@@ -20,11 +22,8 @@ function acquireInstanceLock() {
     let existingPid;
     try {
       existingPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
-    } catch (readErr) {
-      // If we can't read it, it might be corrupted or locked by another process
-      // Just try to overwrite if it's old, but for safety we'll just try to rm it
-    }
-    
+    } catch {}
+
     if (Number.isInteger(existingPid)) {
       try {
         process.kill(existingPid, 0);
@@ -33,7 +32,7 @@ function acquireInstanceLock() {
         if (probeErr.code !== "ESRCH") throw probeErr;
       }
     }
-    
+
     try {
       fs.rmSync(LOCK_PATH, { force: true });
       fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
@@ -90,18 +89,22 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.Error, (err) => {
   console.error("Discord client error:", err);
+  recordRuntimeEvent("error", "discord-client", err?.message || err);
 });
 
 client.on(Events.Warn, (warning) => {
   console.warn("Discord client warning:", warning);
+  recordRuntimeEvent("warn", "discord-client", warning);
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
+  recordRuntimeEvent("error", "unhandled-rejection", reason?.message || reason);
 });
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
+  recordRuntimeEvent("error", "uncaught-exception", err?.message || err);
 });
 
 client.on(Events.MessageCreate, async (message) => {
@@ -109,9 +112,11 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     if (await maybeHandleLockCommand(message)) return;
+    await maybeHandleModerationWatch(message);
+
     if (isNoResponseMessage(message)) {
       if (isBotPing(message)) {
-        await safeReact(message, "❌");
+        await safeReact(message, "\u274C");
         return;
       }
 
@@ -120,6 +125,7 @@ client.on(Events.MessageCreate, async (message) => {
       }
       return;
     }
+
     if (await maybeHandleStatusCommand(message)) return;
     if (message.channel.isDMBased()) {
       await handleDm(message);
@@ -129,12 +135,14 @@ client.on(Events.MessageCreate, async (message) => {
     await handleGuildPing(message);
   } catch (err) {
     console.error("Message handler failed:", err);
+    recordRuntimeEvent("error", "message-handler", err?.message || err);
     await replyWithError(message);
   }
 });
 
 client.login(DISCORD_TOKEN).catch((err) => {
   console.error("Discord login failed:", err);
+  recordRuntimeEvent("error", "discord-login", err?.message || err);
   releaseInstanceLock();
   process.exit(1);
 });

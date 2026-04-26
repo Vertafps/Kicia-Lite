@@ -4,18 +4,24 @@ const { forceRefreshKb } = require("../kb");
 const { buildStatusReplyBody, detectStatusQuestion } = require("../router");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
 const { normalizeText } = require("../text");
+const { safeReact, safeReply } = require("../utils/respond");
 const { getCooldownReaction, markGuildReply } = require("./cooldown");
 
 const SHORT_STATUS_PATTERNS = [
   /^status$/,
   /^does\s+it\s+work$/,
+  /^does\s+it\s+works$/,
   /^is\s+it\s+work(?:ing)?$/,
   /^it\s+work(?:ing)?$/,
+  /^still\s+work(?:ing|s)?$/,
+  /^work(?:ing|s)?\s+rn$/,
   /^work(?:ing|s)?$/,
   /^not\s+work(?:ing)?$/,
   /^(?:doesnt|doesn\s+t|does\s+not)\s+work$/,
   /^(?:isnt|isn\s+t|is\s+not)\s+work(?:ing)?$/,
   /^(?:is\s+it\s+)?(?:borken|broken)$/,
+  /^(?:is\s+it\s+)?(?:up|down)\s+rn$/,
+  /^still\s+(?:up|down)$/,
   /^is\s+it\s+(?:up|down)$/,
   /^(?:up|down)$/
 ];
@@ -66,12 +72,12 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
   if (useCooldown && message.inGuild?.()) {
     const cooldownEmoji = getCooldownReaction(message.author?.id);
     if (cooldownEmoji) {
-      await message.react?.(cooldownEmoji).catch(() => null);
+      await safeReact(message, cooldownEmoji);
       return true;
     }
   }
 
-  await message.reply({
+  await safeReply(message, {
     embeds: [buildStatusEmbed(getRuntimeStatus())],
     allowedMentions: { repliedUser: false }
   });
@@ -94,7 +100,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   if (fetchCommand) {
     try {
       await refreshKb();
-      await message.reply({
+      await safeReply(message, {
         embeds: [
           buildPanel({
             body: "fetched latest kb and refreshed cache",
@@ -104,7 +110,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
         allowedMentions: { repliedUser: false }
       });
     } catch {
-      await message.reply({
+      await safeReply(message, {
         embeds: [
           buildPanel({
             body: "couldn't fetch latest kb rn",
@@ -119,7 +125,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
 
   if (nextStatus) {
     setRuntimeStatus(nextStatus);
-    await message.reply({
+    await safeReply(message, {
       embeds: [
         buildPanel({
           body: nextStatus === "DOWN" ? "set kiciahook status to down" : "set kiciahook status to up",
@@ -137,7 +143,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
         return maybeReplyWithPublicStatus(message, { useCooldown: false });
       }
 
-      await message.reply({
+      await safeReply(message, {
         embeds: [
           buildPanel({
             body: "usage: `$status`, `$status up`, or `$status down`",

@@ -3,10 +3,12 @@ const os = require("os");
 const path = require("path");
 const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
+const { isNoResponseMessage } = require("./channel-policy");
 const { fetchKb } = require("./kb");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
-const { maybeHandleStatusCommand } = require("./handlers/status");
+const { isOwnerCommandMessage, maybeHandleStatusCommand } = require("./handlers/status");
+const { safeReact } = require("./utils/respond");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
 
@@ -86,11 +88,38 @@ client.once(Events.ClientReady, async (readyClient) => {
   timer.unref?.();
 });
 
+client.on(Events.Error, (err) => {
+  console.error("Discord client error:", err);
+});
+
+client.on(Events.Warn, (warning) => {
+  console.warn("Discord client warning:", warning);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
   try {
     if (await maybeHandleLockCommand(message)) return;
+    if (isNoResponseMessage(message)) {
+      if (isBotPing(message)) {
+        await safeReact(message, "❌");
+        return;
+      }
+
+      if (isOwnerCommandMessage(message.content)) {
+        await maybeHandleStatusCommand(message);
+      }
+      return;
+    }
     if (await maybeHandleStatusCommand(message)) return;
     if (message.channel.isDMBased()) {
       await handleDm(message);
@@ -104,4 +133,8 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN).catch((err) => {
+  console.error("Discord login failed:", err);
+  releaseInstanceLock();
+  process.exit(1);
+});

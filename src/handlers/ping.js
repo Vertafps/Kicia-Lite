@@ -4,6 +4,7 @@ const { fetchKb } = require("../kb");
 const { classifyTranscript } = require("../router");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText } = require("../text");
+const { safeReact, safeReply } = require("../utils/respond");
 const { getCooldownReaction, markGuildReply } = require("./cooldown");
 
 const COLOR_BY_NAME = {
@@ -13,16 +14,14 @@ const COLOR_BY_NAME = {
   info: INFO
 };
 
-// BUG FIX: wrapped channel.messages.fetch in try/catch so a permission error
-// or API hiccup doesn't crash the entire message handler. Falls back to just
-// the current message content so the bot can still attempt a reply.
 async function buildTranscript(message) {
   const TEN_MINUTES_MS = 10 * 60 * 1000;
   const now = Date.now();
+
   try {
     const recent = await message.channel.messages.fetch({ limit: RECENT_CHANNEL_MESSAGES_N });
     const transcriptMessages = recent
-      .filter((m) => m.author.id === message.author.id && (now - m.createdTimestamp) < TEN_MINUTES_MS)
+      .filter((m) => m.author.id === message.author.id && now - m.createdTimestamp < TEN_MINUTES_MS)
       .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
       .last(TRANSCRIPT_N);
 
@@ -35,15 +34,14 @@ async function buildTranscript(message) {
     console.warn("buildTranscript: channel fetch failed, falling back to message content:", err.message);
   }
 
-  // Fallback: use just the current message so we still have something to classify
   return cleanText(message.content);
 }
 
 async function handleDm(message) {
-  await message.reply({
+  await safeReply(message, {
     embeds: [
       buildPanel({
-        header: "👋 Use Me In The Main Server",
+        header: "\u{1F44B} Use Me In The Main Server",
         body: `I only work inside the ${BRAND.NAME} main server channels. Ping me there and I'll check the docs.`,
         color: INFO
       })
@@ -55,7 +53,7 @@ async function handleDm(message) {
 async function handleGuildPing(message) {
   const cooldownEmoji = getCooldownReaction(message.author.id);
   if (cooldownEmoji) {
-    await message.react(cooldownEmoji).catch(() => null);
+    await safeReact(message, cooldownEmoji);
     return;
   }
 
@@ -74,31 +72,21 @@ async function handleGuildPing(message) {
     color: COLOR_BY_NAME[route.color] || INFO
   });
 
-  await message.reply({ embeds: [embed], allowedMentions: { repliedUser: false } });
+  await safeReply(message, { embeds: [embed], allowedMentions: { repliedUser: false } });
   markGuildReply(message.author.id);
 }
 
-// BUG FIX: try message.reply first (keeps thread context), fall back to
-// channel.send if the message was deleted or reply throws, and swallow
-// errors from the fallback too so nothing propagates.
 async function replyWithError(message) {
   const errorEmbed = buildPanel({
-    header: "⚠️ Docs Lookup Is Down Right Now",
+    header: "\u26A0\uFE0F Docs Lookup Is Down Right Now",
     body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
     color: DANGER
   });
 
   try {
-    await message.reply({ embeds: [errorEmbed], allowedMentions: { repliedUser: false } });
-    return;
+    await safeReply(message, { embeds: [errorEmbed], allowedMentions: { repliedUser: false } });
   } catch {
-    // Message may have been deleted — try channel.send instead
-  }
-
-  try {
-    await message.channel?.send({ embeds: [errorEmbed] });
-  } catch {
-    // Nothing we can do at this point
+    // Nothing we can do at this point.
   }
 }
 

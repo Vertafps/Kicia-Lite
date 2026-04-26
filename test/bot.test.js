@@ -5,6 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 
+const { isNoResponseChannel, isNoResponseMessage } = require("../src/channel-policy");
 const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
@@ -698,9 +699,30 @@ test("generic no-ping working prompt auto-replies with status", async () => {
 test("auto status matcher stays focused on actual status prompts", () => {
   assert.equal(shouldAutoReplyStatus("does it work?"), true);
   assert.equal(shouldAutoReplyStatus("working"), true);
+  assert.equal(shouldAutoReplyStatus("works"), true);
+  assert.equal(shouldAutoReplyStatus("up"), true);
+  assert.equal(shouldAutoReplyStatus("down?"), true);
+  assert.equal(shouldAutoReplyStatus("still up"), true);
+  assert.equal(shouldAutoReplyStatus("work rn"), true);
   assert.equal(shouldAutoReplyStatus("borken"), true);
   assert.equal(shouldAutoReplyStatus("does delta work"), false);
   assert.equal(shouldAutoReplyStatus("gui not working"), false);
+});
+
+test("marks the configured general chat as no-response", () => {
+  assert.equal(isNoResponseChannel("1484218577589637233"), true);
+  assert.equal(isNoResponseChannel("1489747706980339773"), false);
+});
+
+test("detects no-response messages only for guild traffic", () => {
+  assert.equal(isNoResponseMessage({
+    inGuild: () => true,
+    channelId: "1484218577589637233"
+  }), true);
+  assert.equal(isNoResponseMessage({
+    inGuild: () => false,
+    channelId: "1484218577589637233"
+  }), false);
 });
 
 test("owner fetch command refreshes kb immediately", async () => {

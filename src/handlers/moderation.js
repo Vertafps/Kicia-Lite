@@ -14,6 +14,7 @@ const { cleanText, normalizeText } = require("../text");
 
 const raidBuckets = new Map();
 const lastRaidAlertAt = new Map();
+const recentUserMessages = new Map();
 const STAFF_BYPASS_PERMISSIONS = [
   PermissionFlagsBits.Administrator,
   PermissionFlagsBits.ManageGuild,
@@ -25,7 +26,10 @@ const STAFF_BYPASS_PERMISSIONS = [
 ];
 
 const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits)\b/;
-const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy)\b/;
+const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|bucks?|dollars?)\b/;
+const SELL_PRICE_RE = /(?:^|\s)(?:for\s+)?(?:[$€£]\s*)?\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd)?(?:\s|$)/;
+const SELL_CONTEXT_WINDOW_MS = 2 * 60 * 1000;
+const SELL_CONTEXT_MAX_MESSAGES = 3;
 const SELL_OFFER_PATTERNS = [
   /\b(?:i am|im|i m)\s+selling\b/,
   /\bfor sale\b/,
@@ -42,6 +46,8 @@ const SELL_EXCLUDE_PATTERNS = [
 ];
 const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+)?)|(?:w+t+s+)|(?:f+o+r+s+a+l+e+)/;
 const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:l+v+l+|l+e+v+e+l+)|(?:c+f+g+|c+o+n+f+i+g+)|(?:e+x+e+c+u+t+o+r+)|(?:s+c+r+i+p+t+)|(?:p+r+e+m+i+u+m+)|(?:l+i+c+e+n+s+e+)|(?:k+e+y+)|(?:k+i+c+i+a+)|(?:k+i+c+i+a+h+o+o+k+)/;
+const SELL_STRONG_INTENT_RE = /^(?:selling\b|wts\b|for sale\b|(?:i am|im|i m)\s+selling\b)/;
+const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|rules say|rule says)\b/;
 
 const SUSPICIOUS_PATTERNS = [
   {
@@ -98,6 +104,11 @@ function buildMessageUrl(message) {
   return `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`;
 }
 
+function buildRecentUserMessageKey(message) {
+  if (!message?.guildId || !message?.channelId || !message?.author?.id) return null;
+  return `${message.guildId}:${message.channelId}:${message.author.id}`;
+}
+
 function hasBypassPermission(message) {
   if (CHANNEL_LOCK_OPERATOR_USER_IDS.includes(message.author?.id)) return true;
 
@@ -136,7 +147,15 @@ function buildSellingCondensedText(content) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+function isSellPriceFollowUp(content) {
+  const rawLower = String(content || "").toLowerCase().trim();
+  if (!rawLower) return false;
+  if (rawLower.includes("?")) return false;
+  return SELL_PRICE_RE.test(` ${rawLower} `) || /^(?:price|prices|cheap)$/.test(rawLower);
+}
+
 function detectSellingSignal(content) {
+  const rawLower = String(content || "").toLowerCase();
   const spaced = buildSellingSpacedText(content);
   const condensed = buildSellingCondensedText(content);
   if (!spaced || !condensed) return null;
@@ -150,7 +169,10 @@ function detectSellingSignal(content) {
   const hasItemSignal =
     SELL_ITEM_RE.test(spaced) ||
     SELL_CONDENSED_ITEM_RE.test(condensed);
-  const hasMarketSignal = SELL_MARKET_RE.test(spaced) || /\$\s*\d/.test(content);
+  const hasMarketSignal =
+    SELL_MARKET_RE.test(rawLower) ||
+    /\$\s*\d/.test(content) ||
+    SELL_PRICE_RE.test(rawLower);
 
   if (!hasSellIntent || !(hasItemSignal || hasMarketSignal)) {
     return null;
@@ -159,6 +181,31 @@ function detectSellingSignal(content) {
   return {
     type: "selling",
     reason: "sell intent and sale target detected"
+  };
+}
+
+function detectContextualSellingSignal(messageTexts) {
+  if (!Array.isArray(messageTexts) || messageTexts.length < 2) return null;
+
+  const latest = String(messageTexts[messageTexts.length - 1] || "");
+  if (!isSellPriceFollowUp(latest)) return null;
+
+  const previousTexts = messageTexts
+    .slice(0, -1)
+    .map((text) => buildSellingSpacedText(text))
+    .filter(Boolean);
+
+  const hasStrongPriorIntent = previousTexts.some((text) =>
+    SELL_STRONG_INTENT_RE.test(text) &&
+    !SELL_EXCLUDE_PATTERNS.some((pattern) => pattern.test(text)) &&
+    !SELL_CONTEXT_NEGATIVE_RE.test(text)
+  );
+
+  if (!hasStrongPriorIntent) return null;
+
+  return {
+    type: "selling",
+    reason: "sell offer completed across recent messages"
   };
 }
 
@@ -334,6 +381,30 @@ function pruneRaidState(now = Date.now()) {
   }
 }
 
+function pruneRecentUserMessages(now = Date.now()) {
+  for (const [key, entry] of recentUserMessages.entries()) {
+    entry.messages = entry.messages.filter((message) => now - message.at <= SELL_CONTEXT_WINDOW_MS);
+    if (!entry.messages.length) recentUserMessages.delete(key);
+  }
+}
+
+function rememberRecentUserMessage(message, now = Date.now()) {
+  const key = buildRecentUserMessageKey(message);
+  if (!key) return [String(message?.content || "")];
+
+  pruneRecentUserMessages(now);
+  const entry = recentUserMessages.get(key) || { messages: [] };
+  entry.messages.push({
+    at: now,
+    content: String(message.content || "")
+  });
+  if (entry.messages.length > SELL_CONTEXT_MAX_MESSAGES) {
+    entry.messages = entry.messages.slice(-SELL_CONTEXT_MAX_MESSAGES);
+  }
+  recentUserMessages.set(key, entry);
+  return entry.messages.map((item) => item.content);
+}
+
 function observeRaidMessage(message, now = Date.now()) {
   if (!message?.inGuild?.()) return null;
 
@@ -451,6 +522,7 @@ async function maybeHandleModerationWatch(message, { kb, runtimeStatus, fetchKbF
   if (hasBypassPermission(message)) return false;
 
   try {
+    const recentMessages = rememberRecentUserMessage(message);
     let resolvedKb = kb || null;
     if (!resolvedKb && mightContainFakeInfo(message.content)) {
       resolvedKb = await fetchKbFn().catch(() => null);
@@ -460,6 +532,13 @@ async function maybeHandleModerationWatch(message, { kb, runtimeStatus, fetchKbF
       kb: resolvedKb,
       runtimeStatus: runtimeStatus || getRuntimeStatus()
     });
+
+    if (!signals.some((signal) => signal.type === "selling")) {
+      const contextualSellingSignal = detectContextualSellingSignal(recentMessages);
+      if (contextualSellingSignal) {
+        signals.push(contextualSellingSignal);
+      }
+    }
 
     if (signals.length) {
       await sendStaffAlert(message, buildSignalAlertPanel(message, signals));
@@ -479,10 +558,12 @@ async function maybeHandleModerationWatch(message, { kb, runtimeStatus, fetchKbF
 function resetModerationState() {
   raidBuckets.clear();
   lastRaidAlertAt.clear();
+  recentUserMessages.clear();
 }
 
 module.exports = {
   detectSellingSignal,
+  detectContextualSellingSignal,
   detectSuspiciousSignal,
   detectFakeInfoSignal,
   collectContentSignals,

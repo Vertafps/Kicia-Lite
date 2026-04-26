@@ -8,6 +8,7 @@ const { PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 const { normalizeKb } = require("../src/kb");
 const {
   detectSellingSignal,
+  detectContextualSellingSignal,
   detectSuspiciousSignal,
   detectFakeInfoSignal,
   hasBypassPermission,
@@ -67,12 +68,27 @@ test.afterEach(() => {
 test("selling detection only triggers on explicit sell offers", () => {
   assert.ok(detectSellingSignal("selling kicia config cheap dm me"));
   assert.ok(detectSellingSignal("selling lvl 888 account"));
+  assert.ok(detectSellingSignal("selling ue for 1 bucks"));
+  assert.ok(detectSellingSignal("selling ue for 2 dollars"));
+  assert.ok(detectSellingSignal("selling ue for 1 usd"));
   assert.ok(detectSellingSignal("s e l l i n g lvl 888 a c c"));
   assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
   assert.ok(detectSellingSignal("wts lvl 888 acc"));
   assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
   assert.equal(detectSellingSignal("buying lvl 888 account"), null);
   assert.equal(detectSellingSignal("stop selling lvl 888 account"), null);
+});
+
+test("contextual selling detection catches split sell and price messages", () => {
+  const signal = detectContextualSellingSignal([
+    "selling ue",
+    "1 buck"
+  ]);
+
+  assert.ok(signal);
+  assert.match(signal.reason, /recent messages/i);
+  assert.equal(detectContextualSellingSignal(["selling is against rules", "1 buck"]), null);
+  assert.equal(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]), null);
 });
 
 test("suspicious detection catches dm-for-link wording", () => {

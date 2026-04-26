@@ -66,7 +66,13 @@ test.afterEach(() => {
 
 test("selling detection only triggers on explicit sell offers", () => {
   assert.ok(detectSellingSignal("selling kicia config cheap dm me"));
+  assert.ok(detectSellingSignal("selling lvl 888 account"));
+  assert.ok(detectSellingSignal("s e l l i n g lvl 888 a c c"));
+  assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
+  assert.ok(detectSellingSignal("wts lvl 888 acc"));
   assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
+  assert.equal(detectSellingSignal("buying lvl 888 account"), null);
+  assert.equal(detectSellingSignal("stop selling lvl 888 account"), null);
 });
 
 test("suspicious detection catches dm-for-link wording", () => {

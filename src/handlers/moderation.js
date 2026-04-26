@@ -24,7 +24,7 @@ const STAFF_BYPASS_PERMISSIONS = [
   PermissionFlagsBits.ModerateMembers
 ];
 
-const SELL_ITEM_RE = /\b(?:account|accounts|config|configs|executor|executors|script|scripts|kicia|kiciahook|premium|license|key|keys|cheat|cheats|exploit|exploits)\b/;
+const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits)\b/;
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy)\b/;
 const SELL_OFFER_PATTERNS = [
   /\b(?:i am|im|i m)\s+selling\b/,
@@ -34,11 +34,14 @@ const SELL_OFFER_PATTERNS = [
   /\btaking offers\b/
 ];
 const SELL_EXCLUDE_PATTERNS = [
-  /\?$/,
-  /^(?:who|why|is|are|can|does|do|what|how|where|when)\b/,
-  /\b(?:anyone|someone)\s+selling\b/,
+  /\b(?:anyone|someone|who)\s+(?:is\s+)?selling\b/,
+  /\bbuying\b/,
+  /\blooking\s+to\s+buy\b/,
+  /\bwant(?:s)?\s+to\s+buy\b/,
   /\b(?:stop|dont|don't|not)\s+selling\b/
 ];
+const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+)?)|(?:w+t+s+)|(?:f+o+r+s+a+l+e+)/;
+const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:l+v+l+|l+e+v+e+l+)|(?:c+f+g+|c+o+n+f+i+g+)|(?:e+x+e+c+u+t+o+r+)|(?:s+c+r+i+p+t+)|(?:p+r+e+m+i+u+m+)|(?:l+i+c+e+n+s+e+)|(?:k+e+y+)|(?:k+i+c+i+a+)|(?:k+i+c+i+a+h+o+o+k+)/;
 
 const SUSPICIOUS_PATTERNS = [
   {
@@ -111,23 +114,51 @@ function isAssertiveStatement(content) {
   return !ASSERTION_EXCLUDE_PATTERNS.some((pattern) => pattern.test(content) || pattern.test(normalized));
 }
 
+function normalizeSellingSourceText(content) {
+  return String(content || "")
+    .toLowerCase()
+    .replace(/[@4]/g, "a")
+    .replace(/3/g, "e")
+    .replace(/[1!|]/g, "l")
+    .replace(/0/g, "o")
+    .replace(/[5$]/g, "s")
+    .replace(/7/g, "t");
+}
+
+function buildSellingSpacedText(content) {
+  return normalizeSellingSourceText(content)
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function buildSellingCondensedText(content) {
+  return normalizeSellingSourceText(content)
+    .replace(/[^a-z0-9]+/g, "");
+}
+
 function detectSellingSignal(content) {
-  const normalized = normalizeText(content);
-  if (!normalized) return null;
-  if (SELL_EXCLUDE_PATTERNS.some((pattern) => pattern.test(content) || pattern.test(normalized))) return null;
-  if (!SELL_ITEM_RE.test(normalized)) return null;
+  const spaced = buildSellingSpacedText(content);
+  const condensed = buildSellingCondensedText(content);
+  if (!spaced || !condensed) return null;
+  if (SELL_EXCLUDE_PATTERNS.some((pattern) => pattern.test(spaced))) return null;
 
-  const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(normalized));
-  const hasSellingVerb = /\bselling\b/.test(normalized);
-  const hasMarketSignal = SELL_MARKET_RE.test(normalized) || /\$\s*\d/.test(content);
+  const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced));
+  const hasSellIntent =
+    hasExplicitOffer ||
+    /\bselling\b/.test(spaced) ||
+    SELL_CONDENSED_INTENT_RE.test(condensed);
+  const hasItemSignal =
+    SELL_ITEM_RE.test(spaced) ||
+    SELL_CONDENSED_ITEM_RE.test(condensed);
+  const hasMarketSignal = SELL_MARKET_RE.test(spaced) || /\$\s*\d/.test(content);
 
-  if (!hasExplicitOffer && !(hasSellingVerb && hasMarketSignal)) {
+  if (!hasSellIntent || !(hasItemSignal || hasMarketSignal)) {
     return null;
   }
 
   return {
     type: "selling",
-    reason: "explicit sell offer detected"
+    reason: "sell intent and sale target detected"
   };
 }
 

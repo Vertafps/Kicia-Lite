@@ -1,6 +1,6 @@
 const { OWNER_USER_ID, CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
-const { buildJarvisReport } = require("../diagnostics");
+const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
 const { buildStatusReplyBody, detectStatusQuestion } = require("../router");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
@@ -97,21 +97,53 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
 async function handleJarvisCommand(message, refreshKb) {
   if (message.author?.id !== OWNER_USER_ID) return true;
 
-  const report = await buildJarvisReport(message, {
-    refreshKb,
-    channelLockRoleId: CHANNEL_LOCK_ROLE_ID
-  });
-
-  await safeReply(message, {
+  const progressPayload = (body) => ({
     embeds: [
       buildPanel({
-        header: "Jarvis Report",
-        body: report,
+        header: "Jarvis",
+        body,
         color: INFO
       })
     ],
     allowedMentions: { repliedUser: false }
   });
+
+  let progressMessage = null;
+  try {
+    progressMessage = await message.reply(progressPayload(buildJarvisProgressBody(0, "booting diagnostics")));
+  } catch {}
+
+  const updateProgress = async (body) => {
+    if (!progressMessage) return;
+    await progressMessage.edit(progressPayload(body)).catch(() => null);
+  };
+
+  await updateProgress(buildJarvisProgressBody(0, "reading runtime status and recent logs"));
+  const report = await runJarvisDiagnostics(message, {
+    refreshKb,
+    channelLockRoleId: CHANNEL_LOCK_ROLE_ID,
+    onProgress: async ({ body }) => {
+      await updateProgress(body);
+    }
+  });
+
+  const finalPayload = {
+    embeds: [
+      buildPanel({
+        header: "Jarvis Report",
+        body: report.body,
+        color: report.color
+      })
+    ],
+    allowedMentions: { repliedUser: false }
+  };
+
+  if (progressMessage) {
+    await progressMessage.edit(finalPayload).catch(() => null);
+    return true;
+  }
+
+  await safeReply(message, finalPayload);
 
   return true;
 }

@@ -5,9 +5,16 @@ const {
   NO_RESPONSE_CHANNEL_IDS,
   CHANNEL_LOCK_TARGETS
 } = require("./config");
+const { SUCCESS, WARN } = require("./embed");
 const { getRuntimeHealthSnapshot } = require("./runtime-health");
 const { getRuntimeStatus } = require("./runtime-status");
 
+const JARVIS_STEPS = [
+  "Runtime and log scan",
+  "KB refresh",
+  "Security audit",
+  "Final compile"
+];
 const STAFF_CHANNEL_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
@@ -68,10 +75,26 @@ function describeLockState(channel, roleId) {
   return "neutral";
 }
 
-async function buildJarvisReport(message, { refreshKb, channelLockRoleId }) {
-  const sections = [];
-  const health = getRuntimeHealthSnapshot();
+function buildJarvisProgressBody(stepIndex, note) {
+  const lines = [
+    "Jarvis is running checks...",
+    "",
+    ...JARVIS_STEPS.map((step, index) => {
+      if (index < stepIndex) return `✅ ${step}`;
+      if (index === stepIndex) return `🟡 ${step}`;
+      return `⚪ ${step}`;
+    })
+  ];
 
+  if (note) {
+    lines.push("", `**Current:** ${note}`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildRuntimeSection(message) {
+  const health = getRuntimeHealthSnapshot();
   const runtimeLines = [
     `**Status:** ${getRuntimeStatus()}`,
     `**Gateway Ping:** ${Number.isFinite(message.client?.ws?.ping) ? `${message.client.ws.ping}ms` : "unknown"}`,
@@ -80,61 +103,117 @@ async function buildJarvisReport(message, { refreshKb, channelLockRoleId }) {
     `**Errors:** ${health.errors.length}`,
     `**Recent Errors:** ${formatRecentEvents(health.errors)}`
   ];
-  sections.push(`## Runtime\n${runtimeLines.join("\n")}`);
 
+  return {
+    text: `## Runtime\n${runtimeLines.join("\n")}`,
+    hasIssue: health.errors.length > 0
+  };
+}
+
+async function buildKbSection(refreshKb) {
   try {
     const kb = await refreshKb();
     const issueCount = Array.isArray(kb?.issues) ? kb.issues.length : 0;
     const executorAliases = Object.keys(kb?.executorAliasIndex || {}).length;
-    sections.push(`## KB\n**Refresh:** ok\n**Issues:** ${issueCount}\n**Executor Aliases:** ${executorAliases}`);
+    return {
+      text: `## KB\n**Refresh:** ok\n**Issues:** ${issueCount}\n**Executor Aliases:** ${executorAliases}`,
+      hasIssue: false
+    };
   } catch (err) {
-    sections.push(`## KB\n**Refresh:** failed\n**Error:** ${err.message}`);
+    return {
+      text: `## KB\n**Refresh:** failed\n**Error:** ${err.message}`,
+      hasIssue: true
+    };
+  }
+}
+
+async function buildSecuritySection(message, channelLockRoleId) {
+  if (!message.inGuild?.()) {
+    return {
+      text: `## Security\n**Scope:** dm mode, guild security checks skipped`,
+      hasIssue: false
+    };
   }
 
-  if (message.inGuild?.()) {
-    const guild = message.guild;
-    const botMember = guild.members?.me;
-    const securityLines = [];
+  const guild = message.guild;
+  const botMember = guild.members?.me;
+  const securityLines = [];
+  let hasIssue = false;
 
-    const staffChannel = await resolveGuildChannel(guild, STAFF_ALERT_CHANNEL_ID);
-    if (!staffChannel) {
-      securityLines.push(`**Staff Alerts:** missing channel ${STAFF_ALERT_CHANNEL_ID}`);
-    } else {
-      const missing = getMissingPermissionLabels(staffChannel, botMember, STAFF_CHANNEL_PERMISSIONS);
-      securityLines.push(
-        `**Staff Alerts:** ${missing.length ? `missing ${missing.join(" / ")}` : `ok <#${staffChannel.id}>`}`
-      );
-    }
-
-    for (const channelId of NO_RESPONSE_CHANNEL_IDS) {
-      const channel = await resolveGuildChannel(guild, channelId);
-      securityLines.push(
-        `**No-Response Channel ${channelId}:** ${channel ? `ok <#${channel.id}>` : "missing"}`
-      );
-    }
-
-    for (const target of CHANNEL_LOCK_TARGETS) {
-      const channel = await resolveGuildChannel(guild, target.id);
-      if (!channel) {
-        securityLines.push(`**Lock Target ${target.label}:** missing (${target.id})`);
-        continue;
-      }
-
-      const missing = getMissingPermissionLabels(channel, botMember, LOCK_CHANNEL_PERMISSIONS);
-      const state = describeLockState(channel, channelLockRoleId);
-      securityLines.push(
-        `**Lock Target ${target.label}:** ${missing.length ? `missing ${missing.join(" / ")}` : "ok"} | ${state}`
-      );
-    }
-
-    securityLines.push(`**Status Channel:** [Open](${BRAND.STATUS_JUMP_URL})`);
-    sections.push(`## Security\n${securityLines.join("\n")}`);
+  const staffChannel = await resolveGuildChannel(guild, STAFF_ALERT_CHANNEL_ID);
+  if (!staffChannel) {
+    securityLines.push(`**Staff Alerts:** missing channel ${STAFF_ALERT_CHANNEL_ID}`);
+    hasIssue = true;
+  } else {
+    const missing = getMissingPermissionLabels(staffChannel, botMember, STAFF_CHANNEL_PERMISSIONS);
+    if (missing.length) hasIssue = true;
+    securityLines.push(
+      `**Staff Alerts:** ${missing.length ? `missing ${missing.join(" / ")}` : `ok <#${staffChannel.id}>`}`
+    );
   }
 
-  sections.push("Ready to cook boi <3");
-  return sections.join("\n\n");
+  for (const channelId of NO_RESPONSE_CHANNEL_IDS) {
+    const channel = await resolveGuildChannel(guild, channelId);
+    if (!channel) hasIssue = true;
+    securityLines.push(
+      `**No-Response Channel ${channelId}:** ${channel ? `ok <#${channel.id}>` : "missing"}`
+    );
+  }
+
+  for (const target of CHANNEL_LOCK_TARGETS) {
+    const channel = await resolveGuildChannel(guild, target.id);
+    if (!channel) {
+      securityLines.push(`**Lock Target ${target.label}:** missing (${target.id})`);
+      hasIssue = true;
+      continue;
+    }
+
+    const missing = getMissingPermissionLabels(channel, botMember, LOCK_CHANNEL_PERMISSIONS);
+    const state = describeLockState(channel, channelLockRoleId);
+    if (missing.length) hasIssue = true;
+    securityLines.push(
+      `**Lock Target ${target.label}:** ${missing.length ? `missing ${missing.join(" / ")}` : "ok"} | ${state}`
+    );
+  }
+
+  securityLines.push(`**Status Channel:** [Open](${BRAND.STATUS_JUMP_URL})`);
+
+  return {
+    text: `## Security\n${securityLines.join("\n")}`,
+    hasIssue
+  };
+}
+
+async function runJarvisDiagnostics(message, { refreshKb, channelLockRoleId, onProgress } = {}) {
+  const progress = async (stepIndex, note) => {
+    if (typeof onProgress === "function") {
+      await onProgress({
+        stepIndex,
+        stepName: JARVIS_STEPS[stepIndex],
+        body: buildJarvisProgressBody(stepIndex, note)
+      });
+    }
+  };
+
+  await progress(0, "reading runtime status and recent logs");
+  const runtimeSection = buildRuntimeSection(message);
+
+  await progress(1, "refreshing KB and validating docs cache");
+  const kbSection = await buildKbSection(refreshKb);
+
+  await progress(2, "checking staff logs, no-response channels, and lockdown targets");
+  const securitySection = await buildSecuritySection(message, channelLockRoleId);
+
+  await progress(3, "compiling final report");
+  const hasIssue = runtimeSection.hasIssue || kbSection.hasIssue || securitySection.hasIssue;
+
+  return {
+    body: [runtimeSection.text, kbSection.text, securitySection.text, "Ready to cook boi <3"].join("\n\n"),
+    color: hasIssue ? WARN : SUCCESS
+  };
 }
 
 module.exports = {
-  buildJarvisReport
+  buildJarvisProgressBody,
+  runJarvisDiagnostics
 };

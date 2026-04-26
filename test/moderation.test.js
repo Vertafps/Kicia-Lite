@@ -302,11 +302,13 @@ test("suspicious detection catches dm-for-link wording", () => {
 test("link detection allows docs-listed links and tenor while blocking others", () => {
   assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://tenor.com/view/cat-123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", { kb }), null);
 
   const signal = detectBlockedLinkSignal("check https://google.com", { kb });
   assert.ok(signal);
   assert.equal(signal.blockedCount, 1);
   assert.equal(signal.blockedLinks[0].hostname, "google.com");
+  assert.ok(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/not-a-gif.png", { kb }));
 });
 
 test("fake info guard catches wrong status claims", () => {

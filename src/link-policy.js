@@ -124,9 +124,14 @@ function isTenorHost(hostname) {
   return hostname === "tenor.com" || hostname.endsWith(".tenor.com");
 }
 
+function isAllowedDiscordGifCdn(url) {
+  return url?.hostname === "cdn.discordapp.com" && /\.gif$/i.test(url.pathname || "");
+}
+
 function isAllowedLink(url, rules) {
   if (!url) return false;
   if (isTenorHost(url.hostname)) return true;
+  if (isAllowedDiscordGifCdn(url)) return true;
   if (rules.exactKeys.has(url.key)) return true;
   if (rules.rootHosts.has(url.hostname)) return true;
   return false;

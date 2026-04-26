@@ -65,18 +65,24 @@ test.afterEach(() => {
   resetModerationState();
 });
 
-test("selling detection only triggers on explicit sell offers", () => {
+test("selling detection flags broad sell wording while skipping anti-sell reminders", () => {
   assert.ok(detectSellingSignal("selling kicia config cheap dm me"));
   assert.ok(detectSellingSignal("selling lvl 888 account"));
+  assert.ok(detectSellingSignal("selling ue"));
+  assert.ok(detectSellingSignal("anyone selling ue?"));
+  assert.ok(detectSellingSignal("who sell ue"));
+  assert.ok(detectSellingSignal("can i sell ue here"));
   assert.ok(detectSellingSignal("selling ue for 1 bucks"));
   assert.ok(detectSellingSignal("selling ue for 2 dollars"));
   assert.ok(detectSellingSignal("selling ue for 1 usd"));
   assert.ok(detectSellingSignal("s e l l i n g lvl 888 a c c"));
   assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
   assert.ok(detectSellingSignal("wts lvl 888 acc"));
-  assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
+  assert.ok(detectSellingSignal("anyone selling kicia config?"));
   assert.equal(detectSellingSignal("buying lvl 888 account"), null);
   assert.equal(detectSellingSignal("stop selling lvl 888 account"), null);
+  assert.equal(detectSellingSignal("dont sell ue here"), null);
+  assert.equal(detectSellingSignal("selling is against rules"), null);
 });
 
 test("contextual selling detection catches split sell and price messages", () => {

@@ -37,16 +37,18 @@ const SELL_OFFER_PATTERNS = [
   /\bbuy (?:my|from me)\b/,
   /\btaking offers\b/
 ];
-const SELL_EXCLUDE_PATTERNS = [
-  /\b(?:anyone|someone|who)\s+(?:is\s+)?selling\b/,
-  /\bbuying\b/,
-  /\blooking\s+to\s+buy\b/,
-  /\bwant(?:s)?\s+to\s+buy\b/,
-  /\b(?:stop|dont|don't|not)\s+selling\b/
+const SELL_ANTI_PATTERNS = [
+  /\b(?:stop|dont|don't|do not|no)\s+selling\b/,
+  /\b(?:stop|dont|don't|do not|no)\s+sell\b/,
+  /\bselling\s+is\s+against\s+rules?\b/,
+  /\bsell(?:ing)?\s+is\s+not\s+allowed\b/,
+  /\b(?:cant|can't|cannot)\s+sell\b/,
+  /\bnot\s+allowed\s+to\s+sell\b/
 ];
-const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+)?)|(?:w+t+s+)|(?:f+o+r+s+a+l+e+)/;
+const SELL_BROAD_INTENT_RE = /\b(?:sell|selling|seller|sold)\b/;
+const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+|e+r+)?)|(?:s+o+l+d+)|(?:w+t+s+)|(?:f+o+r+s+a+l+e+)/;
 const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:l+v+l+|l+e+v+e+l+)|(?:c+f+g+|c+o+n+f+i+g+)|(?:e+x+e+c+u+t+o+r+)|(?:s+c+r+i+p+t+)|(?:p+r+e+m+i+u+m+)|(?:l+i+c+e+n+s+e+)|(?:k+e+y+)|(?:k+i+c+i+a+)|(?:k+i+c+i+a+h+o+o+k+)/;
-const SELL_STRONG_INTENT_RE = /^(?:selling\b|wts\b|for sale\b|(?:i am|im|i m)\s+selling\b)/;
+const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?selling\b|^sell\b|^wts\b|^for sale\b/;
 const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|rules say|rule says)\b/;
 
 const SUSPICIOUS_PATTERNS = [
@@ -159,12 +161,12 @@ function detectSellingSignal(content) {
   const spaced = buildSellingSpacedText(content);
   const condensed = buildSellingCondensedText(content);
   if (!spaced || !condensed) return null;
-  if (SELL_EXCLUDE_PATTERNS.some((pattern) => pattern.test(spaced))) return null;
+  if (SELL_ANTI_PATTERNS.some((pattern) => pattern.test(rawLower) || pattern.test(spaced))) return null;
 
   const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced));
-  const hasSellIntent =
+  const hasBroadSellIntent =
     hasExplicitOffer ||
-    /\bselling\b/.test(spaced) ||
+    SELL_BROAD_INTENT_RE.test(spaced) ||
     SELL_CONDENSED_INTENT_RE.test(condensed);
   const hasItemSignal =
     SELL_ITEM_RE.test(spaced) ||
@@ -174,13 +176,15 @@ function detectSellingSignal(content) {
     /\$\s*\d/.test(content) ||
     SELL_PRICE_RE.test(rawLower);
 
-  if (!hasSellIntent || !(hasItemSignal || hasMarketSignal)) {
+  if (!hasBroadSellIntent) {
     return null;
   }
 
   return {
     type: "selling",
-    reason: "sell intent and sale target detected"
+    reason: hasItemSignal || hasMarketSignal
+      ? "sell-related wording detected with sale context"
+      : "sell-related wording detected"
   };
 }
 
@@ -197,7 +201,7 @@ function detectContextualSellingSignal(messageTexts) {
 
   const hasStrongPriorIntent = previousTexts.some((text) =>
     SELL_STRONG_INTENT_RE.test(text) &&
-    !SELL_EXCLUDE_PATTERNS.some((pattern) => pattern.test(text)) &&
+    !SELL_ANTI_PATTERNS.some((pattern) => pattern.test(text)) &&
     !SELL_CONTEXT_NEGATIVE_RE.test(text)
   );
 

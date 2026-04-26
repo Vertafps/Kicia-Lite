@@ -305,6 +305,7 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://example.com/memes/dancing-cat.gif", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://giphy.com/gifs/cat-funny-abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://klipy.com/gifs/thragg--k01KQ2G8538QACVGJ0DEHS9DPRX", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://github.com/user/repo/blob/main/script.lua", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://raw.githubusercontent.com/user/repo/main/script.lua", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://gist.githubusercontent.com/user/abc123/raw/script.lua", { kb }), null);
@@ -314,6 +315,7 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(signal.blockedCount, 1);
   assert.equal(signal.blockedLinks[0].hostname, "google.com");
   assert.ok(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/not-a-gif.png", { kb }));
+  assert.ok(detectBlockedLinkSignal("https://klipy.com/videos/not-a-gif", { kb }));
 });
 
 test("fake info guard catches wrong status claims", () => {

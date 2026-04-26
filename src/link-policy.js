@@ -131,6 +131,10 @@ function isGifHost(hostname) {
   );
 }
 
+function isGifPageHost(hostname) {
+  return hostname === "klipy.com" || hostname.endsWith(".klipy.com");
+}
+
 function isGithubLikeHost(hostname) {
   return (
     hostname === "github.com" ||
@@ -143,6 +147,7 @@ function isGithubLikeHost(hostname) {
 function isGifLikeUrl(url) {
   if (!url) return false;
   if (/\.gif$/i.test(url.pathname || "")) return true;
+  if (isGifPageHost(url.hostname) && /\/gifs?\//i.test(url.pathname || "")) return true;
   return isGifHost(url.hostname);
 }
 

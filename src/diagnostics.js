@@ -1,6 +1,7 @@
 const { PermissionFlagsBits } = require("discord.js");
 const {
   BRAND,
+  DAILY_STATS_CHANNEL_ID,
   LOG_CHANNEL_ID,
   NO_RESPONSE_CHANNEL_IDS,
   CHANNEL_LOCK_TARGETS
@@ -154,6 +155,18 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
   }
 
+  const dailyStatsChannel = await resolveGuildChannel(guild, DAILY_STATS_CHANNEL_ID);
+  if (!dailyStatsChannel) {
+    securityLines.push(`**Daily Stats Channel:** missing channel ${DAILY_STATS_CHANNEL_ID}`);
+    hasIssue = true;
+  } else {
+    const missing = getMissingPermissionLabels(dailyStatsChannel, botMember, LOG_CHANNEL_PERMISSIONS);
+    if (missing.length) hasIssue = true;
+    securityLines.push(
+      `**Daily Stats Channel:** ${missing.length ? `missing ${missing.join(" / ")}` : `ok <#${dailyStatsChannel.id}>`}`
+    );
+  }
+
   for (const channelId of NO_RESPONSE_CHANNEL_IDS) {
     const channel = await resolveGuildChannel(guild, channelId);
     if (!channel) hasIssue = true;
@@ -182,6 +195,9 @@ async function buildSecuritySection(message, channelLockRoleId) {
     const emojiDb = await getRestrictedEmojiDatabaseSnapshot();
     securityLines.push(
       `**Emoji DB:** ok | ${emojiDb.tableCounts.restrictedEmojis} restricted | timeout ${formatDuration(emojiDb.emojiTimeoutMs)}`
+    );
+    securityLines.push(
+      `**Daily Tracking DB:** users ${emojiDb.tableCounts.dailyUsers} | channels ${emojiDb.tableCounts.dailyChannels} | staff ${emojiDb.tableCounts.dailyStaff}`
     );
   } catch (err) {
     securityLines.push(`**Emoji DB:** failed (${err.message})`);
@@ -213,7 +229,7 @@ async function runJarvisDiagnostics(message, { refreshKb, channelLockRoleId, onP
   await progress(1, "refreshing KB and validating docs cache");
   const kbSection = await buildKbSection(refreshKb);
 
-  await progress(2, "checking logs channel, emoji db, no-response channels, and lockdown targets");
+  await progress(2, "checking log channels, emoji db, daily tracking, no-response channels, and lockdown targets");
   const securitySection = await buildSecuritySection(message, channelLockRoleId);
 
   await progress(3, "compiling final report");

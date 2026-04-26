@@ -35,6 +35,7 @@ const SELL_ANTI_PATTERNS = [
   /\b(?:cant|can't|cannot)\s+sell\b/,
   /\bnot\s+allowed\s+to\s+sell\b/
 ];
+const SELL_NEUTRAL_WORD_RE = /\bresellers?\b/g;
 const SELL_BROAD_INTENT_RE = /\b(?:sell|selling|seller|sold)\b/;
 const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+|e+r+)?)|(?:s+o+l+d+)|(?:w+t+s+)|(?:f+o+r+s+a+l+e+)/;
 const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:l+v+l+|l+e+v+e+l+)|(?:c+f+g+|c+o+n+f+i+g+)|(?:e+x+e+c+u+t+o+r+)|(?:s+c+r+i+p+t+)|(?:p+r+e+m+i+u+m+)|(?:l+i+c+e+n+s+e+)|(?:k+e+y+)|(?:k+i+c+i+a+)|(?:k+i+c+i+a+h+o+o+k+)/;
@@ -119,7 +120,8 @@ function normalizeSellingSourceText(content) {
     .replace(/[1!|]/g, "l")
     .replace(/0/g, "o")
     .replace(/[5$]/g, "s")
-    .replace(/7/g, "t");
+    .replace(/7/g, "t")
+    .replace(SELL_NEUTRAL_WORD_RE, " ");
 }
 
 function buildSellingSpacedText(content) {

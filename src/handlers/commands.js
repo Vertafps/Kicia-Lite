@@ -118,7 +118,11 @@ async function handleDatabaseCommand(message, {
       `**Path:** \`${relativePath}\``,
       `**Config Rows:** ${snapshot.tableCounts.appConfig}`,
       `**Restricted Emoji Rows:** ${snapshot.tableCounts.restrictedEmojis}`,
+      `**Daily User Rows:** ${snapshot.tableCounts.dailyUsers}`,
+      `**Daily Channel Rows:** ${snapshot.tableCounts.dailyChannels}`,
+      `**Daily Staff Rows:** ${snapshot.tableCounts.dailyStaff}`,
       `**Timeout:** ${formatDuration(snapshot.emojiTimeoutMs)}`,
+      `**Window Start:** ${snapshot.dailyStats.windowStartedAt ? `<t:${Math.floor(snapshot.dailyStats.windowStartedAt / 1000)}:f>` : "unset"}`,
       `**Restricted Emojis:** ${formatEmojiList(snapshot.emojis)}`
     ].join("\n"),
     color: INFO

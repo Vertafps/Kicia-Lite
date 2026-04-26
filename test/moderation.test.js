@@ -195,6 +195,8 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
   assert.ok(detectSellingSignal("wts lvl 888 acc"));
   assert.ok(detectSellingSignal("anyone selling kicia config?"));
+  assert.equal(detectSellingSignal("trusted reseller"), null);
+  assert.equal(detectSellingSignal("official reseller only"), null);
   assert.equal(detectSellingSignal("buying lvl 888 account"), null);
   assert.equal(detectSellingSignal("stop selling lvl 888 account"), null);
   assert.equal(detectSellingSignal("dont sell ue here"), null);

@@ -4,6 +4,7 @@ const path = require("path");
 const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
+const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-stats");
 const { buildPanel, DANGER } = require("./embed");
 const { fetchKb } = require("./kb");
 const { maybeHandleControlCommand } = require("./handlers/commands");
@@ -12,6 +13,7 @@ const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping")
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
 const { maybeHandleStatusCommand } = require("./handlers/status");
+const { flushRestrictedEmojiDatabaseNow } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { safeReact, safeReply } = require("./utils/respond");
 
@@ -46,6 +48,12 @@ function acquireInstanceLock() {
 }
 
 function releaseInstanceLock() {
+  try {
+    flushRestrictedEmojiDatabaseNow();
+  } catch (err) {
+    console.warn("Could not flush sqlite db on shutdown:", err.message);
+  }
+
   try {
     if (fs.existsSync(LOCK_PATH) && fs.readFileSync(LOCK_PATH, "utf8") === String(process.pid)) {
       fs.rmSync(LOCK_PATH, { force: true });
@@ -89,6 +97,14 @@ client.once(Events.ClientReady, async (readyClient) => {
     fetchKb().catch((err) => console.warn("Scheduled KB refresh failed:", err.message));
   }, 10 * 60 * 1000);
   timer.unref?.();
+
+  try {
+    const statsSchedule = await startDailyStatsScheduler(readyClient);
+    console.log(`Daily stats scheduled for ${new Date(statsSchedule.nextBoundary).toISOString()}`);
+  } catch (err) {
+    console.warn("Daily stats scheduler failed to start:", err.message);
+    recordRuntimeEvent("error", "daily-stats-scheduler", err?.message || err);
+  }
 });
 
 client.on(Events.Error, (err) => {
@@ -163,6 +179,13 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
   await runGuarded("message-handler", async () => {
+    try {
+      await trackDailyStatsMessage(message);
+    } catch (err) {
+      console.warn("Daily stats tracking failed:", err.message);
+      recordRuntimeEvent("warn", "daily-stats-track", err?.message || err);
+    }
+
     if (await maybeHandleLockCommand(message)) return;
     if (await maybeHandleControlCommand(message)) return;
     await maybeHandleModerationWatch(message);

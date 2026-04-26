@@ -475,6 +475,18 @@ test("messy typos can still hit docs", () => {
   assert.equal(route.kind, "docs");
 });
 
+test("latest clear docs line wins over an older different kb match", () => {
+  const route = classifyTranscript("load config\ngui not loading", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /GUI Not Loading/i);
+});
+
+test("latest config line wins over an older different kb match", () => {
+  const route = classifyTranscript("gui not loading\nload config", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /How to Load a Config/i);
+});
+
 test("fresh vague question does not inherit an older docs match from transcript", () => {
   const route = classifyTranscript("load config\nhow to do lootlabs", kb, "UP");
   assert.equal(route.kind, "ticket");
@@ -872,9 +884,16 @@ test("database command is kernel-only", async () => {
       path: "D:/Downloads/kicia main direction bot/data/restricted-reactions.sqlite",
       emojiTimeoutMs: 10 * 60 * 1000,
       emojis: [{ display: "\u{1F62D}" }],
+      dailyStats: {
+        windowStartedAt: 1_700_000_000_000
+      },
       tableCounts: {
         appConfig: 1,
-        restrictedEmojis: 1
+        restrictedEmojis: 1,
+        dailyUsers: 2,
+        dailyChannels: 1,
+        dailyHours: 1,
+        dailyStaff: 1
       }
     })
   });
@@ -883,4 +902,5 @@ test("database command is kernel-only", async () => {
   assert.ok(replyPayload);
   assert.match(replyPayload.embeds[0].data.description, /SQLite Database/i);
   assert.match(replyPayload.embeds[0].data.description, /Restricted Emoji Rows:\*\* 1/i);
+  assert.match(replyPayload.embeds[0].data.description, /Daily User Rows:\*\* 2/i);
 });

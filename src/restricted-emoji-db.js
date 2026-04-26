@@ -8,10 +8,15 @@ const { recordRuntimeEvent } = require("./runtime-health");
 const CUSTOM_EMOJI_RE = /^<(a?):([A-Za-z0-9_]+):(\d+)>$/;
 const DEFAULT_DATABASE_PATH = path.join(__dirname, "..", "data", "restricted-reactions.sqlite");
 const SQL_JS_DIST_DIR = path.dirname(require.resolve("sql.js/dist/sql-wasm.js"));
+const PERSIST_DEBOUNCE_MS = 2_500;
+const DAILY_STATS_WINDOW_KEY = "daily_stats_window_started_at";
 
 let sqlPromise = null;
 let dbPromise = null;
+let currentDb = null;
 let databasePath = DEFAULT_DATABASE_PATH;
+let persistTimer = null;
+let databaseDirty = false;
 
 function ensureDatabaseDirectory(filePath = databasePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -19,6 +24,41 @@ function ensureDatabaseDirectory(filePath = databasePath) {
 
 function getLocateFilePath(file) {
   return path.join(SQL_JS_DIST_DIR, file);
+}
+
+function clearPersistTimer() {
+  if (!persistTimer) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+}
+
+function writeDatabaseFile(db) {
+  ensureDatabaseDirectory();
+  const exportBuffer = Buffer.from(db.export());
+  const tempPath = `${databasePath}.tmp`;
+  fs.writeFileSync(tempPath, exportBuffer);
+  fs.renameSync(tempPath, databasePath);
+}
+
+function schedulePersist(db, { immediate = false } = {}) {
+  if (!db) return false;
+  databaseDirty = true;
+
+  if (immediate) {
+    flushRestrictedEmojiDatabaseNow(db);
+    return true;
+  }
+
+  if (persistTimer) return true;
+  persistTimer = setTimeout(() => {
+    try {
+      flushRestrictedEmojiDatabaseNow(db);
+    } catch (err) {
+      recordRuntimeEvent("error", "emoji-db-persist", err?.message || err);
+    }
+  }, PERSIST_DEBOUNCE_MS);
+  persistTimer.unref?.();
+  return true;
 }
 
 function buildStoredEmojiKey({ type, id, name }) {
@@ -97,9 +137,11 @@ async function getSql() {
 }
 
 function closeDatabase(db) {
+  clearPersistTimer();
   try {
     db?.close?.();
   } catch {}
+  currentDb = null;
 }
 
 function createSchema(db) {
@@ -117,6 +159,38 @@ function createSchema(db) {
       emoji_id TEXT,
       animated INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_user_message_stats (
+      user_id TEXT PRIMARY KEY,
+      username TEXT,
+      display_name TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      last_message_at INTEGER NOT NULL DEFAULT 0,
+      last_channel_id TEXT,
+      last_channel_name TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_channel_message_stats (
+      channel_id TEXT PRIMARY KEY,
+      channel_name TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      last_message_at INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_hour_message_stats (
+      local_hour INTEGER PRIMARY KEY,
+      message_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_staff_message_stats (
+      user_id TEXT PRIMARY KEY,
+      username TEXT,
+      display_name TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      last_message_at INTEGER NOT NULL DEFAULT 0,
+      last_channel_id TEXT,
+      last_channel_name TEXT
     );
   `);
 }
@@ -146,12 +220,16 @@ function getRows(db, sql, params = []) {
   }
 }
 
-function persistDatabase(db) {
-  ensureDatabaseDirectory();
-  const exportBuffer = Buffer.from(db.export());
-  const tempPath = `${databasePath}.tmp`;
-  fs.writeFileSync(tempPath, exportBuffer);
-  fs.renameSync(tempPath, databasePath);
+function getAppConfigValue(db, key) {
+  return getScalarValue(db, "SELECT value FROM app_config WHERE key = ?", [key]);
+}
+
+function setAppConfigValue(db, key, value, { immediate = false } = {}) {
+  db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", [
+    key,
+    String(value)
+  ]);
+  schedulePersist(db, { immediate });
 }
 
 function ensureDefaultConfig(db) {
@@ -173,6 +251,46 @@ function mapEmojiRow(row) {
   };
 }
 
+function mapDailyUserRow(row) {
+  return {
+    userId: String(row.user_id || ""),
+    username: row.username ? String(row.username) : null,
+    displayName: row.display_name ? String(row.display_name) : null,
+    messageCount: Number(row.message_count || 0),
+    lastMessageAt: Number(row.last_message_at || 0),
+    lastChannelId: row.last_channel_id ? String(row.last_channel_id) : null,
+    lastChannelName: row.last_channel_name ? String(row.last_channel_name) : null
+  };
+}
+
+function mapDailyChannelRow(row) {
+  return {
+    channelId: String(row.channel_id || ""),
+    channelName: row.channel_name ? String(row.channel_name) : null,
+    messageCount: Number(row.message_count || 0),
+    lastMessageAt: Number(row.last_message_at || 0)
+  };
+}
+
+function mapDailyHourRow(row) {
+  return {
+    localHour: Number(row.local_hour || 0),
+    messageCount: Number(row.message_count || 0)
+  };
+}
+
+function mapDailyStaffRow(row) {
+  return {
+    userId: String(row.user_id || ""),
+    username: row.username ? String(row.username) : null,
+    displayName: row.display_name ? String(row.display_name) : null,
+    messageCount: Number(row.message_count || 0),
+    lastMessageAt: Number(row.last_message_at || 0),
+    lastChannelId: row.last_channel_id ? String(row.last_channel_id) : null,
+    lastChannelName: row.last_channel_name ? String(row.last_channel_name) : null
+  };
+}
+
 async function loadDatabase() {
   ensureDatabaseDirectory();
   const SQL = await getSql();
@@ -182,9 +300,11 @@ async function loadDatabase() {
       ? new SQL.Database(fs.readFileSync(databasePath))
       : new SQL.Database();
 
+    currentDb = db;
     createSchema(db);
     ensureDefaultConfig(db);
-    persistDatabase(db);
+    writeDatabaseFile(db);
+    databaseDirty = false;
     return db;
   } catch (err) {
     recordRuntimeEvent("error", "emoji-db-load", err?.message || err);
@@ -196,9 +316,11 @@ async function loadDatabase() {
     } catch {}
 
     const db = new SQL.Database();
+    currentDb = db;
     createSchema(db);
     ensureDefaultConfig(db);
-    persistDatabase(db);
+    writeDatabaseFile(db);
+    databaseDirty = false;
     return db;
   }
 }
@@ -212,15 +334,26 @@ async function getDatabase() {
     return await dbPromise;
   } catch (err) {
     dbPromise = null;
+    currentDb = null;
     throw err;
   }
 }
 
+function flushRestrictedEmojiDatabaseNow(db = currentDb) {
+  if (!db || !databaseDirty) {
+    clearPersistTimer();
+    return false;
+  }
+
+  clearPersistTimer();
+  writeDatabaseFile(db);
+  databaseDirty = false;
+  return true;
+}
+
 async function getEmojiTimeoutMs() {
   const db = await getDatabase();
-  const stored = getScalarValue(db, "SELECT value FROM app_config WHERE key = ?", [
-    "emoji_timeout_ms"
-  ]);
+  const stored = getAppConfigValue(db, "emoji_timeout_ms");
   return clampDurationMs(Number(stored || DEFAULT_EMOJI_TIMEOUT_MS));
 }
 
@@ -228,11 +361,34 @@ async function setEmojiTimeoutMs(durationMs) {
   const db = await getDatabase();
   const normalized = clampDurationMs(durationMs);
 
-  db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", [
-    "emoji_timeout_ms",
-    String(normalized)
-  ]);
-  persistDatabase(db);
+  setAppConfigValue(db, "emoji_timeout_ms", normalized, { immediate: true });
+  return normalized;
+}
+
+async function getDailyStatsWindowStartedAt() {
+  const db = await getDatabase();
+  const stored = Number(getAppConfigValue(db, DAILY_STATS_WINDOW_KEY) || 0);
+  return Number.isFinite(stored) && stored > 0 ? stored : null;
+}
+
+async function ensureDailyStatsWindowStartedAt(defaultStartedAt) {
+  const db = await getDatabase();
+  const stored = Number(getAppConfigValue(db, DAILY_STATS_WINDOW_KEY) || 0);
+  if (Number.isFinite(stored) && stored > 0) {
+    return stored;
+  }
+
+  const nextValue = Number.isFinite(Number(defaultStartedAt)) && Number(defaultStartedAt) > 0
+    ? Math.round(Number(defaultStartedAt))
+    : Date.now();
+  setAppConfigValue(db, DAILY_STATS_WINDOW_KEY, nextValue, { immediate: true });
+  return nextValue;
+}
+
+async function setDailyStatsWindowStartedAt(startedAt) {
+  const db = await getDatabase();
+  const normalized = Math.max(1, Math.round(Number(startedAt) || Date.now()));
+  setAppConfigValue(db, DAILY_STATS_WINDOW_KEY, normalized, { immediate: true });
   return normalized;
 }
 
@@ -294,7 +450,7 @@ async function addRestrictedEmoji(emojiRecord) {
       Date.now()
     ]
   );
-  persistDatabase(db);
+  schedulePersist(db, { immediate: true });
 
   return {
     added: true,
@@ -327,7 +483,7 @@ async function removeRestrictedEmojiByKey(key) {
   }
 
   db.run("DELETE FROM restricted_emojis WHERE key = ?", [key]);
-  persistDatabase(db);
+  schedulePersist(db, { immediate: true });
 
   return {
     removed: true,
@@ -335,42 +491,239 @@ async function removeRestrictedEmojiByKey(key) {
   };
 }
 
+async function recordDailyTrackedMessage({
+  userId,
+  username,
+  displayName,
+  channelId,
+  channelName,
+  at = Date.now(),
+  localHour = 0,
+  trackStaffOnly = false
+}) {
+  if (!userId || !channelId) {
+    throw new Error("Missing daily tracking identifiers");
+  }
+
+  const db = await getDatabase();
+  const messageAt = Math.max(1, Math.round(Number(at) || Date.now()));
+  const safeHour = Math.max(0, Math.min(23, Math.round(Number(localHour) || 0)));
+
+  db.run(
+    `
+      INSERT INTO daily_user_message_stats (
+        user_id,
+        username,
+        display_name,
+        message_count,
+        last_message_at,
+        last_channel_id,
+        last_channel_name
+      ) VALUES (?, ?, ?, 1, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        username = excluded.username,
+        display_name = excluded.display_name,
+        message_count = daily_user_message_stats.message_count + 1,
+        last_message_at = excluded.last_message_at,
+        last_channel_id = excluded.last_channel_id,
+        last_channel_name = excluded.last_channel_name
+    `,
+    [
+      String(userId),
+      username ? String(username) : null,
+      displayName ? String(displayName) : null,
+      messageAt,
+      String(channelId),
+      channelName ? String(channelName) : null
+    ]
+  );
+
+  db.run(
+    `
+      INSERT INTO daily_channel_message_stats (
+        channel_id,
+        channel_name,
+        message_count,
+        last_message_at
+      ) VALUES (?, ?, 1, ?)
+      ON CONFLICT(channel_id) DO UPDATE SET
+        channel_name = excluded.channel_name,
+        message_count = daily_channel_message_stats.message_count + 1,
+        last_message_at = excluded.last_message_at
+    `,
+    [
+      String(channelId),
+      channelName ? String(channelName) : null,
+      messageAt
+    ]
+  );
+
+  db.run(
+    `
+      INSERT INTO daily_hour_message_stats (
+        local_hour,
+        message_count
+      ) VALUES (?, 1)
+      ON CONFLICT(local_hour) DO UPDATE SET
+        message_count = daily_hour_message_stats.message_count + 1
+    `,
+    [safeHour]
+  );
+
+  if (trackStaffOnly) {
+    db.run(
+      `
+        INSERT INTO daily_staff_message_stats (
+          user_id,
+          username,
+          display_name,
+          message_count,
+          last_message_at,
+          last_channel_id,
+          last_channel_name
+        ) VALUES (?, ?, ?, 1, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          username = excluded.username,
+          display_name = excluded.display_name,
+          message_count = daily_staff_message_stats.message_count + 1,
+          last_message_at = excluded.last_message_at,
+          last_channel_id = excluded.last_channel_id,
+          last_channel_name = excluded.last_channel_name
+      `,
+      [
+        String(userId),
+        username ? String(username) : null,
+        displayName ? String(displayName) : null,
+        messageAt,
+        String(channelId),
+        channelName ? String(channelName) : null
+      ]
+    );
+  }
+
+  schedulePersist(db);
+  return true;
+}
+
+async function getDailyStatsSnapshot() {
+  const db = await getDatabase();
+  const windowStartedAt = await getDailyStatsWindowStartedAt();
+  const users = getRows(
+    db,
+    `
+      SELECT user_id, username, display_name, message_count, last_message_at, last_channel_id, last_channel_name
+      FROM daily_user_message_stats
+      ORDER BY message_count DESC, last_message_at DESC, display_name ASC, username ASC
+    `
+  ).map(mapDailyUserRow);
+  const channels = getRows(
+    db,
+    `
+      SELECT channel_id, channel_name, message_count, last_message_at
+      FROM daily_channel_message_stats
+      ORDER BY message_count DESC, last_message_at DESC, channel_name ASC
+    `
+  ).map(mapDailyChannelRow);
+  const hours = getRows(
+    db,
+    `
+      SELECT local_hour, message_count
+      FROM daily_hour_message_stats
+      ORDER BY message_count DESC, local_hour ASC
+    `
+  ).map(mapDailyHourRow);
+  const staff = getRows(
+    db,
+    `
+      SELECT user_id, username, display_name, message_count, last_message_at, last_channel_id, last_channel_name
+      FROM daily_staff_message_stats
+      ORDER BY message_count DESC, last_message_at DESC, display_name ASC, username ASC
+    `
+  ).map(mapDailyStaffRow);
+
+  return {
+    windowStartedAt,
+    users,
+    channels,
+    hours,
+    staff
+  };
+}
+
+async function clearDailyStatsTracking(newWindowStartedAt = Date.now()) {
+  const db = await getDatabase();
+  db.exec(`
+    DELETE FROM daily_user_message_stats;
+    DELETE FROM daily_channel_message_stats;
+    DELETE FROM daily_hour_message_stats;
+    DELETE FROM daily_staff_message_stats;
+  `);
+  setAppConfigValue(db, DAILY_STATS_WINDOW_KEY, Math.max(1, Math.round(Number(newWindowStartedAt) || Date.now())), {
+    immediate: true
+  });
+  return true;
+}
+
 async function getRestrictedEmojiDatabaseSnapshot() {
   const db = await getDatabase();
   const emojis = await listRestrictedEmojis();
   const emojiTimeoutMs = await getEmojiTimeoutMs();
+  const dailyStats = await getDailyStatsSnapshot();
 
   return {
     path: databasePath,
     emojiTimeoutMs,
     emojis,
+    dailyStats,
     tableCounts: {
       appConfig: Number(getScalarValue(db, "SELECT COUNT(*) FROM app_config") || 0),
-      restrictedEmojis: Number(getScalarValue(db, "SELECT COUNT(*) FROM restricted_emojis") || 0)
+      restrictedEmojis: Number(getScalarValue(db, "SELECT COUNT(*) FROM restricted_emojis") || 0),
+      dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
+      dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
+      dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
+      dailyStaff: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_staff_message_stats") || 0)
     }
   };
 }
 
 async function resetRestrictedEmojiDatabaseForTests(filePath = DEFAULT_DATABASE_PATH) {
+  clearPersistTimer();
+  databaseDirty = false;
+
   if (dbPromise) {
     const db = await dbPromise.catch(() => null);
     closeDatabase(db);
   }
+
   dbPromise = null;
+  currentDb = null;
   databasePath = filePath;
+
+  try {
+    fs.rmSync(databasePath, { force: true });
+    fs.rmSync(`${databasePath}.tmp`, { force: true });
+  } catch {}
 }
 
 module.exports = {
   DEFAULT_DATABASE_PATH,
+  DAILY_STATS_WINDOW_KEY,
   buildStoredEmojiKey,
   parseEmojiInput,
   getReactionEmojiRecord,
   matchesStoredEmoji,
   getEmojiTimeoutMs,
   setEmojiTimeoutMs,
+  getDailyStatsWindowStartedAt,
+  ensureDailyStatsWindowStartedAt,
+  setDailyStatsWindowStartedAt,
   listRestrictedEmojis,
   addRestrictedEmoji,
   removeRestrictedEmojiByKey,
+  recordDailyTrackedMessage,
+  getDailyStatsSnapshot,
+  clearDailyStatsTracking,
   getRestrictedEmojiDatabaseSnapshot,
+  flushRestrictedEmojiDatabaseNow,
   resetRestrictedEmojiDatabaseForTests
 };

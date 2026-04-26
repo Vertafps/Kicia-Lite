@@ -2,6 +2,9 @@ const { PermissionFlagsBits } = require("discord.js");
 const {
   OWNER_USER_ID,
   OWNER_ROLE_IDS,
+  ADMIN_ROLE_IDS,
+  MOD_ROLE_IDS,
+  STAFF_ROLE_IDS,
   EMOJI_MANAGER_ROLE_IDS,
   MODERATION_BYPASS_ROLE_IDS,
   RESTRICTED_REACTION_TARGET_ROLE_IDS
@@ -57,6 +60,14 @@ function isProtectedReactionTargetMember(member) {
   return hasAnyRole(member, RESTRICTED_REACTION_TARGET_ROLE_IDS);
 }
 
+function hasHigherStaffRole(member) {
+  return hasAnyRole(member, [...OWNER_ROLE_IDS, ...ADMIN_ROLE_IDS, ...MOD_ROLE_IDS]);
+}
+
+function isStaffOnlyTrackedMember(member) {
+  return hasAnyRole(member, STAFF_ROLE_IDS) && !hasHigherStaffRole(member);
+}
+
 module.exports = {
   STAFF_BYPASS_PERMISSIONS,
   hasAnyRole,
@@ -67,5 +78,7 @@ module.exports = {
   canUseEmojiCommands,
   hasModerationBypassMember,
   hasModerationBypassMessage,
-  isProtectedReactionTargetMember
+  isProtectedReactionTargetMember,
+  hasHigherStaffRole,
+  isStaffOnlyTrackedMember
 };

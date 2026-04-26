@@ -545,7 +545,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
       ? buildFeatureSearchText(explicitIntent.line, explicitIntent.candidate)
       : explicitIntent?.type === "ban"
         ? buildBanSearchText(explicitIntent.line)
-        : normalized;
+        : String(transcript || "");
 
   const issueMatch = tryIssueMatch(issueSearchText, kb);
 

@@ -42,6 +42,15 @@ const LOW_SIGNAL_TOKENS = new Set([
   "for",
   "the",
   "and"
+  ,
+  "work",
+  "works",
+  "working",
+  "issue",
+  "problem",
+  "please",
+  "pls",
+  "rn"
 ]);
 
 function keepSignalToken(token) {
@@ -85,6 +94,7 @@ function normalizeKb(data) {
     category: entry.category || null,
     match_phrases: entry.match_phrases || entry.strong_keywords || [],
     strong_keywords: entry.strong_keywords || entry.match_phrases || [],
+    _normalizedTitle: normalizeText(entry.title),
     _matchPhrases: uniqueNormalized(entry.match_phrases || entry.strong_keywords || []),
     _keywords: uniqueNormalized(entry.keywords || []),
     _titleTokens: [...new Set(tokenize(entry.title).filter(keepSignalToken))],
@@ -296,76 +306,116 @@ function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
     };
   }
 
-  const nearMatches = termTokens.filter((termToken) =>
-    transcriptTokens.some((token) => token === termToken || fuzzyTokenMatch(termToken, token))
+  return null;
+}
+
+function scoreEntryAgainstText(normalizedTranscript, transcriptTokens, entry) {
+  const strongPhraseScores = entry._matchPhrases
+    .map((phrase) => scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase))
+    .filter((score) => score > 0);
+  const strongScore = strongPhraseScores.reduce((sum, score) => sum + score, 0);
+  const keywordHits = [];
+  const distinctKeywordHits = new Set();
+  const titleTokenHits = entry._titleTokens.filter((token) =>
+    transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
   ).length;
-  if (termTokens.length >= 2 && nearMatches >= termTokens.length - 1) {
-    return {
-      score: 1.8
-    };
+  const replyTokenHits = entry._replyTokens.filter((token) =>
+    transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
+  ).length;
+
+  for (const keyword of entry._keywords) {
+    const hit = scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword);
+    if (!hit) continue;
+    keywordHits.push(hit);
+    distinctKeywordHits.add(keyword);
   }
 
-  return null;
+  const titlePhraseMatch = containsPhrase(normalizedTranscript, entry._normalizedTitle);
+  const titleTokensCount = tokenize(entry.title).length;
+  const qualifies =
+    strongScore >= 1 ||
+    (titlePhraseMatch && titleTokensCount >= 2) ||
+    distinctKeywordHits.size >= 2 ||
+    (strongScore >= 0.55 && distinctKeywordHits.size >= 1) ||
+    (distinctKeywordHits.size >= 1 && titleTokenHits >= 2) ||
+    (titleTokenHits >= 2 && replyTokenHits >= 2);
+
+  const score =
+    strongScore * 30 +
+    (titlePhraseMatch ? (titleTokensCount >= 2 ? 15 : 5) : 0) +
+    keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
+    Math.min(titleTokenHits, 4) * 0.6 +
+    Math.min(replyTokenHits, 5) * 0.3;
+
+  return {
+    strongScore,
+    keywordHits,
+    distinctKeywordHits,
+    titleTokenHits,
+    replyTokenHits,
+    titlePhraseMatch,
+    titleTokensCount,
+    qualifies,
+    score
+  };
 }
 
 function tryIssueMatch(transcript, kb) {
   const normalizedTranscript = normalizeText(transcript);
   if (!normalizedTranscript) return null;
   const transcriptTokens = tokenize(transcript);
+  const transcriptLines = String(transcript || "")
+    .split(/\n+/)
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+  const latestLine = transcriptLines[transcriptLines.length - 1] || null;
   const candidates = [];
 
   for (const entry of kb.issues || []) {
-    const strongPhraseScores = entry._matchPhrases
-      .map((phrase) => scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase))
-      .filter((score) => score > 0);
-    const strongScore = strongPhraseScores.reduce((sum, score) => sum + score, 0);
-    const keywordHits = [];
-    const distinctKeywordHits = new Set();
-    const titleTokenHits = entry._titleTokens.filter((token) =>
-      transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
-    ).length;
-    const replyTokenHits = entry._replyTokens.filter((token) =>
-      transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
-    ).length;
-
-    for (const keyword of entry._keywords) {
-      const hit = scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword);
-      if (!hit) continue;
-      keywordHits.push(hit);
-      distinctKeywordHits.add(keyword);
+    const transcriptScore = scoreEntryAgainstText(normalizedTranscript, transcriptTokens, entry);
+    if (!transcriptScore.qualifies) {
+      continue;
     }
 
-    const titlePhraseMatch = containsPhrase(normalizedTranscript, normalizeText(entry.title));
-    const titleTokensCount = tokenize(entry.title).length;
-
     if (
-      !(
-        strongScore >= 1 ||
-        (titlePhraseMatch && titleTokensCount >= 2) ||
-        distinctKeywordHits.size >= 2 ||
-        (strongScore >= 0.55 && distinctKeywordHits.size >= 1) ||
-        (distinctKeywordHits.size >= 1 && titleTokenHits >= 2) ||
-        (titleTokenHits >= 2 && replyTokenHits >= 2)
-      )
+      transcriptTokens.length <= 2 &&
+      !transcriptScore.strongScore &&
+      transcriptScore.distinctKeywordHits.size < 2 &&
+      transcriptScore.titleTokenHits < 2
     ) {
       continue;
     }
 
-    const score =
-      strongScore * 30 +
-      (titlePhraseMatch ? (titleTokensCount >= 2 ? 15 : 5) : 0) +
-      keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
-      Math.min(titleTokenHits, 4) * 0.6 +
-      Math.min(replyTokenHits, 5) * 0.3;
+    const perLineScores = transcriptLines.map((line) => {
+      const lineTokens = tokenize(line);
+      return {
+        line,
+        ...scoreEntryAgainstText(line, lineTokens, entry)
+      };
+    });
+    const bestLineScore = perLineScores.reduce(
+      (best, current) => (!best || current.score > best.score ? current : best),
+      null
+    );
+    const latestLineScore = latestLine
+      ? perLineScores.find((lineScore) => lineScore.line === latestLine) || null
+      : null;
+    const lineFocusBonus = bestLineScore?.qualifies ? bestLineScore.score * 0.35 : 0;
+    const latestLineBonus = latestLineScore?.qualifies
+      ? latestLineScore.score * (latestLineScore.strongScore >= 1 ? 1.8 : 0.7) +
+        (latestLineScore.strongScore >= 1 ? 10 : 0)
+      : 0;
+    const score = transcriptScore.score + lineFocusBonus + latestLineBonus;
 
     // Vague input penalty: if transcript is just one or two words and we don't
     // have a strong phrase match or a multi-word title match, require a higher score.
-    const isVagueInput = transcriptTokens.length <= 2 && !strongScore;
+    const isVagueInput = transcriptTokens.length <= 2 && !transcriptScore.strongScore;
 
     candidates.push({
       entry,
       score,
-      strongScore,
+      strongScore: transcriptScore.strongScore,
+      latestLineBonus,
       isVagueInput
     });
   }

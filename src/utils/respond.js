@@ -24,7 +24,27 @@ async function safeReply(message, payload, { fallbackToChannel = true } = {}) {
   return true;
 }
 
+async function safeSend(target, payload) {
+  try {
+    await target?.send?.(payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function safeEdit(message, payload) {
+  try {
+    await message?.edit?.(payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   safeReact,
-  safeReply
+  safeReply,
+  safeSend,
+  safeEdit
 };

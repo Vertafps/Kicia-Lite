@@ -1,11 +1,13 @@
 const { PermissionFlagsBits } = require("discord.js");
 const {
   BRAND,
-  STAFF_ALERT_CHANNEL_ID,
+  LOG_CHANNEL_ID,
   NO_RESPONSE_CHANNEL_IDS,
   CHANNEL_LOCK_TARGETS
 } = require("./config");
+const { formatDuration } = require("./duration");
 const { SUCCESS, WARN } = require("./embed");
+const { getRestrictedEmojiDatabaseSnapshot } = require("./restricted-emoji-db");
 const { getRuntimeHealthSnapshot } = require("./runtime-health");
 const { getRuntimeStatus } = require("./runtime-status");
 
@@ -15,7 +17,7 @@ const JARVIS_STEPS = [
   "Security audit",
   "Final compile"
 ];
-const STAFF_CHANNEL_PERMISSIONS = [
+const LOG_CHANNEL_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
   PermissionFlagsBits.EmbedLinks
@@ -140,15 +142,15 @@ async function buildSecuritySection(message, channelLockRoleId) {
   const securityLines = [];
   let hasIssue = false;
 
-  const staffChannel = await resolveGuildChannel(guild, STAFF_ALERT_CHANNEL_ID);
-  if (!staffChannel) {
-    securityLines.push(`**Staff Alerts:** missing channel ${STAFF_ALERT_CHANNEL_ID}`);
+  const logChannel = await resolveGuildChannel(guild, LOG_CHANNEL_ID);
+  if (!logChannel) {
+    securityLines.push(`**Logs Channel:** missing channel ${LOG_CHANNEL_ID}`);
     hasIssue = true;
   } else {
-    const missing = getMissingPermissionLabels(staffChannel, botMember, STAFF_CHANNEL_PERMISSIONS);
+    const missing = getMissingPermissionLabels(logChannel, botMember, LOG_CHANNEL_PERMISSIONS);
     if (missing.length) hasIssue = true;
     securityLines.push(
-      `**Staff Alerts:** ${missing.length ? `missing ${missing.join(" / ")}` : `ok <#${staffChannel.id}>`}`
+      `**Logs Channel:** ${missing.length ? `missing ${missing.join(" / ")}` : `ok <#${logChannel.id}>`}`
     );
   }
 
@@ -176,6 +178,16 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
   }
 
+  try {
+    const emojiDb = await getRestrictedEmojiDatabaseSnapshot();
+    securityLines.push(
+      `**Emoji DB:** ok | ${emojiDb.tableCounts.restrictedEmojis} restricted | timeout ${formatDuration(emojiDb.emojiTimeoutMs)}`
+    );
+  } catch (err) {
+    securityLines.push(`**Emoji DB:** failed (${err.message})`);
+    hasIssue = true;
+  }
+
   securityLines.push(`**Status Channel:** [Open](${BRAND.STATUS_JUMP_URL})`);
 
   return {
@@ -201,7 +213,7 @@ async function runJarvisDiagnostics(message, { refreshKb, channelLockRoleId, onP
   await progress(1, "refreshing KB and validating docs cache");
   const kbSection = await buildKbSection(refreshKb);
 
-  await progress(2, "checking staff logs, no-response channels, and lockdown targets");
+  await progress(2, "checking logs channel, emoji db, no-response channels, and lockdown targets");
   const securitySection = await buildSecuritySection(message, channelLockRoleId);
 
   await progress(3, "compiling final report");

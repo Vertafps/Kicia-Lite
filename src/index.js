@@ -4,13 +4,16 @@ const path = require("path");
 const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { DISCORD_TOKEN } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
+const { buildPanel, DANGER } = require("./embed");
 const { fetchKb } = require("./kb");
+const { maybeHandleControlCommand } = require("./handlers/commands");
 const { maybeHandleModerationWatch } = require("./handlers/moderation");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
-const { isOwnerCommandMessage, maybeHandleStatusCommand } = require("./handlers/status");
+const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
+const { maybeHandleStatusCommand } = require("./handlers/status");
 const { recordRuntimeEvent } = require("./runtime-health");
-const { safeReact } = require("./utils/respond");
+const { safeReact, safeReply } = require("./utils/respond");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
 
@@ -62,10 +65,11 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User]
 });
 
 function isBotPing(message) {
@@ -97,6 +101,16 @@ client.on(Events.Warn, (warning) => {
   recordRuntimeEvent("warn", "discord-client", warning);
 });
 
+client.on(Events.ShardError, (err, shardId) => {
+  console.error(`Discord shard ${shardId} error:`, err);
+  recordRuntimeEvent("error", `discord-shard-${shardId}`, err?.message || err);
+});
+
+client.on(Events.Invalidated, () => {
+  console.error("Discord session invalidated");
+  recordRuntimeEvent("error", "discord-session", "session invalidated");
+});
+
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
   recordRuntimeEvent("error", "unhandled-rejection", reason?.message || reason);
@@ -107,21 +121,56 @@ process.on("uncaughtException", (err) => {
   recordRuntimeEvent("error", "uncaught-exception", err?.message || err);
 });
 
+async function replyWithRuntimeFailure(message) {
+  if (!message?.reply) return;
+
+  try {
+    await safeReply(message, {
+      embeds: [
+        buildPanel({
+          header: "\u26A0\uFE0F Runtime Hiccup",
+          body: "that command or moderation check failed rn, try again in a sec",
+          color: DANGER
+        })
+      ],
+      allowedMentions: { repliedUser: false }
+    }, {
+      fallbackToChannel: !isNoResponseMessage(message)
+    });
+  } catch {}
+}
+
+async function runGuarded(scope, task, { message = null, replyWithDocsError = false } = {}) {
+  try {
+    return await task();
+  } catch (err) {
+    console.error(`${scope} failed:`, err);
+    recordRuntimeEvent("error", scope, err?.message || err);
+
+    if (message) {
+      if (replyWithDocsError) {
+        await replyWithError(message);
+      } else {
+        await replyWithRuntimeFailure(message);
+      }
+    }
+
+    return null;
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
-  try {
+  await runGuarded("message-handler", async () => {
     if (await maybeHandleLockCommand(message)) return;
+    if (await maybeHandleControlCommand(message)) return;
     await maybeHandleModerationWatch(message);
 
     if (isNoResponseMessage(message)) {
       if (isBotPing(message)) {
         await safeReact(message, "\u274C");
         return;
-      }
-
-      if (isOwnerCommandMessage(message.content)) {
-        await maybeHandleStatusCommand(message);
       }
       return;
     }
@@ -133,11 +182,21 @@ client.on(Events.MessageCreate, async (message) => {
     }
     if (!message.inGuild() || message.mentions.everyone || !isBotPing(message)) return;
     await handleGuildPing(message);
-  } catch (err) {
-    console.error("Message handler failed:", err);
-    recordRuntimeEvent("error", "message-handler", err?.message || err);
-    await replyWithError(message);
-  }
+  }, {
+    message,
+    replyWithDocsError:
+      !String(message.content || "").trim().startsWith("$") &&
+      message.inGuild?.() &&
+      isBotPing(message)
+  });
+});
+
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user?.bot) return;
+
+  await runGuarded("reaction-handler", async () => {
+    await maybeHandleRestrictedReactionAdd(reaction, user);
+  });
 });
 
 client.login(DISCORD_TOKEN).catch((err) => {

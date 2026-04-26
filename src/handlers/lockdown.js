@@ -1,11 +1,10 @@
 const { PermissionFlagsBits } = require("discord.js");
 const {
   CHANNEL_LOCK_ROLE_ID,
-  CHANNEL_LOCK_TARGETS,
-  CHANNEL_LOCK_OPERATOR_ROLE_IDS,
-  CHANNEL_LOCK_OPERATOR_USER_IDS
+  CHANNEL_LOCK_TARGETS
 } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
+const { canUseLockCommands } = require("../permissions");
 const { safeReact, safeReply } = require("../utils/respond");
 
 const LOCK_REACTION = "\u274C";
@@ -30,8 +29,7 @@ function isLockCommandMessage(content) {
 }
 
 function isLockOperator(message) {
-  if (CHANNEL_LOCK_OPERATOR_USER_IDS.includes(message.author?.id)) return true;
-  return CHANNEL_LOCK_OPERATOR_ROLE_IDS.some((roleId) => message.member?.roles?.cache?.has?.(roleId));
+  return canUseLockCommands(message);
 }
 
 async function resolveTargetChannels(guild) {

@@ -5,7 +5,7 @@ const { forceRefreshKb } = require("../kb");
 const { buildStatusReplyBody, detectStatusQuestion } = require("../router");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
 const { normalizeText } = require("../text");
-const { safeReact, safeReply } = require("../utils/respond");
+const { safeEdit, safeReact, safeReply } = require("../utils/respond");
 const { getCooldownReaction, markGuildReply } = require("./cooldown");
 
 const SHORT_STATUS_PATTERNS = [
@@ -115,7 +115,7 @@ async function handleJarvisCommand(message, refreshKb) {
 
   const updateProgress = async (body) => {
     if (!progressMessage) return;
-    await progressMessage.edit(progressPayload(body)).catch(() => null);
+    await safeEdit(progressMessage, progressPayload(body));
   };
 
   await updateProgress(buildJarvisProgressBody(0, "reading runtime status and recent logs"));
@@ -149,11 +149,12 @@ async function handleJarvisCommand(message, refreshKb) {
 }
 
 async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } = {}) {
+  const statusCommand = isStatusCommandMessage(message.content);
   const nextStatus = parseStatusCommand(message.content);
   const fetchCommand = isFetchCommandMessage(message.content);
   const jarvisCommand = isJarvisCommandMessage(message.content);
 
-  if (nextStatus || fetchCommand || jarvisCommand) {
+  if (statusCommand || nextStatus || fetchCommand || jarvisCommand) {
     if (message.author?.id !== OWNER_USER_ID) return true;
   }
 
@@ -201,29 +202,21 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     return true;
   }
 
-  if (isStatusCommandMessage(message.content)) {
-    if (message.author?.id === OWNER_USER_ID) {
-      if (isPublicStatusQueryMessage(message.content)) {
-        return maybeReplyWithPublicStatus(message, { useCooldown: false });
-      }
-
-      await safeReply(message, {
-        embeds: [
-          buildPanel({
-            body: "usage: `$status`, `$status up`, `$status down`, `$fetch`, or `$jarvis`",
-            color: INFO
-          })
-        ],
-        allowedMentions: { repliedUser: false }
-      });
-      return true;
+  if (statusCommand) {
+    if (isPublicStatusQueryMessage(message.content)) {
+      return maybeReplyWithPublicStatus(message, { useCooldown: false });
     }
 
-    if (!isPublicStatusQueryMessage(message.content)) {
-      return true;
-    }
-
-    return maybeReplyWithPublicStatus(message, { useCooldown: false });
+    await safeReply(message, {
+      embeds: [
+        buildPanel({
+          body: "usage: `$status`, `$status up`, `$status down`, `$fetch`, or `$jarvis`",
+          color: INFO
+        })
+      ],
+      allowedMentions: { repliedUser: false }
+    });
+    return true;
   }
 
   if (!shouldAutoReplyStatus(message.content)) return false;

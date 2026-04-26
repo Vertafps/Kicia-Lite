@@ -1,29 +1,19 @@
-const { PermissionFlagsBits } = require("discord.js");
 const {
-  STAFF_ALERT_CHANNEL_ID,
-  CHANNEL_LOCK_OPERATOR_ROLE_IDS,
-  CHANNEL_LOCK_OPERATOR_USER_IDS,
   RAID_WINDOW_MS,
   RAID_MIN_DISTINCT_USERS,
   RAID_ALERT_COOLDOWN_MS
 } = require("../config");
 const { buildPanel, DANGER, WARN } = require("../embed");
 const { fetchKb } = require("../kb");
+const { sendLogPanel } = require("../log-channel");
+const { hasModerationBypassMessage } = require("../permissions");
+const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText, normalizeText } = require("../text");
 
 const raidBuckets = new Map();
 const lastRaidAlertAt = new Map();
 const recentUserMessages = new Map();
-const STAFF_BYPASS_PERMISSIONS = [
-  PermissionFlagsBits.Administrator,
-  PermissionFlagsBits.ManageGuild,
-  PermissionFlagsBits.ManageMessages,
-  PermissionFlagsBits.ManageChannels,
-  PermissionFlagsBits.KickMembers,
-  PermissionFlagsBits.BanMembers,
-  PermissionFlagsBits.ModerateMembers
-];
 
 const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits)\b/;
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|bucks?|dollars?)\b/;
@@ -112,13 +102,7 @@ function buildRecentUserMessageKey(message) {
 }
 
 function hasBypassPermission(message) {
-  if (CHANNEL_LOCK_OPERATOR_USER_IDS.includes(message.author?.id)) return true;
-
-  if (CHANNEL_LOCK_OPERATOR_ROLE_IDS.some((roleId) => message.member?.roles?.cache?.has?.(roleId))) {
-    return true;
-  }
-
-  return STAFF_BYPASS_PERMISSIONS.some((permission) => message.member?.permissions?.has?.(permission));
+  return hasModerationBypassMessage(message);
 }
 
 function isAssertiveStatement(content) {
@@ -480,31 +464,6 @@ function buildRaidAlertPanel(message, raidAlert) {
   };
 }
 
-async function resolveStaffAlertChannel(message) {
-  if (!message?.guild?.channels) return null;
-
-  const cached = message.guild.channels.cache?.get(STAFF_ALERT_CHANNEL_ID);
-  if (cached?.send) return cached;
-
-  if (typeof message.guild.channels.fetch === "function") {
-    const fetched = await message.guild.channels.fetch(STAFF_ALERT_CHANNEL_ID).catch(() => null);
-    if (fetched?.send) return fetched;
-  }
-
-  return null;
-}
-
-async function sendStaffAlert(message, panel) {
-  const alertChannel = await resolveStaffAlertChannel(message);
-  if (!alertChannel) return false;
-
-  await alertChannel.send({
-    embeds: [buildPanel(panel)],
-    allowedMentions: { parse: [] }
-  });
-  return true;
-}
-
 function collectContentSignals(content, { kb, runtimeStatus }) {
   const signals = [];
   const sellingSignal = detectSellingSignal(content);
@@ -545,15 +504,16 @@ async function maybeHandleModerationWatch(message, { kb, runtimeStatus, fetchKbF
     }
 
     if (signals.length) {
-      await sendStaffAlert(message, buildSignalAlertPanel(message, signals));
+      await sendLogPanel(message.guild, buildSignalAlertPanel(message, signals));
     }
 
     const raidAlert = observeRaidMessage(message);
     if (raidAlert) {
-      await sendStaffAlert(message, buildRaidAlertPanel(message, raidAlert));
+      await sendLogPanel(message.guild, buildRaidAlertPanel(message, raidAlert));
     }
   } catch (err) {
     console.warn("Moderation watcher failed:", err.message);
+    recordRuntimeEvent("warn", "moderation-watch", err?.message || err);
   }
 
   return false;

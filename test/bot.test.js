@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const { PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 
 const { isNoResponseChannel, isNoResponseMessage } = require("../src/channel-policy");
+const { maybeHandleControlCommand } = require("../src/handlers/commands");
 const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
@@ -198,7 +199,7 @@ function buildMockLockChannel(id, { sendMessagesState = true, botPermissions = [
 
 function buildLockCommandMessage(content, {
   authorId = "mod-user",
-  roleIds = ["1484218511797784576"],
+  roleIds = ["1484221158390890496"],
   displayName = "Kernel",
   channels = []
 } = {}) {
@@ -654,7 +655,7 @@ test("owner status command bypasses cooldown logic", async () => {
   assert.equal(getRuntimeStatus(), "DOWN");
 });
 
-test("public status command replies for non-owners", async () => {
+test("status command is kernel-only for non-owners", async () => {
   let replyPayload = null;
 
   const handled = await maybeHandleStatusCommand({
@@ -670,10 +671,7 @@ test("public status command replies for non-owners", async () => {
   });
 
   assert.equal(handled, true);
-  assert.ok(replyPayload);
-  assert.match(replyPayload.embeds[0].data.description, /status says it'?s up rn/i);
-  assert.match(replyPayload.embeds[0].data.description, /1497703492012347412/);
-  assert.match(replyPayload.embeds[0].data.description, /\$status/);
+  assert.equal(replyPayload, null);
 });
 
 test("generic no-ping working prompt auto-replies with status", async () => {
@@ -797,4 +795,80 @@ test("owner fetch command replies cleanly on kb refresh failure", async () => {
 
 test("jarvis counts as an owner-only command", () => {
   assert.equal(isOwnerCommandMessage("$jarvis"), true);
+});
+
+test("emoji command is available to staff roles", async () => {
+  let replyPayload = null;
+  const handled = await maybeHandleControlCommand({
+    content: "$emoji \u{1F62D}",
+    author: { id: "staff-user" },
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleId === "1298767464678559794"
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    getTimeout: async () => 10 * 60 * 1000,
+    listEmojis: async () => [{ display: "\u{1F62D}" }],
+    addEmoji: async () => ({ added: true })
+  });
+
+  assert.equal(handled, true);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /added/i);
+});
+
+test("kernel config command updates emoji timeout", async () => {
+  let replyPayload = null;
+  let savedDuration = null;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$config emoji 15m",
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    setTimeout: async (durationMs) => {
+      savedDuration = durationMs;
+      return durationMs;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(savedDuration, 15 * 60 * 1000);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /15m/i);
+});
+
+test("database command is kernel-only", async () => {
+  let replyPayload = null;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$db",
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    getSnapshot: async () => ({
+      path: "D:/Downloads/kicia main direction bot/data/restricted-reactions.sqlite",
+      emojiTimeoutMs: 10 * 60 * 1000,
+      emojis: [{ display: "\u{1F62D}" }],
+      tableCounts: {
+        appConfig: 1,
+        restrictedEmojis: 1
+      }
+    })
+  });
+
+  assert.equal(handled, true);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /SQLite Database/i);
+  assert.match(replyPayload.embeds[0].data.description, /Restricted Emoji Rows:\*\* 1/i);
 });

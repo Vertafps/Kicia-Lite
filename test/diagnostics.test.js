@@ -17,6 +17,7 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   assert.match(body, /Selling Guard/i);
   assert.match(body, /confidence > 70%/i);
   assert.match(body, /2 hits in 30m/i);
+  assert.match(body, /3 hits if confidence < 50%/i);
   assert.match(body, /timeout 15m/i);
   assert.match(body, /private DM steering/i);
   assert.doesNotMatch(body, /defender|antivirus/i);

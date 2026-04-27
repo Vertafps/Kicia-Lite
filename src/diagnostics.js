@@ -10,8 +10,10 @@ const {
   SUSPICIOUS_TIMEOUT_THRESHOLD,
   SUSPICIOUS_TIMEOUT_MS,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SELLING_LOW_CONFIDENCE_THRESHOLD,
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
+  SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_TIMEOUT_MS
 } = require("./config");
 const { formatDuration } = require("./duration");
@@ -148,6 +150,7 @@ function buildModerationGuardLines() {
       "**Selling Guard:**",
       `timeout when confidence > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`,
       `or ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
       `timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
     ].join(" ")
   ];

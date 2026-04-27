@@ -8,8 +8,10 @@ const {
   SUSPICIOUS_TIMEOUT_THRESHOLD,
   SUSPICIOUS_TIMEOUT_MS,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SELLING_LOW_CONFIDENCE_THRESHOLD,
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
+  SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_TIMEOUT_MS
 } = require("../config");
 const { formatDuration } = require("../duration");
@@ -692,9 +694,16 @@ function getMaxSignalConfidence(signals) {
   );
 }
 
+function getSellingRepeatThreshold(confidence) {
+  return confidence < SELLING_LOW_CONFIDENCE_THRESHOLD
+    ? SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD
+    : SELLING_REPEAT_TIMEOUT_THRESHOLD;
+}
+
 function rememberSellingMessage(message, signals, now = Date.now()) {
   const confidence = getMaxSignalConfidence(signals);
   const highConfidence = confidence > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD;
+  const repeatThreshold = getSellingRepeatThreshold(confidence);
   const key = buildSellingUserKey(message);
 
   if (!key) {
@@ -702,6 +711,7 @@ function rememberSellingMessage(message, signals, now = Date.now()) {
       count: 1,
       confidence,
       highConfidence,
+      repeatThreshold,
       action: highConfidence ? "timeout" : "alert",
       trigger: highConfidence
         ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
@@ -720,21 +730,22 @@ function rememberSellingMessage(message, signals, now = Date.now()) {
     confidence,
     reasons: signals.map((signal) => signal.reason)
   });
-  entry.events = entry.events.slice(-Math.max(SELLING_REPEAT_TIMEOUT_THRESHOLD + 2, 5));
+  entry.events = entry.events.slice(-Math.max(SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD + 2, 5));
   sellingUserBuckets.set(key, entry);
 
-  const repeated = entry.events.length >= SELLING_REPEAT_TIMEOUT_THRESHOLD;
+  const repeated = entry.events.length >= repeatThreshold;
   const action = highConfidence || repeated ? "timeout" : "alert";
 
   return {
     count: entry.events.length,
     confidence,
     highConfidence,
+    repeatThreshold,
     action,
     trigger: highConfidence
       ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
       : repeated
-        ? `${entry.events.length}/${SELLING_REPEAT_TIMEOUT_THRESHOLD} selling messages in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`
+        ? `${entry.events.length}/${repeatThreshold} selling messages in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`
         : "below immediate-timeout confidence",
     events: [...entry.events]
   };
@@ -813,14 +824,34 @@ function buildSignalAlertPanel(message, signals) {
   };
 }
 
-function buildSellingLogPanel({ message, signals, state, timeoutResult, durationMs }) {
+function buildSellingDmPayload({ message, signals, state, durationMs }) {
+  return {
+    embeds: [
+      buildPanel({
+        header: "Selling Timeout",
+        body: [
+          `i timed you out for ${formatDuration(durationMs)} because your recent message looked like selling/trading`,
+          "please keep buying, selling, and trading out of the chat",
+          `**Channel:** <#${message.channelId}>`,
+          `**Confidence:** ${state.confidence}%`,
+          `**Trigger:** ${state.trigger}`,
+          `**Why:**\n${formatSignalReasons(signals)}`,
+          `**Message:** ${trimExcerpt(message.content, 180)}`
+        ].join("\n\n"),
+        color: DANGER
+      })
+    ]
+  };
+}
+
+function buildSellingLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs }) {
   const link = buildMessageUrl(message);
   const confidenceLines = signals
     .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
     .join("\n");
   const action =
     state.action === "timeout"
-      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason}`
+      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
       : "log only";
 
   return {
@@ -835,7 +866,7 @@ function buildSellingLogPanel({ message, signals, state, timeoutResult, duration
       `**Action:** ${action}`,
       `**Confidence:** ${state.confidence}%`,
       `**Trigger:** ${state.trigger}`,
-      `**Selling Hits:** ${state.count}/${SELLING_REPEAT_TIMEOUT_THRESHOLD} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      `**Selling Hits:** ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `**Why:**\n${confidenceLines}`,
       `**Message:** ${trimExcerpt(message.content)}`
     ].filter(Boolean).join("\n\n"),
@@ -1052,9 +1083,16 @@ async function handleSellingMessage(message, signals, {
     applied: false,
     reason: "not needed"
   };
+  let dmSent = false;
 
   if (state.action === "timeout") {
     timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "selling or trading in chat");
+    dmSent = await safeSend(message.author, buildSellingDmPayload({
+      message,
+      signals,
+      state,
+      durationMs: timeoutMs
+    }));
     if (!timeoutResult.applied) {
       recordRuntimeEvent("warn", "selling-timeout", timeoutResult.reason);
     }
@@ -1066,6 +1104,7 @@ async function handleSellingMessage(message, signals, {
     signals,
     state,
     timeoutResult,
+    dmSent,
     durationMs: timeoutMs
   })).catch(() => null);
 

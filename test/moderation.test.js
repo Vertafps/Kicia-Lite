@@ -458,18 +458,19 @@ test("high-confidence selling mutes and shows confidence in logs", async () => {
   assert.match(fixture.logs[0].header, /Selling Timeout/i);
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
   assert.match(fixture.logs[0].body, /confidence \d+% > 70%/i);
-  assert.equal(fixture.dms.length, 0);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+  assert.equal(fixture.dms.length, 1);
+  assert.match(fixture.dms[0].embeds[0].data.description, /selling\/trading/i);
 
   const snapshot = await getDailyStatsSnapshot();
   const sellingTimeout = snapshot.moderation.find((entry) => entry.eventKey === "selling_timeout");
   assert.equal(sellingTimeout?.eventCount, 1);
 });
 
-test("lower-confidence selling repeats mute on the second hit in 30 minutes", async () => {
+test("mid-confidence selling repeats mute on the second hit in 30 minutes", async () => {
   await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("anyone selling ue?");
+  const fixture = buildModerationMessage("selling");
   const baseNow = 1_000;
 
   const firstHandled = await maybeHandleModerationWatch(fixture.message, {
@@ -486,7 +487,7 @@ test("lower-confidence selling repeats mute on the second hit in 30 minutes", as
   assert.equal(fixture.timeouts.length, 0);
 
   fixture.message.id = "message-2";
-  fixture.message.content = "who sell ue";
+  fixture.message.content = "selling";
   await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",
@@ -499,6 +500,51 @@ test("lower-confidence selling repeats mute on the second hit in 30 minutes", as
   assert.match(fixture.logs[1].body, /2\/2 selling messages in 30m/i);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+  assert.equal(fixture.dms.length, 1);
+  assert.match(fixture.logs[1].body, /dm sent/i);
+});
+
+test("low-confidence selling repeats mute on the third hit in 30 minutes", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("anyone selling ue?");
+  const baseNow = 1_000;
+
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow
+  });
+
+  fixture.message.id = "message-2";
+  fixture.message.content = "who sell ue";
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow + 10 * 60 * 1000
+  });
+
+  assert.equal(fixture.logs.length, 2);
+  assert.match(fixture.logs[1].header, /Selling Alert/i);
+  assert.match(fixture.logs[1].body, /2\/3 in 30m/i);
+  assert.equal(fixture.timeouts.length, 0);
+
+  fixture.message.id = "message-3";
+  fixture.message.content = "can i sell ue here";
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow + 20 * 60 * 1000
+  });
+
+  assert.equal(fixture.logs.length, 3);
+  assert.match(fixture.logs[2].header, /Selling Timeout/i);
+  assert.match(fixture.logs[2].body, /3\/3 selling messages in 30m/i);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+  assert.equal(fixture.dms.length, 1);
 });
 
 test("roasting detector replies without logs or moderation actions", async () => {

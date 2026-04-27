@@ -15,7 +15,7 @@ const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reac
 const { maybeHandleStatusCommand } = require("./handlers/status");
 const { flushRestrictedEmojiDatabaseNow } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
-const { safeReact, safeReply } = require("./utils/respond");
+const { safeReply } = require("./utils/respond");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
 
@@ -194,10 +194,6 @@ client.on(Events.MessageCreate, async (message) => {
     if (await maybeHandleModerationWatch(message)) return;
 
     if (isNoResponseMessage(message)) {
-      if (isBotPing(message)) {
-        await safeReact(message, "\u274C");
-        return;
-      }
       return;
     }
 

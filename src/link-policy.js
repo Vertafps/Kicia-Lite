@@ -95,15 +95,20 @@ function collectUrlsFromValue(value, target) {
   }
 }
 
-function buildAllowedLinkRules(kb) {
+function buildAllowedLinkRules(kb, { trustedLinks = [] } = {}) {
+  const hasDynamicTrustedLinks = Array.isArray(trustedLinks) && trustedLinks.length > 0;
+
   if (!kb || typeof kb !== "object") {
     return {
-      exactKeys: new Set(STATIC_ALLOWED_URLS.map((url) => normalizeUrlCandidate(url)?.key).filter(Boolean)),
+      exactKeys: new Set([
+        ...STATIC_ALLOWED_URLS,
+        ...trustedLinks.map((link) => link?.url || link)
+      ].map((url) => normalizeUrlCandidate(url)?.key).filter(Boolean)),
       rootHosts: new Set()
     };
   }
 
-  const cached = RULE_CACHE.get(kb);
+  const cached = hasDynamicTrustedLinks ? null : RULE_CACHE.get(kb);
   if (cached) return cached;
 
   const exactKeys = new Set();
@@ -111,6 +116,7 @@ function buildAllowedLinkRules(kb) {
   const foundUrls = [];
 
   collectUrlsFromValue(STATIC_ALLOWED_URLS, foundUrls);
+  collectUrlsFromValue(trustedLinks.map((link) => link?.url || link), foundUrls);
   collectUrlsFromValue(kb, foundUrls);
 
   for (const url of foundUrls) {
@@ -121,7 +127,9 @@ function buildAllowedLinkRules(kb) {
   }
 
   const rules = { exactKeys, rootHosts };
-  RULE_CACHE.set(kb, rules);
+  if (!hasDynamicTrustedLinks) {
+    RULE_CACHE.set(kb, rules);
+  }
   return rules;
 }
 
@@ -175,13 +183,13 @@ function isAllowedLink(url, rules) {
   return false;
 }
 
-function detectBlockedLinkSignal(text, { kb } = {}) {
+function detectBlockedLinkSignal(text, { kb, trustedLinks = [] } = {}) {
   if (!kb) return null;
 
   const urls = extractUrlsFromText(text);
   if (!urls.length) return null;
 
-  const rules = buildAllowedLinkRules(kb);
+  const rules = buildAllowedLinkRules(kb, { trustedLinks });
   const blockedLinks = urls.filter((url) => !isAllowedLink(url, rules));
   if (!blockedLinks.length) return null;
 
@@ -195,6 +203,7 @@ function detectBlockedLinkSignal(text, { kb } = {}) {
 
 module.exports = {
   extractUrlsFromText,
+  normalizeUrlCandidate,
   buildAllowedLinkRules,
   detectBlockedLinkSignal
 };

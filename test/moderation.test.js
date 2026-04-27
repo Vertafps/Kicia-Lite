@@ -10,11 +10,14 @@ const path = require("path");
 const { normalizeKb } = require("../src/kb");
 const {
   addRestrictedEmoji,
+  addTrustedLink,
   clearDailyStatsTracking,
   getDailyStatsSnapshot,
   getRestrictedEmojiDatabaseSnapshot,
+  listTrustedLinks,
   parseEmojiInput,
   removeRestrictedEmojiByKey,
+  removeTrustedLinkByKey,
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
 const {
@@ -81,12 +84,14 @@ function buildModerationMessage(content, {
   userId = "regular-user",
   roleIds = [],
   permissions = [],
-  moderatable = true
+  moderatable = true,
+  channelId = "channel-1"
 } = {}) {
   const deleted = [];
   const timeouts = [];
   const dms = [];
   const logs = [];
+  const replies = [];
 
   const member = {
     id: userId,
@@ -129,12 +134,15 @@ function buildModerationMessage(content, {
     id: "message-1",
     content,
     guildId: "guild-1",
-    channelId: "channel-1",
-    url: "https://discord.com/channels/guild-1/channel-1/message-1",
+    channelId,
+    url: `https://discord.com/channels/guild-1/${channelId}/message-1`,
     guild,
     author,
     member,
     inGuild: () => true,
+    reply: async (payload) => {
+      replies.push(payload);
+    },
     delete: async () => {
       deleted.push(true);
     }
@@ -145,6 +153,7 @@ function buildModerationMessage(content, {
     deleted,
     timeouts,
     dms,
+    replies,
     logs,
     sendLog: async (_guild, panel) => {
       logs.push(panel);
@@ -329,6 +338,18 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("https://whatexpsare.online/", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://inject.today", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://inject.today/rdd", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://dynamic.example/file", {
+    kb,
+    trustedLinks: [{ url: "https://dynamic.example/" }]
+  }), null);
+  assert.equal(detectBlockedLinkSignal("https://path-only.example/safe", {
+    kb,
+    trustedLinks: [{ url: "https://path-only.example/safe" }]
+  }), null);
+  assert.ok(detectBlockedLinkSignal("https://path-only.example/other", {
+    kb,
+    trustedLinks: [{ url: "https://path-only.example/safe" }]
+  }));
 
   const signal = detectBlockedLinkSignal("check https://bing.com/search?q=kicia", { kb });
   assert.ok(signal);
@@ -405,6 +426,28 @@ test("blocked links are deleted, logged, and timed out", async () => {
   assert.equal(blockedLinkTimeout?.eventCount, 1);
 });
 
+test("selling alerts reply even in no-response channels", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling ue for 1 bucks", {
+    channelId: "1484218577589637233"
+  });
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.replies.length, 1);
+  assert.match(fixture.replies[0].content, /(marketplace|selling|price tag)/i);
+  assert.match(fixture.replies[0].content, /staff got the ping/i);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Selling Alert/i);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
 test("suspicious messages escalate from log to warning to timeout", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("OK MORE STUFF IS THERE, EXPLAIN: dm me");
@@ -417,7 +460,9 @@ test("suspicious messages escalate from log to warning to timeout", async () => 
     now: baseNow
   });
 
-  assert.equal(firstHandled, false);
+  assert.equal(firstHandled, true);
+  assert.equal(fixture.replies.length, 1);
+  assert.match(fixture.replies[0].content, /\(1\/3\)$/);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Suspicious Message Alert/i);
   assert.match(fixture.logs[0].body, /log only/i);
@@ -434,6 +479,8 @@ test("suspicious messages escalate from log to warning to timeout", async () => 
   });
 
   assert.equal(fixture.logs.length, 2);
+  assert.equal(fixture.replies.length, 2);
+  assert.match(fixture.replies[1].content, /\(2\/3\)$/);
   assert.match(fixture.logs[1].header, /Suspicious Message Warning/i);
   assert.match(fixture.logs[1].body, /dm warning sent/i);
   assert.equal(fixture.dms.length, 1);
@@ -449,6 +496,8 @@ test("suspicious messages escalate from log to warning to timeout", async () => 
   });
 
   assert.equal(fixture.logs.length, 3);
+  assert.equal(fixture.replies.length, 3);
+  assert.match(fixture.replies[2].content, /\(3\/3\)$/);
   assert.match(fixture.logs[2].header, /Suspicious Message Timeout/i);
   assert.match(fixture.logs[2].body, /timeout 10m/i);
   assert.equal(fixture.dms.length, 2);
@@ -479,6 +528,26 @@ test("restricted emoji database adds and removes emojis", async () => {
 
   const snapshotAfterRemove = await getRestrictedEmojiDatabaseSnapshot();
   assert.equal(snapshotAfterRemove.tableCounts.restrictedEmojis, 0);
+});
+
+test("trusted link database adds and removes links", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+
+  const added = await addTrustedLink({
+    key: "trusted.example/safe",
+    url: "https://trusted.example/safe"
+  });
+  assert.equal(added.added, true);
+
+  const linksAfterAdd = await listTrustedLinks();
+  assert.equal(linksAfterAdd.length, 1);
+  assert.equal(linksAfterAdd[0].url, "https://trusted.example/safe");
+
+  const removed = await removeTrustedLinkByKey("trusted.example/safe");
+  assert.equal(removed.removed, true);
+
+  const linksAfterRemove = await listTrustedLinks();
+  assert.equal(linksAfterRemove.length, 0);
 });
 
 test("restricted reactions on staff messages remove the reaction and time out the user", async () => {

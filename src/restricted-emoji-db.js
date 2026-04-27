@@ -198,6 +198,12 @@ function createSchema(db) {
       event_count INTEGER NOT NULL DEFAULT 0,
       last_event_at INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS trusted_links (
+      key TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
   `);
 }
 
@@ -302,6 +308,14 @@ function mapDailyModerationRow(row) {
     eventKey: String(row.event_key || ""),
     eventCount: Number(row.event_count || 0),
     lastEventAt: Number(row.last_event_at || 0)
+  };
+}
+
+function mapTrustedLinkRow(row) {
+  return {
+    key: String(row.key || ""),
+    url: String(row.url || ""),
+    createdAt: Number(row.created_at || 0)
   };
 }
 
@@ -502,6 +516,97 @@ async function removeRestrictedEmojiByKey(key) {
   return {
     removed: true,
     emoji: mapEmojiRow(existing)
+  };
+}
+
+async function listTrustedLinks() {
+  const db = await getDatabase();
+  return getRows(
+    db,
+    `
+      SELECT key, url, created_at
+      FROM trusted_links
+      ORDER BY created_at ASC, key ASC
+    `
+  ).map(mapTrustedLinkRow);
+}
+
+async function addTrustedLink(linkRecord) {
+  if (!linkRecord?.key || !linkRecord?.url) {
+    throw new Error("Missing trusted link");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT key, url, created_at
+      FROM trusted_links
+      WHERE key = ?
+      LIMIT 1
+    `,
+    [linkRecord.key]
+  )[0];
+
+  if (existing) {
+    return {
+      added: false,
+      link: mapTrustedLinkRow(existing)
+    };
+  }
+
+  db.run(
+    `
+      INSERT INTO trusted_links (
+        key,
+        url,
+        created_at
+      ) VALUES (?, ?, ?)
+    `,
+    [
+      linkRecord.key,
+      linkRecord.url,
+      Date.now()
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+
+  return {
+    added: true,
+    link: linkRecord
+  };
+}
+
+async function removeTrustedLinkByKey(key) {
+  if (!key) {
+    throw new Error("Missing trusted link key");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT key, url, created_at
+      FROM trusted_links
+      WHERE key = ?
+      LIMIT 1
+    `,
+    [key]
+  )[0];
+
+  if (!existing) {
+    return {
+      removed: false,
+      link: null
+    };
+  }
+
+  db.run("DELETE FROM trusted_links WHERE key = ?", [key]);
+  schedulePersist(db, { immediate: true });
+
+  return {
+    removed: true,
+    link: mapTrustedLinkRow(existing)
   };
 }
 
@@ -726,6 +831,7 @@ async function clearDailyStatsTracking(newWindowStartedAt = Date.now()) {
 async function getRestrictedEmojiDatabaseSnapshot() {
   const db = await getDatabase();
   const emojis = await listRestrictedEmojis();
+  const trustedLinks = await listTrustedLinks();
   const emojiTimeoutMs = await getEmojiTimeoutMs();
   const dailyStats = await getDailyStatsSnapshot();
 
@@ -733,10 +839,12 @@ async function getRestrictedEmojiDatabaseSnapshot() {
     path: databasePath,
     emojiTimeoutMs,
     emojis,
+    trustedLinks,
     dailyStats,
     tableCounts: {
       appConfig: Number(getScalarValue(db, "SELECT COUNT(*) FROM app_config") || 0),
       restrictedEmojis: Number(getScalarValue(db, "SELECT COUNT(*) FROM restricted_emojis") || 0),
+      trustedLinks: Number(getScalarValue(db, "SELECT COUNT(*) FROM trusted_links") || 0),
       dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
@@ -780,6 +888,9 @@ module.exports = {
   listRestrictedEmojis,
   addRestrictedEmoji,
   removeRestrictedEmojiByKey,
+  listTrustedLinks,
+  addTrustedLink,
+  removeTrustedLinkByKey,
   recordDailyTrackedMessage,
   recordDailyModerationEvent,
   getDailyStatsSnapshot,

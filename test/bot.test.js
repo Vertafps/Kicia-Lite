@@ -870,6 +870,46 @@ test("kernel config command updates emoji timeout", async () => {
   assert.match(replyPayload.embeds[0].data.description, /15m/i);
 });
 
+test("kernel allowlink command adds and removes trusted links", async () => {
+  let replyPayload = null;
+  const links = [];
+  const message = {
+    content: "$allowlink example.com/safe",
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  };
+  const deps = {
+    listLinks: async () => [...links],
+    addLink: async (link) => {
+      links.push(link);
+      return { added: true, link };
+    },
+    removeLink: async (key) => {
+      const index = links.findIndex((link) => link.key === key);
+      const [removed] = index >= 0 ? links.splice(index, 1) : [null];
+      return { removed: Boolean(removed), link: removed };
+    }
+  };
+
+  let handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(links[0].url, "https://example.com/safe");
+  assert.match(replyPayload.embeds[0].data.description, /added trusted link/i);
+
+  message.content = "$allowlink";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /https:\/\/example\.com\/safe/i);
+
+  message.content = "$removelink https://example.com/safe";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(links.length, 0);
+  assert.match(replyPayload.embeds[0].data.description, /removed trusted link/i);
+});
+
 test("database command is kernel-only", async () => {
   let replyPayload = null;
 
@@ -890,6 +930,7 @@ test("database command is kernel-only", async () => {
       tableCounts: {
         appConfig: 1,
         restrictedEmojis: 1,
+        trustedLinks: 2,
         dailyUsers: 2,
         dailyChannels: 1,
         dailyHours: 1,
@@ -903,6 +944,7 @@ test("database command is kernel-only", async () => {
   assert.ok(replyPayload);
   assert.match(replyPayload.embeds[0].data.description, /SQLite Database/i);
   assert.match(replyPayload.embeds[0].data.description, /Restricted Emoji Rows:\*\* 1/i);
+  assert.match(replyPayload.embeds[0].data.description, /Trusted Link Rows:\*\* 2/i);
   assert.match(replyPayload.embeds[0].data.description, /Daily User Rows:\*\* 2/i);
   assert.match(replyPayload.embeds[0].data.description, /Daily Moderation Rows:\*\* 3/i);
 });

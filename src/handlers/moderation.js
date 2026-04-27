@@ -14,11 +14,11 @@ const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
-const { recordDailyModerationEvent } = require("../restricted-emoji-db");
+const { listTrustedLinks, recordDailyModerationEvent } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText, normalizeText } = require("../text");
-const { safeSend } = require("../utils/respond");
+const { safeReply, safeSend } = require("../utils/respond");
 
 const raidBuckets = new Map();
 const lastRaidAlertAt = new Map();
@@ -92,6 +92,16 @@ const SUSPICIOUS_PATTERNS = [
 const SUSPICIOUS_ANTI_PATTERNS = [
   /\b(?:don t|dont|do not|stop)\s+(?:dm|pm|message|msg)\s+me\b/,
   /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/
+];
+const SUSPICIOUS_PUBLIC_REPLIES = [
+  "hmm interesting...",
+  "ahh totally not sus...",
+  "okay that is getting very sus..."
+];
+const SELLING_PUBLIC_REPLIES = [
+  "marketplace energy spotted...",
+  "selling arc detected...",
+  "that price tag blinked at me..."
 ];
 
 const ASSERTION_EXCLUDE_PATTERNS = [
@@ -473,6 +483,36 @@ function getSuspiciousAction(count) {
   return "alert";
 }
 
+function pickPublicReplyLine(lines, seed) {
+  if (!Array.isArray(lines) || !lines.length) return "";
+  const text = String(seed || "");
+  const score = [...text].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return lines[score % lines.length];
+}
+
+function buildSuspiciousPublicReply(state) {
+  const hit = Math.max(1, Math.min(state?.count || 1, SUSPICIOUS_TIMEOUT_THRESHOLD));
+  const line = SUSPICIOUS_PUBLIC_REPLIES[hit - 1] || SUSPICIOUS_PUBLIC_REPLIES[0];
+  return `${line} (${hit}/${SUSPICIOUS_TIMEOUT_THRESHOLD})`;
+}
+
+function buildSellingPublicReply(message) {
+  const line = pickPublicReplyLine(SELLING_PUBLIC_REPLIES, `${message?.id || ""}:${message?.content || ""}`);
+  return `${line} staff got the ping.`;
+}
+
+async function tryReplyModerationMessage(message, content, replyType) {
+  const sent = await safeReply(message, {
+    content,
+    allowedMentions: { repliedUser: false }
+  }).catch((err) => {
+    recordRuntimeEvent("warn", `${replyType}-public-reply`, err?.message || err);
+    return false;
+  });
+
+  return Boolean(sent);
+}
+
 function rememberSuspiciousMessage(message, signals, now = Date.now()) {
   const key = buildSuspiciousUserKey(message);
   if (!key) {
@@ -573,6 +613,10 @@ function buildSignalAlertPanel(message, signals) {
     ].filter(Boolean).join("\n\n"),
     color: signals.some((signal) => signal.type === "selling") ? DANGER : WARN
   };
+}
+
+async function replyToSellingMessage(message) {
+  return tryReplyModerationMessage(message, buildSellingPublicReply(message), "selling");
 }
 
 function buildBlockedLinkTimeoutPayload({ message, signal, durationMs }) {
@@ -768,6 +812,11 @@ async function handleSuspiciousMessage(message, signals, {
   now = Date.now()
 } = {}) {
   const state = rememberSuspiciousMessage(message, signals, now);
+  const publicReplySent = await tryReplyModerationMessage(
+    message,
+    buildSuspiciousPublicReply(state),
+    "suspicious"
+  );
   let dmSent = false;
   let timeoutResult = {
     applied: false,
@@ -810,7 +859,10 @@ async function handleSuspiciousMessage(message, signals, {
     durationMs: timeoutMs
   })).catch(() => null);
 
-  return state;
+  return {
+    ...state,
+    publicReplySent
+  };
 }
 
 async function maybeHandleModerationWatch(message, {
@@ -832,7 +884,14 @@ async function maybeHandleModerationWatch(message, {
     }
 
     if (hasLink && resolvedKb) {
-      const blockedLinkSignal = detectBlockedLinkSignal(message.content, { kb: resolvedKb });
+      const trustedLinks = await listTrustedLinks().catch((err) => {
+        recordRuntimeEvent("warn", "trusted-link-list", err?.message || err);
+        return [];
+      });
+      const blockedLinkSignal = detectBlockedLinkSignal(message.content, {
+        kb: resolvedKb,
+        trustedLinks
+      });
       if (blockedLinkSignal) {
         await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });
         return true;
@@ -853,7 +912,13 @@ async function maybeHandleModerationWatch(message, {
       }
     }
 
+    let publicReplySent = false;
+    const hasSellingSignal = contentSignals.some((signal) => signal.type === "selling");
+
     if (contentSignals.length) {
+      if (hasSellingSignal && !suspiciousSignals.length) {
+        publicReplySent = await replyToSellingMessage(message);
+      }
       await sendLog(message.guild, buildSignalAlertPanel(message, contentSignals));
       const eventTypes = new Set(contentSignals.map((signal) => signal.type));
       for (const eventType of eventTypes) {
@@ -864,7 +929,8 @@ async function maybeHandleModerationWatch(message, {
     }
 
     if (suspiciousSignals.length) {
-      await handleSuspiciousMessage(message, suspiciousSignals, { sendLog, now });
+      const state = await handleSuspiciousMessage(message, suspiciousSignals, { sendLog, now });
+      publicReplySent = publicReplySent || state.publicReplySent;
     }
 
     const raidAlert = observeRaidMessage(message);
@@ -872,6 +938,8 @@ async function maybeHandleModerationWatch(message, {
       await sendLog(message.guild, buildRaidAlertPanel(message, raidAlert));
       await recordModerationStat("raid_alert", now);
     }
+
+    if (hasSellingSignal || suspiciousSignals.length) return true;
   } catch (err) {
     console.warn("Moderation watcher failed:", err.message);
     recordRuntimeEvent("warn", "moderation-watch", err?.message || err);

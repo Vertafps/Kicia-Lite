@@ -2,8 +2,13 @@ const {
   LINK_MODERATION_TIMEOUT_MS,
   RAID_WINDOW_MS,
   RAID_MIN_DISTINCT_USERS,
-  RAID_ALERT_COOLDOWN_MS
+  RAID_ALERT_COOLDOWN_MS,
+  SUSPICIOUS_ALERT_WINDOW_MS,
+  SUSPICIOUS_WARNING_THRESHOLD,
+  SUSPICIOUS_TIMEOUT_THRESHOLD,
+  SUSPICIOUS_TIMEOUT_MS
 } = require("../config");
+const { formatDuration } = require("../duration");
 const { buildPanel, DANGER, WARN } = require("../embed");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, extractUrlsFromText } = require("../link-policy");
@@ -17,10 +22,11 @@ const { safeSend } = require("../utils/respond");
 const raidBuckets = new Map();
 const lastRaidAlertAt = new Map();
 const recentUserMessages = new Map();
+const suspiciousUserBuckets = new Map();
 
 const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits)\b/;
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|bucks?|dollars?)\b/;
-const SELL_PRICE_RE = /(?:^|\s)(?:for\s+)?(?:[$€£]\s*)?\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd)?(?:\s|$)/;
+const SELL_PRICE_RE = /(?:^|\s)(?:for\s+)?(?:[$\u20ac\u00a3]\s*)?\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd)?(?:\s|$)/;
 const SELL_CONTEXT_WINDOW_MS = 2 * 60 * 1000;
 const SELL_CONTEXT_MAX_MESSAGES = 3;
 const SELL_OFFER_PATTERNS = [
@@ -47,9 +53,24 @@ const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|rul
 
 const SUSPICIOUS_PATTERNS = [
   {
+    label: "credential-request",
+    pattern: /\b(?:send|give|share|paste)\s+(?:me\s+)?(?:your\s+)?(?:password|token|cookie|cookies|login)\b/,
+    reason: "asking for private account credentials"
+  },
+  {
+    label: "private-more-info",
+    pattern: /\b(?:more|extra|other)\s+(?:stuff|info|details|links?|files?)\b.*\b(?:dm|pm|message|msg)\s+me\b/,
+    reason: "moving extra details into private messages"
+  },
+  {
     label: "dm-link-offer",
-    pattern: /\bdm me for (?:the |a )?(?:link|download|invite|crack|leak)\b/,
+    pattern: /\b(?:dm|pm|message|msg)\s+me\s+for\s+(?:the\s+|a\s+)?(?:link|download|invite|crack|leak|file|script|executor|key|account|config)\b/,
     reason: "offering links privately"
+  },
+  {
+    label: "private-contact",
+    pattern: /\b(?:dm|pm|message|msg)\s+me\b/,
+    reason: "moving the conversation into private messages"
   },
   {
     label: "disable-defender",
@@ -63,14 +84,19 @@ const SUSPICIOUS_PATTERNS = [
   },
   {
     label: "paste-this",
-    pattern: /\bpaste this\b/,
-    reason: "asking users to paste unknown content"
+    pattern: /\b(?:paste|run|download)\s+this\b/,
+    reason: "asking users to run, download, or paste unknown content"
   },
   {
     label: "free-premium",
     pattern: /\bfree premium\b/,
     reason: "claiming free premium access"
   }
+];
+const SUSPICIOUS_ANTI_PATTERNS = [
+  /\b(?:don t|dont|do not|stop)\s+(?:dm|pm|message|msg)\s+me\b/,
+  /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/,
+  /\b(?:don t|dont|do not|never)\s+(?:disable|turn off)\s+(?:windows\s+)?(?:defender|antivirus)\b/
 ];
 
 const ASSERTION_EXCLUDE_PATTERNS = [
@@ -147,6 +173,11 @@ async function tryTimeoutMessageMember(member, durationMs, reason) {
 function buildRecentUserMessageKey(message) {
   if (!message?.guildId || !message?.channelId || !message?.author?.id) return null;
   return `${message.guildId}:${message.channelId}:${message.author.id}`;
+}
+
+function buildSuspiciousUserKey(message) {
+  if (!message?.guildId || !message?.author?.id) return null;
+  return `${message.guildId}:${message.author.id}`;
 }
 
 function hasBypassPermission(message) {
@@ -249,6 +280,7 @@ function detectContextualSellingSignal(messageTexts) {
 function detectSuspiciousSignal(content) {
   const normalized = normalizeText(content);
   if (!normalized) return null;
+  if (SUSPICIOUS_ANTI_PATTERNS.some((pattern) => pattern.test(normalized))) return null;
 
   for (const candidate of SUSPICIOUS_PATTERNS) {
     if (candidate.pattern.test(normalized)) {
@@ -425,6 +457,48 @@ function pruneRecentUserMessages(now = Date.now()) {
   }
 }
 
+function pruneSuspiciousUserState(now = Date.now()) {
+  for (const [key, entry] of suspiciousUserBuckets.entries()) {
+    entry.events = entry.events.filter((event) => now - event.at <= SUSPICIOUS_ALERT_WINDOW_MS);
+    if (!entry.events.length) suspiciousUserBuckets.delete(key);
+  }
+}
+
+function getSuspiciousAction(count) {
+  if (count >= SUSPICIOUS_TIMEOUT_THRESHOLD) return "timeout";
+  if (count >= SUSPICIOUS_WARNING_THRESHOLD) return "warn";
+  return "alert";
+}
+
+function rememberSuspiciousMessage(message, signals, now = Date.now()) {
+  const key = buildSuspiciousUserKey(message);
+  if (!key) {
+    return {
+      count: 1,
+      action: "alert",
+      events: []
+    };
+  }
+
+  pruneSuspiciousUserState(now);
+  const entry = suspiciousUserBuckets.get(key) || { events: [] };
+  entry.events.push({
+    at: now,
+    channelId: message.channelId,
+    messageId: message.id,
+    url: buildMessageUrl(message),
+    reasons: signals.map((signal) => signal.reason)
+  });
+  entry.events = entry.events.slice(-Math.max(SUSPICIOUS_TIMEOUT_THRESHOLD + 2, 5));
+  suspiciousUserBuckets.set(key, entry);
+
+  return {
+    count: entry.events.length,
+    action: getSuspiciousAction(entry.events.length),
+    events: [...entry.events]
+  };
+}
+
 function rememberRecentUserMessage(message, now = Date.now()) {
   const key = buildRecentUserMessageKey(message);
   if (!key) return [String(message?.content || "")];
@@ -553,6 +627,67 @@ function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult
   };
 }
 
+function formatSignalReasons(signals) {
+  return signals
+    .map((signal) => `- ${signal.reason}`)
+    .join("\n");
+}
+
+function buildSuspiciousDmPayload({ message, signals, action, durationMs, count }) {
+  const isTimeout = action === "timeout";
+
+  return {
+    embeds: [
+      buildPanel({
+        header: isTimeout ? "Suspicious Message Timeout" : "Suspicious Message Warning",
+        body: [
+          isTimeout
+            ? `i timed you out for ${formatDuration(durationMs)} because multiple recent messages looked suspicious`
+            : "i flagged one of your recent messages as suspicious",
+          "please do not repeat this kind of message; staff have been notified",
+          `**Channel:** <#${message.channelId}>`,
+          `**Suspicious Hits:** ${count}`,
+          `**Why:**\n${formatSignalReasons(signals)}`,
+          `**Message:** ${trimExcerpt(message.content, 180)}`
+        ].join("\n\n"),
+        color: isTimeout ? DANGER : WARN
+      })
+    ]
+  };
+}
+
+function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs }) {
+  const link = buildMessageUrl(message);
+  const action =
+    state.action === "timeout"
+      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
+      : state.action === "warn"
+        ? `dm warning ${dmSent ? "sent" : "not sent"}`
+        : "log only";
+
+  return {
+    header:
+      state.action === "timeout"
+        ? "Suspicious Message Timeout"
+        : state.action === "warn"
+          ? "Suspicious Message Warning"
+          : "Suspicious Message Alert",
+    body: [
+      state.action === "alert"
+        ? "first suspicious message seen in the current watch window"
+        : "repeat suspicious messages seen in the current watch window",
+      `**User:** <@${message.author?.id}>`,
+      `**Channel:** <#${message.channelId}>`,
+      link ? `**Jump:** [Open message](${link})` : null,
+      `**Action:** ${action}`,
+      `**Suspicious Hits:** ${state.count} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
+      `**Why:**\n${formatSignalReasons(signals)}`,
+      `**Message:** ${trimExcerpt(message.content)}`
+    ].filter(Boolean).join("\n\n"),
+    color: state.action === "timeout" ? DANGER : WARN
+  };
+}
+
 function buildRaidAlertPanel(message, raidAlert) {
   const link = raidAlert.sampleUrl || buildMessageUrl(message);
 
@@ -619,17 +754,65 @@ async function handleBlockedLinkMessage(message, signal, { sendLog = sendLogPane
   return true;
 }
 
+async function handleSuspiciousMessage(message, signals, {
+  sendLog = sendLogPanel,
+  timeoutMs = SUSPICIOUS_TIMEOUT_MS,
+  now = Date.now()
+} = {}) {
+  const state = rememberSuspiciousMessage(message, signals, now);
+  let dmSent = false;
+  let timeoutResult = {
+    applied: false,
+    reason: "not needed"
+  };
+
+  if (state.action === "timeout") {
+    timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "repeated suspicious messages");
+    dmSent = await safeSend(message.author, buildSuspiciousDmPayload({
+      message,
+      signals,
+      action: state.action,
+      durationMs: timeoutMs,
+      count: state.count
+    }));
+
+    if (!timeoutResult.applied) {
+      recordRuntimeEvent("warn", "suspicious-timeout", timeoutResult.reason);
+    }
+  } else if (state.action === "warn") {
+    dmSent = await safeSend(message.author, buildSuspiciousDmPayload({
+      message,
+      signals,
+      action: state.action,
+      durationMs: timeoutMs,
+      count: state.count
+    }));
+  }
+
+  await sendLog(message.guild, buildSuspiciousLogPanel({
+    message,
+    signals,
+    state,
+    timeoutResult,
+    dmSent,
+    durationMs: timeoutMs
+  })).catch(() => null);
+
+  return state;
+}
+
 async function maybeHandleModerationWatch(message, {
   kb,
   runtimeStatus,
   fetchKbFn = fetchKb,
-  sendLog = sendLogPanel
+  sendLog = sendLogPanel,
+  now = Date.now()
 } = {}) {
   if (!message?.inGuild?.() || message.author?.bot) return false;
   if (hasBypassPermission(message)) return false;
 
   try {
-    const recentMessages = rememberRecentUserMessage(message);
+    const recentMessages = rememberRecentUserMessage(message, now);
     let resolvedKb = kb || null;
     const hasLink = mightContainLink(message.content);
     if (!resolvedKb && (hasLink || mightContainFakeInfo(message.content))) {
@@ -648,16 +831,22 @@ async function maybeHandleModerationWatch(message, {
       kb: resolvedKb,
       runtimeStatus: runtimeStatus || getRuntimeStatus()
     });
+    const suspiciousSignals = signals.filter((signal) => signal.type === "suspicious");
+    const contentSignals = signals.filter((signal) => signal.type !== "suspicious");
 
-    if (!signals.some((signal) => signal.type === "selling")) {
+    if (!contentSignals.some((signal) => signal.type === "selling")) {
       const contextualSellingSignal = detectContextualSellingSignal(recentMessages);
       if (contextualSellingSignal) {
-        signals.push(contextualSellingSignal);
+        contentSignals.push(contextualSellingSignal);
       }
     }
 
-    if (signals.length) {
-      await sendLog(message.guild, buildSignalAlertPanel(message, signals));
+    if (contentSignals.length) {
+      await sendLog(message.guild, buildSignalAlertPanel(message, contentSignals));
+    }
+
+    if (suspiciousSignals.length) {
+      await handleSuspiciousMessage(message, suspiciousSignals, { sendLog, now });
     }
 
     const raidAlert = observeRaidMessage(message);
@@ -676,6 +865,7 @@ function resetModerationState() {
   raidBuckets.clear();
   lastRaidAlertAt.clear();
   recentUserMessages.clear();
+  suspiciousUserBuckets.clear();
 }
 
 module.exports = {

@@ -293,10 +293,16 @@ test("contextual selling detection catches split sell and price messages", () =>
   assert.equal(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]), null);
 });
 
-test("suspicious detection catches dm-for-link wording", () => {
+test("suspicious detection catches private DM steering while skipping reminders", () => {
   const signal = detectSuspiciousSignal("dm me for the link");
   assert.ok(signal);
   assert.match(signal.reason, /links privately/i);
+
+  const vagueSignal = detectSuspiciousSignal("OK MORE STUFF IS THERE, EXPLAIN: dm me");
+  assert.ok(vagueSignal);
+  assert.match(vagueSignal.reason, /private messages/i);
+
+  assert.equal(detectSuspiciousSignal("dont dm me"), null);
 });
 
 test("link detection allows docs links and gif links while blocking other files", () => {
@@ -382,6 +388,56 @@ test("blocked links are deleted, logged, and timed out", async () => {
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Timeout/i);
+});
+
+test("suspicious messages escalate from log to warning to timeout", async () => {
+  const fixture = buildModerationMessage("OK MORE STUFF IS THERE, EXPLAIN: dm me");
+  const baseNow = 1_000;
+
+  const firstHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow
+  });
+
+  assert.equal(firstHandled, false);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Suspicious Message Alert/i);
+  assert.match(fixture.logs[0].body, /log only/i);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+
+  fixture.message.id = "message-2";
+  fixture.message.content = "dm me for the script";
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow + 1_000
+  });
+
+  assert.equal(fixture.logs.length, 2);
+  assert.match(fixture.logs[1].header, /Suspicious Message Warning/i);
+  assert.match(fixture.logs[1].body, /dm warning sent/i);
+  assert.equal(fixture.dms.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+
+  fixture.message.id = "message-3";
+  fixture.message.content = "free premium dm me";
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow + 2_000
+  });
+
+  assert.equal(fixture.logs.length, 3);
+  assert.match(fixture.logs[2].header, /Suspicious Message Timeout/i);
+  assert.match(fixture.logs[2].body, /timeout 10m/i);
+  assert.equal(fixture.dms.length, 2);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 10 * 60 * 1000);
 });
 
 test("restricted emoji database adds and removes emojis", async () => {

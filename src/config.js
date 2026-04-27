@@ -58,7 +58,10 @@ const MODERATION_BYPASS_ROLE_IDS = [...EMOJI_MANAGER_ROLE_IDS];
 const RESTRICTED_REACTION_TARGET_ROLE_IDS = [...EMOJI_MANAGER_ROLE_IDS];
 const TRUSTED_LINK_URLS = [
   "https://rdd.whatexpsare.online/",
+  "https://rdd.weao.xyz/",
+  "https://rdd.weao.gg/",
   "https://whatexpsare.online/",
+  "https://inject.today/",
   "https://inject.today/rdd"
 ];
 

@@ -309,8 +309,11 @@ test("roasting detection catches playful cooking without logging food talk", () 
   assert.ok(detectRoastingSignal("bro got cooked"));
   assert.ok(detectRoastingSignal("is someone getting roasted rn"));
   assert.ok(detectRoastingSignal("skill issue honestly"));
+  assert.ok(detectRoastingSignal("Jesus a bot anyways, hopping from one to another then leaving always the same sht"));
+  assert.ok(detectRoastingSignal("npc behavior"));
   assert.equal(detectRoastingSignal("i cooked chicken for dinner"), null);
   assert.equal(detectRoastingSignal("roasted coffee beans"), null);
+  assert.equal(detectRoastingSignal("the discord bot is online"), null);
 });
 
 test("suspicious detection catches private DM steering while skipping reminders", () => {

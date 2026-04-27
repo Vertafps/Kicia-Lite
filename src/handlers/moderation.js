@@ -139,7 +139,12 @@ const ROASTING_PATTERNS = [
   /\b(?:get|got|getting|is|are|was|were)\s+(?:absolutely\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
   /\b(?:cook|cooked|cooking|roast|roasted|roasting)\s+(?:him|her|them|that|this|bro|blud|vro|lil bro)\b/,
   /\b(?:skill issue|ratio|you fell off|washed|pack watch|hold this l)\b/,
-  /\b(?:clown|bozo)\s+(?:moment|behavior|energy|activity)\b/
+  /\b(?:clown|bozo)\s+(?:moment|behavior|energy|activity)\b/,
+  /\b(?:you|u|he|she|they|bro|blud|vro|lil bro)\s+(?:are|re|is|a|an)?\s*(?:npc|bot|bots?)\s+(?:anyways?|fr|ngl|lol|lmao)?\b/,
+  /\b(?:npc|bot)\s+(?:behavior|activity|energy|moment)\b/,
+  /\bhopping\s+from\s+one\s+to\s+another\b/,
+  /\balways\s+the\s+same\s+(?:sht|shit|thing|bs)\b/,
+  /\bsame\s+(?:sht|shit|bs)\b/
 ];
 const ROASTING_IGNORE_PATTERNS = [
   /\b(?:cook|cooked|cooking)\s+(?:food|meal|dinner|lunch|breakfast|rice|chicken|pizza|recipe)\b/,

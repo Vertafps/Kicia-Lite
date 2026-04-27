@@ -1,6 +1,11 @@
-const { BRAND } = require("./config");
+const { BRAND, TRUSTED_LINK_URLS } = require("./config");
 
-const BRAND_URLS = [BRAND.DOCS_JUMP_URL, BRAND.TICKET_JUMP_URL, BRAND.STATUS_JUMP_URL];
+const STATIC_ALLOWED_URLS = [
+  BRAND.DOCS_JUMP_URL,
+  BRAND.TICKET_JUMP_URL,
+  BRAND.STATUS_JUMP_URL,
+  ...TRUSTED_LINK_URLS
+];
 const URL_CANDIDATE_RE = /<?(?:https?:\/\/[^\s<>"'`|]+|www\.[^\s<>"'`|]+|discord\.gg\/[^\s<>"'`|]+|discord(?:app)?\.com\/invite\/[^\s<>"'`|]+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>"'`|]+)>?/gi;
 const TRAILING_PUNCTUATION_RE = /[),.!?;:\]>]+$/;
 const EXACT_ONLY_HOSTS = new Set([
@@ -93,7 +98,7 @@ function collectUrlsFromValue(value, target) {
 function buildAllowedLinkRules(kb) {
   if (!kb || typeof kb !== "object") {
     return {
-      exactKeys: new Set(BRAND_URLS.map((url) => normalizeUrlCandidate(url)?.key).filter(Boolean)),
+      exactKeys: new Set(STATIC_ALLOWED_URLS.map((url) => normalizeUrlCandidate(url)?.key).filter(Boolean)),
       rootHosts: new Set()
     };
   }
@@ -105,7 +110,7 @@ function buildAllowedLinkRules(kb) {
   const rootHosts = new Set();
   const foundUrls = [];
 
-  collectUrlsFromValue(BRAND_URLS, foundUrls);
+  collectUrlsFromValue(STATIC_ALLOWED_URLS, foundUrls);
   collectUrlsFromValue(kb, foundUrls);
 
   for (const url of foundUrls) {

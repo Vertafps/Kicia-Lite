@@ -120,7 +120,7 @@ function buildRuntimeSection(message) {
 
 function buildModerationGuardLines() {
   return [
-    `**Link Guard:** docs allowlist + tenor | timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`,
+    `**Link Guard:** docs allowlist + trusted extras + tenor | timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`,
     "**False Info Guard:** status + executor claim mismatch alerts to logs",
     [
       "**Suspicious Alerts:**",

@@ -321,6 +321,9 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("https://github.com/user/repo/blob/main/script.lua", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://raw.githubusercontent.com/user/repo/main/script.lua", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://gist.githubusercontent.com/user/abc123/raw/script.lua", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://rdd.whatexpsare.online/", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://whatexpsare.online/", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://inject.today/rdd", { kb }), null);
 
   const signal = detectBlockedLinkSignal("check https://bing.com/search?q=kicia", { kb });
   assert.ok(signal);

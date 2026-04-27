@@ -7,9 +7,12 @@ const {
   NO_RESPONSE_CHANNEL_IDS,
   CHANNEL_LOCK_TARGETS,
   SUSPICIOUS_ALERT_WINDOW_MS,
-  SUSPICIOUS_WARNING_THRESHOLD,
   SUSPICIOUS_TIMEOUT_THRESHOLD,
-  SUSPICIOUS_TIMEOUT_MS
+  SUSPICIOUS_TIMEOUT_MS,
+  SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SELLING_REPEAT_WINDOW_MS,
+  SELLING_REPEAT_TIMEOUT_THRESHOLD,
+  SELLING_TIMEOUT_MS
 } = require("./config");
 const { formatDuration } = require("./duration");
 const { SUCCESS, WARN } = require("./embed");
@@ -18,11 +21,14 @@ const { getRuntimeHealthSnapshot } = require("./runtime-health");
 const { getRuntimeStatus } = require("./runtime-status");
 
 const JARVIS_STEPS = [
+  "Wake core",
   "Runtime and log scan",
   "KB refresh",
+  "Moderation matrix",
   "Security audit",
   "Final compile"
 ];
+const JARVIS_STEP_DELAY_MS = 1_800;
 const LOG_CHANNEL_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
@@ -84,13 +90,19 @@ function describeLockState(channel, roleId) {
 }
 
 function buildJarvisProgressBody(stepIndex, note) {
+  const completed = Math.max(0, Math.min(JARVIS_STEPS.length, stepIndex));
+  const progressWidth = 12;
+  const filled = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * progressWidth);
+  const progressBar = `${"#".repeat(filled)}${"-".repeat(Math.max(0, progressWidth - filled))}`;
   const lines = [
-    "Jarvis is running checks...",
+    "JARVIS // diagnostic sweep online",
+    `Core heat: [${progressBar}]`,
+    "Running staged checks; max sweep target is under 15 seconds.",
     "",
     ...JARVIS_STEPS.map((step, index) => {
-      if (index < stepIndex) return `✅ ${step}`;
-      if (index === stepIndex) return `🟡 ${step}`;
-      return `⚪ ${step}`;
+      if (index < stepIndex) return `[ok] ${step}`;
+      if (index === stepIndex) return `[scan] ${step}`;
+      return `[wait] ${step}`;
     })
   ];
 
@@ -99,6 +111,10 @@ function buildJarvisProgressBody(stepIndex, note) {
   }
 
   return lines.join("\n");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
 function buildRuntimeSection(message) {
@@ -124,11 +140,16 @@ function buildModerationGuardLines() {
     "**False Info Guard:** status + executor claim mismatch alerts to logs",
     [
       "**Suspicious Alerts:**",
-      `warn at ${SUSPICIOUS_WARNING_THRESHOLD}`,
       `timeout at ${SUSPICIOUS_TIMEOUT_THRESHOLD} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
       `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`
     ].join(" "),
-    "**Suspicious Rules:** private DM steering, credential asks, cracked/leaked/free premium, paste/run/download prompts"
+    "**Suspicious Rules:** private DM steering, credential asks, cracked/leaked/free premium, paste/run/download prompts",
+    [
+      "**Selling Guard:**",
+      `timeout when confidence > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`,
+      `or ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      `timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
+    ].join(" ")
   ];
 }
 
@@ -152,7 +173,7 @@ async function buildKbSection(refreshKb) {
 async function buildSecuritySection(message, channelLockRoleId) {
   if (!message.inGuild?.()) {
     return {
-      text: `## Security\n**Scope:** dm mode, guild security checks skipped`,
+      text: "## Security\n**Scope:** dm mode, guild security checks skipped",
       hasIssue: false
     };
   }
@@ -234,7 +255,12 @@ async function buildSecuritySection(message, channelLockRoleId) {
   };
 }
 
-async function runJarvisDiagnostics(message, { refreshKb, channelLockRoleId, onProgress } = {}) {
+async function runJarvisDiagnostics(message, {
+  refreshKb,
+  channelLockRoleId,
+  onProgress,
+  stepDelayMs = JARVIS_STEP_DELAY_MS
+} = {}) {
   const progress = async (stepIndex, note) => {
     if (typeof onProgress === "function") {
       await onProgress({
@@ -245,16 +271,25 @@ async function runJarvisDiagnostics(message, { refreshKb, channelLockRoleId, onP
     }
   };
 
-  await progress(0, "reading runtime status and recent logs");
+  await progress(0, "warming up fake arc reactor and checking command uplink");
+  await sleep(stepDelayMs);
+
+  await progress(1, "reading runtime status and recent logs");
   const runtimeSection = buildRuntimeSection(message);
+  await sleep(stepDelayMs);
 
-  await progress(1, "refreshing KB and validating docs cache");
+  await progress(2, "refreshing KB and validating docs cache");
   const kbSection = await buildKbSection(refreshKb);
+  await sleep(stepDelayMs);
 
-  await progress(2, "checking log channels, emoji db, daily tracking, no-response channels, and lockdown targets");
+  await progress(3, "cross-checking false-info, suspicious, selling, and link guard policy");
+  await sleep(stepDelayMs);
+
+  await progress(4, "checking log channels, emoji db, daily tracking, no-response channels, and lockdown targets");
   const securitySection = await buildSecuritySection(message, channelLockRoleId);
+  await sleep(Math.min(stepDelayMs, 1_200));
 
-  await progress(3, "compiling final report");
+  await progress(5, "compiling final report");
   const hasIssue = runtimeSection.hasIssue || kbSection.hasIssue || securitySection.hasIssue;
 
   return {

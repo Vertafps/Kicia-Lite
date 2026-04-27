@@ -6,7 +6,11 @@ const {
   SUSPICIOUS_ALERT_WINDOW_MS,
   SUSPICIOUS_WARNING_THRESHOLD,
   SUSPICIOUS_TIMEOUT_THRESHOLD,
-  SUSPICIOUS_TIMEOUT_MS
+  SUSPICIOUS_TIMEOUT_MS,
+  SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SELLING_REPEAT_WINDOW_MS,
+  SELLING_REPEAT_TIMEOUT_THRESHOLD,
+  SELLING_TIMEOUT_MS
 } = require("../config");
 const { formatDuration } = require("../duration");
 const { buildPanel, DANGER, WARN } = require("../embed");
@@ -24,6 +28,7 @@ const raidBuckets = new Map();
 const lastRaidAlertAt = new Map();
 const recentUserMessages = new Map();
 const suspiciousUserBuckets = new Map();
+const sellingUserBuckets = new Map();
 
 const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits)\b/;
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|bucks?|dollars?)\b/;
@@ -128,6 +133,30 @@ const SELLING_PUBLIC_REPLIES = [
   "that sounded a bit too salesy...",
   "not the trading floor..."
 ];
+const ROASTING_PATTERNS = [
+  /\b(?:bro|blud|vro|lil bro)\s+(?:got\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
+  /\b(?:someone|somebody|some1|bro|blud|vro|lil bro)\s+(?:is\s+)?(?:getting\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
+  /\b(?:get|got|getting|is|are|was|were)\s+(?:absolutely\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
+  /\b(?:cook|cooked|cooking|roast|roasted|roasting)\s+(?:him|her|them|that|this|bro|blud|vro|lil bro)\b/,
+  /\b(?:skill issue|ratio|you fell off|washed|pack watch|hold this l)\b/,
+  /\b(?:clown|bozo)\s+(?:moment|behavior|energy|activity)\b/
+];
+const ROASTING_IGNORE_PATTERNS = [
+  /\b(?:cook|cooked|cooking)\s+(?:food|meal|dinner|lunch|breakfast|rice|chicken|pizza|recipe)\b/,
+  /\broast(?:ed|ing)?\s+(?:coffee|beans|chicken|beef|pork|potatoes)\b/
+];
+const ROASTING_PUBLIC_REPLIES = [
+  "oohh we got a lil roasting going on here...",
+  "is someone getting cooked?",
+  "hold up, the kitchen is getting warm...",
+  "chat is preheating rn...",
+  "that sounded like a tiny cookout...",
+  "someone brought seasoning to the conversation...",
+  "ok vro, that one had heat...",
+  "the roast meter just blinked...",
+  "small flame detected...",
+  "this chat got a little crispy..."
+];
 
 const ASSERTION_EXCLUDE_PATTERNS = [
   /\?/,
@@ -210,6 +239,11 @@ function buildSuspiciousUserKey(message) {
   return `${message.guildId}:${message.author.id}`;
 }
 
+function buildSellingUserKey(message) {
+  if (!message?.guildId || !message?.author?.id) return null;
+  return `${message.guildId}:${message.author.id}`;
+}
+
 function hasBypassPermission(message) {
   return hasModerationBypassMessage(message);
 }
@@ -258,6 +292,50 @@ function isSellPriceFollowUp(content) {
   return SELL_PRICE_RE.test(` ${rawLower} `) || /^(?:price|prices|cheap)$/.test(rawLower);
 }
 
+function clampConfidence(value) {
+  return Math.max(1, Math.min(99, Math.round(Number(value) || 1)));
+}
+
+function scoreSellingConfidence({
+  content,
+  spaced,
+  condensed,
+  hasExplicitOffer,
+  hasBroadSellIntent,
+  hasItemSignal,
+  hasMarketSignal
+}) {
+  if (!hasBroadSellIntent) return 0;
+
+  const raw = String(content || "");
+  const rawLower = raw.toLowerCase();
+  const hasQuestionTone =
+    raw.includes("?") ||
+    /^(?:anyone|who|where|can i|am i allowed|is it allowed)\b/.test(spaced);
+  const hasStrongIntent =
+    SELL_STRONG_INTENT_RE.test(spaced) ||
+    /\bwts\b/.test(spaced) ||
+    /f+o+r+s+a+l+e+/.test(condensed);
+  const hasCondensedIntent = SELL_CONDENSED_INTENT_RE.test(condensed);
+  const hasPriceSignal = /\$\s*\d/.test(raw) || SELL_PRICE_RE.test(rawLower);
+  const hasPrivateTradeSignal =
+    /\bdm\s+me\b/.test(spaced) &&
+    /\b(?:buy|price|prices|offer|offers|account|script|config|key|premium)\b/.test(spaced);
+
+  let score = 35;
+  if (hasExplicitOffer) score += 25;
+  if (hasStrongIntent) score += 20;
+  if (hasItemSignal) score += 18;
+  if (hasMarketSignal) score += 15;
+  if (hasPriceSignal) score += 20;
+  if (hasCondensedIntent && !hasStrongIntent) score += 10;
+  if (hasPrivateTradeSignal) score += 12;
+  if (hasQuestionTone) score -= 35;
+  if (/^(?:anyone|who|can i|am i allowed|is it allowed)\b/.test(spaced)) score -= 15;
+
+  return clampConfidence(score);
+}
+
 function detectSellingSignal(content) {
   const rawLower = String(content || "").toLowerCase();
   const spaced = buildSellingSpacedText(content);
@@ -284,6 +362,15 @@ function detectSellingSignal(content) {
 
   return {
     type: "selling",
+    confidence: scoreSellingConfidence({
+      content,
+      spaced,
+      condensed,
+      hasExplicitOffer,
+      hasBroadSellIntent,
+      hasItemSignal,
+      hasMarketSignal
+    }),
     reason: hasItemSignal || hasMarketSignal
       ? "sell-related wording detected with sale context"
       : "sell-related wording detected"
@@ -311,6 +398,7 @@ function detectContextualSellingSignal(messageTexts) {
 
   return {
     type: "selling",
+    confidence: 86,
     reason: "sell offer completed across recent messages"
   };
 }
@@ -326,6 +414,23 @@ function detectSuspiciousSignal(content) {
         type: "suspicious",
         reason: candidate.reason,
         label: candidate.label
+      };
+    }
+  }
+
+  return null;
+}
+
+function detectRoastingSignal(content) {
+  const normalized = normalizeText(content);
+  if (!normalized) return null;
+  if (ROASTING_IGNORE_PATTERNS.some((pattern) => pattern.test(normalized))) return null;
+
+  for (const pattern of ROASTING_PATTERNS) {
+    if (pattern.test(normalized)) {
+      return {
+        type: "roasting",
+        reason: "playful roast-like wording detected"
       };
     }
   }
@@ -502,6 +607,13 @@ function pruneSuspiciousUserState(now = Date.now()) {
   }
 }
 
+function pruneSellingUserState(now = Date.now()) {
+  for (const [key, entry] of sellingUserBuckets.entries()) {
+    entry.events = entry.events.filter((event) => now - event.at <= SELLING_REPEAT_WINDOW_MS);
+    if (!entry.events.length) sellingUserBuckets.delete(key);
+  }
+}
+
 function getSuspiciousAction(count) {
   if (count >= SUSPICIOUS_TIMEOUT_THRESHOLD) return "timeout";
   if (count >= SUSPICIOUS_WARNING_THRESHOLD) return "warn";
@@ -521,6 +633,10 @@ function buildSuspiciousPublicReply(state) {
 
 function buildSellingPublicReply() {
   return pickPublicReplyLine(SELLING_PUBLIC_REPLIES);
+}
+
+function buildRoastingPublicReply() {
+  return pickPublicReplyLine(ROASTING_PUBLIC_REPLIES);
 }
 
 async function tryReplyModerationMessage(message, content, replyType) {
@@ -560,6 +676,61 @@ function rememberSuspiciousMessage(message, signals, now = Date.now()) {
   return {
     count: entry.events.length,
     action: getSuspiciousAction(entry.events.length),
+    events: [...entry.events]
+  };
+}
+
+function getMaxSignalConfidence(signals) {
+  return Math.max(
+    0,
+    ...(signals || []).map((signal) => Number(signal.confidence || 0))
+  );
+}
+
+function rememberSellingMessage(message, signals, now = Date.now()) {
+  const confidence = getMaxSignalConfidence(signals);
+  const highConfidence = confidence > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD;
+  const key = buildSellingUserKey(message);
+
+  if (!key) {
+    return {
+      count: 1,
+      confidence,
+      highConfidence,
+      action: highConfidence ? "timeout" : "alert",
+      trigger: highConfidence
+        ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
+        : "below immediate-timeout confidence",
+      events: []
+    };
+  }
+
+  pruneSellingUserState(now);
+  const entry = sellingUserBuckets.get(key) || { events: [] };
+  entry.events.push({
+    at: now,
+    channelId: message.channelId,
+    messageId: message.id,
+    url: buildMessageUrl(message),
+    confidence,
+    reasons: signals.map((signal) => signal.reason)
+  });
+  entry.events = entry.events.slice(-Math.max(SELLING_REPEAT_TIMEOUT_THRESHOLD + 2, 5));
+  sellingUserBuckets.set(key, entry);
+
+  const repeated = entry.events.length >= SELLING_REPEAT_TIMEOUT_THRESHOLD;
+  const action = highConfidence || repeated ? "timeout" : "alert";
+
+  return {
+    count: entry.events.length,
+    confidence,
+    highConfidence,
+    action,
+    trigger: highConfidence
+      ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
+      : repeated
+        ? `${entry.events.length}/${SELLING_REPEAT_TIMEOUT_THRESHOLD} selling messages in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`
+        : "below immediate-timeout confidence",
     events: [...entry.events]
   };
 }
@@ -637,8 +808,42 @@ function buildSignalAlertPanel(message, signals) {
   };
 }
 
+function buildSellingLogPanel({ message, signals, state, timeoutResult, durationMs }) {
+  const link = buildMessageUrl(message);
+  const confidenceLines = signals
+    .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
+    .join("\n");
+  const action =
+    state.action === "timeout"
+      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason}`
+      : "log only";
+
+  return {
+    header: state.action === "timeout" ? "Selling Timeout" : "Selling Alert",
+    body: [
+      state.action === "timeout"
+        ? "selling guard triggered and action was applied"
+        : "selling guard saw a lower-confidence message",
+      `**User:** <@${message.author?.id}>`,
+      `**Channel:** <#${message.channelId}>`,
+      link ? `**Jump:** [Open message](${link})` : null,
+      `**Action:** ${action}`,
+      `**Confidence:** ${state.confidence}%`,
+      `**Trigger:** ${state.trigger}`,
+      `**Selling Hits:** ${state.count}/${SELLING_REPEAT_TIMEOUT_THRESHOLD} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      `**Why:**\n${confidenceLines}`,
+      `**Message:** ${trimExcerpt(message.content)}`
+    ].filter(Boolean).join("\n\n"),
+    color: state.action === "timeout" ? DANGER : WARN
+  };
+}
+
 async function replyToSellingMessage(message) {
   return tryReplyModerationMessage(message, buildSellingPublicReply(), "selling");
+}
+
+async function replyToRoastingMessage(message) {
+  return tryReplyModerationMessage(message, buildRoastingPublicReply(), "roasting");
 }
 
 function buildBlockedLinkTimeoutPayload({ message, signal, durationMs }) {
@@ -828,6 +1033,43 @@ async function handleBlockedLinkMessage(message, signal, {
   return true;
 }
 
+async function handleSellingMessage(message, signals, {
+  sendLog = sendLogPanel,
+  timeoutMs = SELLING_TIMEOUT_MS,
+  now = Date.now(),
+  replyPublic = true
+} = {}) {
+  const state = rememberSellingMessage(message, signals, now);
+  const publicReplySent = replyPublic
+    ? await replyToSellingMessage(message)
+    : false;
+  let timeoutResult = {
+    applied: false,
+    reason: "not needed"
+  };
+
+  if (state.action === "timeout") {
+    timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "selling or trading in chat");
+    if (!timeoutResult.applied) {
+      recordRuntimeEvent("warn", "selling-timeout", timeoutResult.reason);
+    }
+  }
+
+  await recordModerationStat(state.action === "timeout" ? "selling_timeout" : "selling_alert", now);
+  await sendLog(message.guild, buildSellingLogPanel({
+    message,
+    signals,
+    state,
+    timeoutResult,
+    durationMs: timeoutMs
+  })).catch(() => null);
+
+  return {
+    ...state,
+    publicReplySent
+  };
+}
+
 async function handleSuspiciousMessage(message, signals, {
   sendLog = sendLogPanel,
   timeoutMs = SUSPICIOUS_TIMEOUT_MS,
@@ -935,16 +1177,24 @@ async function maybeHandleModerationWatch(message, {
     }
 
     let publicReplySent = false;
-    const hasSellingSignal = contentSignals.some((signal) => signal.type === "selling");
+    const sellingSignals = contentSignals.filter((signal) => signal.type === "selling");
+    const otherContentSignals = contentSignals.filter((signal) => signal.type !== "selling");
+    const hasSellingSignal = sellingSignals.length > 0;
 
-    if (contentSignals.length) {
-      if (hasSellingSignal && !suspiciousSignals.length) {
-        publicReplySent = await replyToSellingMessage(message);
-      }
-      await sendLog(message.guild, buildSignalAlertPanel(message, contentSignals));
-      const eventTypes = new Set(contentSignals.map((signal) => signal.type));
+    if (sellingSignals.length) {
+      const state = await handleSellingMessage(message, sellingSignals, {
+        sendLog,
+        now,
+        replyPublic: !suspiciousSignals.length
+      });
+      publicReplySent = publicReplySent || state.publicReplySent;
+    }
+
+    if (otherContentSignals.length) {
+      await sendLog(message.guild, buildSignalAlertPanel(message, otherContentSignals));
+      const eventTypes = new Set(otherContentSignals.map((signal) => signal.type));
       for (const eventType of eventTypes) {
-        if (eventType === "selling" || eventType === "fake_info") {
+        if (eventType === "fake_info") {
           await recordModerationStat(`${eventType}_alert`, now);
         }
       }
@@ -953,6 +1203,14 @@ async function maybeHandleModerationWatch(message, {
     if (suspiciousSignals.length) {
       const state = await handleSuspiciousMessage(message, suspiciousSignals, { sendLog, now });
       publicReplySent = publicReplySent || state.publicReplySent;
+    }
+
+    if (!hasSellingSignal && !suspiciousSignals.length) {
+      const roastingSignal = detectRoastingSignal(message.content);
+      if (roastingSignal) {
+        await replyToRoastingMessage(message);
+        return true;
+      }
     }
 
     const raidAlert = observeRaidMessage(message);
@@ -975,12 +1233,14 @@ function resetModerationState() {
   lastRaidAlertAt.clear();
   recentUserMessages.clear();
   suspiciousUserBuckets.clear();
+  sellingUserBuckets.clear();
 }
 
 module.exports = {
   detectSellingSignal,
   detectContextualSellingSignal,
   detectSuspiciousSignal,
+  detectRoastingSignal,
   detectFakeInfoSignal,
   detectBlockedLinkSignal,
   collectContentSignals,

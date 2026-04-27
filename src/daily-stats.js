@@ -103,6 +103,7 @@ function getModerationCounts(snapshot) {
     blockedLinkAlerts: getModerationCount(snapshot, "blocked_link_alert"),
     blockedLinkTimeouts: getModerationCount(snapshot, "blocked_link_timeout"),
     sellingAlerts: getModerationCount(snapshot, "selling_alert"),
+    sellingTimeouts: getModerationCount(snapshot, "selling_timeout"),
     fakeInfoAlerts: getModerationCount(snapshot, "fake_info_alert"),
     suspiciousAlerts: getModerationCount(snapshot, "suspicious_alert"),
     suspiciousWarnings: getModerationCount(snapshot, "suspicious_warning"),
@@ -302,7 +303,7 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
     `**Link Guard:** ${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkAlerts} alerts`,
     `**Suspicious Alerts:** ${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`,
     `**False Info Alerts:** ${counts.fakeInfoAlerts}`,
-    `**Selling Alerts:** ${counts.sellingAlerts}`,
+    `**Selling Guard:** ${counts.sellingAlerts + counts.sellingTimeouts} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`,
     `**Raid Alerts:** ${counts.raidAlerts}`,
     `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionTimeouts} timeouts`,
     latestEvent

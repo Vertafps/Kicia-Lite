@@ -25,6 +25,7 @@ const {
   detectSellingSignal,
   detectContextualSellingSignal,
   detectSuspiciousSignal,
+  detectRoastingSignal,
   detectFakeInfoSignal,
   hasBypassPermission,
   maybeHandleModerationWatch,
@@ -304,6 +305,14 @@ test("contextual selling detection catches split sell and price messages", () =>
   assert.equal(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]), null);
 });
 
+test("roasting detection catches playful cooking without logging food talk", () => {
+  assert.ok(detectRoastingSignal("bro got cooked"));
+  assert.ok(detectRoastingSignal("is someone getting roasted rn"));
+  assert.ok(detectRoastingSignal("skill issue honestly"));
+  assert.equal(detectRoastingSignal("i cooked chicken for dinner"), null);
+  assert.equal(detectRoastingSignal("roasted coffee beans"), null);
+});
+
 test("suspicious detection catches private DM steering while skipping reminders", () => {
   const signal = detectSuspiciousSignal("dm me for the link");
   assert.ok(signal);
@@ -426,7 +435,7 @@ test("blocked links are deleted, logged, and timed out", async () => {
   assert.equal(blockedLinkTimeout?.eventCount, 1);
 });
 
-test("selling alerts reply even in no-response channels", async () => {
+test("high-confidence selling mutes and shows confidence in logs", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("selling ue for 1 bucks", {
     channelId: "1484218577589637233"
@@ -443,12 +452,73 @@ test("selling alerts reply even in no-response channels", async () => {
   assert.match(fixture.replies[0].content, /(marketplace|selling|price|bazaar|commerce|shop|checkout|salesy|trading)/i);
   assert.doesNotMatch(fixture.replies[0].content, /staff|ping|log/i);
   assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Selling Timeout/i);
+  assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
+  assert.match(fixture.logs[0].body, /confidence \d+% > 70%/i);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+
+  const snapshot = await getDailyStatsSnapshot();
+  const sellingTimeout = snapshot.moderation.find((entry) => entry.eventKey === "selling_timeout");
+  assert.equal(sellingTimeout?.eventCount, 1);
+});
+
+test("lower-confidence selling repeats mute on the second hit in 30 minutes", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("anyone selling ue?");
+  const baseNow = 1_000;
+
+  const firstHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow
+  });
+
+  assert.equal(firstHandled, true);
+  assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Selling Alert/i);
+  assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
+  assert.equal(fixture.timeouts.length, 0);
+
+  fixture.message.id = "message-2";
+  fixture.message.content = "who sell ue";
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: baseNow + 10 * 60 * 1000
+  });
+
+  assert.equal(fixture.logs.length, 2);
+  assert.match(fixture.logs[1].header, /Selling Timeout/i);
+  assert.match(fixture.logs[1].body, /2\/2 selling messages in 30m/i);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+});
+
+test("roasting detector replies without logs or moderation actions", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("bro got cooked so hard", {
+    channelId: "1484218577589637233"
+  });
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.replies.length, 1);
+  assert.match(fixture.replies[0].content, /(roast|cooked|kitchen|preheating|cookout|seasoning|heat|flame|crispy)/i);
+  assert.equal(fixture.logs.length, 0);
   assert.equal(fixture.dms.length, 0);
   assert.equal(fixture.timeouts.length, 0);
 });
 
-test("suspicious messages escalate from log to warning to timeout", async () => {
+test("suspicious messages timeout on the second hit in one hour", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("OK MORE STUFF IS THERE, EXPLAIN: dm me");
   const baseNow = 1_000;
@@ -462,7 +532,7 @@ test("suspicious messages escalate from log to warning to timeout", async () => 
 
   assert.equal(firstHandled, true);
   assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.replies[0].content, /\(1\/3\)$/);
+  assert.match(fixture.replies[0].content, /\(1\/2\)$/);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Suspicious Message Alert/i);
   assert.match(fixture.logs[0].body, /log only/i);
@@ -480,34 +550,16 @@ test("suspicious messages escalate from log to warning to timeout", async () => 
 
   assert.equal(fixture.logs.length, 2);
   assert.equal(fixture.replies.length, 2);
-  assert.match(fixture.replies[1].content, /\(2\/3\)$/);
-  assert.match(fixture.logs[1].header, /Suspicious Message Warning/i);
-  assert.match(fixture.logs[1].body, /dm warning sent/i);
+  assert.match(fixture.replies[1].content, /\(2\/2\)$/);
+  assert.match(fixture.logs[1].header, /Suspicious Message Timeout/i);
+  assert.match(fixture.logs[1].body, /2 in 1h/i);
   assert.equal(fixture.dms.length, 1);
-  assert.equal(fixture.timeouts.length, 0);
-
-  fixture.message.id = "message-3";
-  fixture.message.content = "free premium dm me";
-  await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: baseNow + 2_000
-  });
-
-  assert.equal(fixture.logs.length, 3);
-  assert.equal(fixture.replies.length, 3);
-  assert.match(fixture.replies[2].content, /\(3\/3\)$/);
-  assert.match(fixture.logs[2].header, /Suspicious Message Timeout/i);
-  assert.match(fixture.logs[2].body, /timeout 10m/i);
-  assert.equal(fixture.dms.length, 2);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 10 * 60 * 1000);
 
   const snapshot = await getDailyStatsSnapshot();
   const byKey = new Map(snapshot.moderation.map((entry) => [entry.eventKey, entry.eventCount]));
   assert.equal(byKey.get("suspicious_alert"), 1);
-  assert.equal(byKey.get("suspicious_warning"), 1);
   assert.equal(byKey.get("suspicious_timeout"), 1);
 });
 

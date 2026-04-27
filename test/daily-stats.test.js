@@ -170,6 +170,7 @@ test("daily stats embeds show top users and silent staff without counting mods",
   await recordDailyModerationEvent("blocked_link_timeout", { at: windowStartedAt + 4 * 60_000 });
   await recordDailyModerationEvent("suspicious_warning", { at: windowStartedAt + 5 * 60_000 });
   await recordDailyModerationEvent("fake_info_alert", { at: windowStartedAt + 6 * 60_000 });
+  await recordDailyModerationEvent("selling_timeout", { at: windowStartedAt + 7 * 60_000 });
 
   const guild = buildGuildForDailyStats();
   const report = await buildDailyStatsEmbeds(guild, { now: reportTime });
@@ -193,11 +194,12 @@ test("daily stats embeds show top users and silent staff without counting mods",
   assert.match(moderationDescription, /Link Guard:\*\* 1 total/i);
   assert.match(moderationDescription, /Suspicious Alerts:\*\* 1 total/i);
   assert.match(moderationDescription, /False Info Alerts:\*\* 1/i);
+  assert.match(moderationDescription, /Selling Guard:\*\* 1 total \| 1 timeouts/i);
 
   const snapshot = await getDailyStatsSnapshot();
   assert.equal(snapshot.staff.length, 1);
   assert.equal(snapshot.staff[0].userId, "staff-1");
-  assert.equal(snapshot.moderation.length, 3);
+  assert.equal(snapshot.moderation.length, 4);
 });
 
 test("daily stats scheduler catches up a missed report on startup", async () => {

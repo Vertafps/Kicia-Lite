@@ -440,8 +440,8 @@ test("selling alerts reply even in no-response channels", async () => {
 
   assert.equal(handled, true);
   assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.replies[0].content, /(marketplace|selling|price tag)/i);
-  assert.match(fixture.replies[0].content, /staff got the ping/i);
+  assert.match(fixture.replies[0].content, /(marketplace|selling|price|bazaar|commerce|shop|checkout|salesy|trading)/i);
+  assert.doesNotMatch(fixture.replies[0].content, /staff|ping|log/i);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Selling Alert/i);
   assert.equal(fixture.dms.length, 0);

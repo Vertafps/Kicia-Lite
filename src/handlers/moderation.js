@@ -93,15 +93,40 @@ const SUSPICIOUS_ANTI_PATTERNS = [
   /\b(?:don t|dont|do not|stop)\s+(?:dm|pm|message|msg)\s+me\b/,
   /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/
 ];
-const SUSPICIOUS_PUBLIC_REPLIES = [
-  "hmm interesting...",
-  "ahh totally not sus...",
-  "okay that is getting very sus..."
+const SUSPICIOUS_PUBLIC_REPLIES_BY_HIT = [
+  [
+    "hmm interesting...",
+    "ok vro...",
+    "curious little sentence...",
+    "ah yes, extremely normal behavior...",
+    "that wording is doing gymnastics..."
+  ],
+  [
+    "ahh totally not sus...",
+    "ok now you're collecting suspicion points...",
+    "that is two eyebrow raises now...",
+    "the plot is getting suspicious...",
+    "second verse, same strange chorus..."
+  ],
+  [
+    "okay that is getting very sus...",
+    "and that's the hat trick...",
+    "three suspicious laps around the track...",
+    "ok vro, timeout weather...",
+    "that one completed the sus trilogy..."
+  ]
 ];
 const SELLING_PUBLIC_REPLIES = [
   "marketplace energy spotted...",
   "selling arc detected...",
-  "that price tag blinked at me..."
+  "that price tag blinked at me...",
+  "ok vro this is not the bazaar...",
+  "commerce jumpscare...",
+  "bro opened a tiny shop...",
+  "price-tag aura detected...",
+  "checkout lane closed...",
+  "that sounded a bit too salesy...",
+  "not the trading floor..."
 ];
 
 const ASSERTION_EXCLUDE_PATTERNS = [
@@ -483,22 +508,19 @@ function getSuspiciousAction(count) {
   return "alert";
 }
 
-function pickPublicReplyLine(lines, seed) {
+function pickPublicReplyLine(lines) {
   if (!Array.isArray(lines) || !lines.length) return "";
-  const text = String(seed || "");
-  const score = [...text].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return lines[score % lines.length];
+  return lines[Math.floor(Math.random() * lines.length)] || lines[0];
 }
 
 function buildSuspiciousPublicReply(state) {
   const hit = Math.max(1, Math.min(state?.count || 1, SUSPICIOUS_TIMEOUT_THRESHOLD));
-  const line = SUSPICIOUS_PUBLIC_REPLIES[hit - 1] || SUSPICIOUS_PUBLIC_REPLIES[0];
+  const line = pickPublicReplyLine(SUSPICIOUS_PUBLIC_REPLIES_BY_HIT[hit - 1]);
   return `${line} (${hit}/${SUSPICIOUS_TIMEOUT_THRESHOLD})`;
 }
 
-function buildSellingPublicReply(message) {
-  const line = pickPublicReplyLine(SELLING_PUBLIC_REPLIES, `${message?.id || ""}:${message?.content || ""}`);
-  return `${line} staff got the ping.`;
+function buildSellingPublicReply() {
+  return pickPublicReplyLine(SELLING_PUBLIC_REPLIES);
 }
 
 async function tryReplyModerationMessage(message, content, replyType) {
@@ -616,7 +638,7 @@ function buildSignalAlertPanel(message, signals) {
 }
 
 async function replyToSellingMessage(message) {
-  return tryReplyModerationMessage(message, buildSellingPublicReply(message), "selling");
+  return tryReplyModerationMessage(message, buildSellingPublicReply(), "selling");
 }
 
 function buildBlockedLinkTimeoutPayload({ message, signal, durationMs }) {

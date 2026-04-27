@@ -5,7 +5,11 @@ const {
   LINK_MODERATION_TIMEOUT_MS,
   LOG_CHANNEL_ID,
   NO_RESPONSE_CHANNEL_IDS,
-  CHANNEL_LOCK_TARGETS
+  CHANNEL_LOCK_TARGETS,
+  SUSPICIOUS_ALERT_WINDOW_MS,
+  SUSPICIOUS_WARNING_THRESHOLD,
+  SUSPICIOUS_TIMEOUT_THRESHOLD,
+  SUSPICIOUS_TIMEOUT_MS
 } = require("./config");
 const { formatDuration } = require("./duration");
 const { SUCCESS, WARN } = require("./embed");
@@ -114,6 +118,20 @@ function buildRuntimeSection(message) {
   };
 }
 
+function buildModerationGuardLines() {
+  return [
+    `**Link Guard:** docs allowlist + tenor | timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`,
+    "**False Info Guard:** status + executor claim mismatch alerts to logs",
+    [
+      "**Suspicious Alerts:**",
+      `warn at ${SUSPICIOUS_WARNING_THRESHOLD}`,
+      `timeout at ${SUSPICIOUS_TIMEOUT_THRESHOLD} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
+      `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`
+    ].join(" "),
+    "**Suspicious Rules:** private DM steering, credential asks, cracked/leaked/free premium, paste/run/download prompts"
+  ];
+}
+
 async function buildKbSection(refreshKb) {
   try {
     const kb = await refreshKb();
@@ -201,7 +219,7 @@ async function buildSecuritySection(message, channelLockRoleId) {
       `**Daily Tracking DB:** users ${emojiDb.tableCounts.dailyUsers} | channels ${emojiDb.tableCounts.dailyChannels} | staff ${emojiDb.tableCounts.dailyStaff}`
     );
     securityLines.push(
-      `**Link Guard:** docs allowlist + tenor | timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`
+      ...buildModerationGuardLines()
     );
   } catch (err) {
     securityLines.push(`**Emoji DB:** failed (${err.message})`);
@@ -247,5 +265,6 @@ async function runJarvisDiagnostics(message, { refreshKb, channelLockRoleId, onP
 
 module.exports = {
   buildJarvisProgressBody,
+  buildModerationGuardLines,
   runJarvisDiagnostics
 };

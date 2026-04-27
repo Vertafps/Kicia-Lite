@@ -75,7 +75,7 @@ function buildCommandsBody() {
     "`$status up` mark status as up",
     "`$status down` mark status as down",
     "`$fetch` refresh the KB cache",
-    "`$jarvis` run runtime, log, and security diagnostics",
+    "`$jarvis` run runtime, log, false-info, suspicious-alert, and security diagnostics",
     "`$config emoji <time>` set the reaction-timeout length",
     "`$db` / `$database` inspect the SQLite moderation database",
     "",

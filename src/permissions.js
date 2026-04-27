@@ -36,12 +36,16 @@ function isKernelMessage(message) {
   return isKernelUserId(message?.author?.id);
 }
 
-function canUseLockCommands(message) {
+function canUseOwnerCommands(message) {
   return isKernelMessage(message) || hasAnyRole(message?.member, OWNER_ROLE_IDS);
 }
 
+function canUseLockCommands(message) {
+  return canUseOwnerCommands(message);
+}
+
 function canUseEmojiCommands(message) {
-  return isKernelMessage(message) || hasAnyRole(message?.member, EMOJI_MANAGER_ROLE_IDS);
+  return canUseOwnerCommands(message);
 }
 
 function hasModerationBypassMember(member, userId) {
@@ -74,6 +78,7 @@ module.exports = {
   hasAnyPermission,
   isKernelUserId,
   isKernelMessage,
+  canUseOwnerCommands,
   canUseLockCommands,
   canUseEmojiCommands,
   hasModerationBypassMember,

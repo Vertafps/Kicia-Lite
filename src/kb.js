@@ -12,17 +12,28 @@ const EXECUTOR_STATUSES = [
   "unsupported"
 ];
 const LOW_SIGNAL_TOKENS = new Set([
+  "a",
+  "an",
   "how",
   "what",
   "why",
   "where",
   "when",
   "which",
+  "do",
+  "did",
   "does",
   "is",
+  "are",
   "can",
+  "will",
   "use",
   "using",
+  "to",
+  "of",
+  "on",
+  "in",
+  "at",
   "with",
   "about",
   "help",
@@ -41,8 +52,7 @@ const LOW_SIGNAL_TOKENS = new Set([
   "you",
   "for",
   "the",
-  "and"
-  ,
+  "and",
   "work",
   "works",
   "working",
@@ -52,9 +62,10 @@ const LOW_SIGNAL_TOKENS = new Set([
   "pls",
   "rn"
 ]);
+const SHORT_SIGNAL_TOKENS = new Set(["ui", "tp"]);
 
 function keepSignalToken(token) {
-  return token.length > 2 && !LOW_SIGNAL_TOKENS.has(token);
+  return (token.length > 2 || SHORT_SIGNAL_TOKENS.has(token)) && !LOW_SIGNAL_TOKENS.has(token);
 }
 
 function normalizeExecutorLinks(entry) {
@@ -256,53 +267,120 @@ function countNearbyTokenMatches(termTokens, transcriptTokens) {
   return matchCount;
 }
 
-function scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase) {
-  if (!phrase) return 0;
-  if (containsPhrase(normalizedTranscript, phrase)) return 1;
+function getMatchTokens(value) {
+  return tokenize(value).filter((token) => token.length > 2 || SHORT_SIGNAL_TOKENS.has(token));
+}
 
-  const termTokens = tokenize(phrase).filter((token) => token.length > 2);
-  if (!termTokens.length) return 0;
+function scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase) {
+  if (!phrase) return null;
+
+  const allTermTokens = getMatchTokens(phrase);
+  const termTokens = allTermTokens.filter(keepSignalToken);
+  const tokenCount = Math.max(1, allTermTokens.length);
+  const hasSignal = termTokens.length > 0;
+
+  if (containsPhrase(normalizedTranscript, phrase)) {
+    const wholePhrase = normalizeText(phrase) === normalizedTranscript;
+    return {
+      score: hasSignal ? 1 + Math.min(tokenCount, 6) * 0.15 + (wholePhrase ? 0.35 : 0) : 0.35,
+      exact: true,
+      hasSignal,
+      wholePhrase,
+      tokenCount
+    };
+  }
+
+  if (!termTokens.length) return null;
 
   const fuzzyMatches = countNearbyTokenMatches(termTokens, transcriptTokens);
-  if (termTokens.length >= 3 && fuzzyMatches >= termTokens.length - 1) return 0.7;
-  if (termTokens.length === 2 && fuzzyMatches === 2) return 0.55;
-  return 0;
+  if (!fuzzyMatches) return null;
+
+  if (termTokens.length === 1) {
+    const allMatches = countNearbyTokenMatches(allTermTokens, transcriptTokens);
+    const genericCoverage = allMatches / Math.max(1, allTermTokens.length);
+    return genericCoverage >= 0.75
+      ? {
+          score: 0.7,
+          exact: false,
+          hasSignal: true,
+          wholePhrase: false,
+          tokenCount
+        }
+      : null;
+  }
+
+  if (termTokens.length >= 3 && fuzzyMatches >= termTokens.length - 1) {
+    return {
+      score: 0.7,
+      exact: false,
+      hasSignal: true,
+      wholePhrase: false,
+      tokenCount
+    };
+  }
+  if (termTokens.length === 2 && fuzzyMatches === 2) {
+    return {
+      score: 0.55,
+      exact: false,
+      hasSignal: true,
+      wholePhrase: false,
+      tokenCount
+    };
+  }
+  return null;
 }
 
 function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
   if (!keyword) return null;
+  const termTokens = getMatchTokens(keyword).filter(keepSignalToken);
+  const tokenCount = Math.max(1, getMatchTokens(keyword).length);
+
   if (containsPhrase(normalizedTranscript, keyword)) {
     return {
-      score: keyword.includes(" ") ? 7 : 3
+      score: keyword.includes(" ") ? 7 + Math.min(tokenCount, 5) * 0.4 : 3,
+      exact: true,
+      signalCount: termTokens.length,
+      tokenCount
     };
   }
 
-  const termTokens = tokenize(keyword).filter((token) => token.length > 2);
   if (!termTokens.length) return null;
 
   const exactMatches = termTokens.filter((token) => transcriptTokens.includes(token)).length;
   if (termTokens.length === 1 && transcriptTokens.some((token) => fuzzyTokenMatch(termTokens[0], token))) {
     return {
-      score: 1.75
+      score: 1.75,
+      exact: false,
+      signalCount: termTokens.length,
+      tokenCount
     };
   }
 
   if (termTokens.length > 1 && exactMatches === termTokens.length) {
     return {
-      score: 4.5
+      score: 4.5,
+      exact: false,
+      signalCount: termTokens.length,
+      tokenCount
     };
   }
 
   const fuzzyMatches = countNearbyTokenMatches(termTokens, transcriptTokens);
   if (termTokens.length > 1 && fuzzyMatches === termTokens.length) {
     return {
-      score: 3.75
+      score: 3.75,
+      exact: false,
+      signalCount: termTokens.length,
+      tokenCount
     };
   }
 
   if (termTokens.length >= 3 && fuzzyMatches >= termTokens.length - 1) {
     return {
-      score: 2.5
+      score: 2.5,
+      exact: false,
+      signalCount: termTokens.length,
+      tokenCount
     };
   }
 
@@ -310,12 +388,24 @@ function scoreKeywordHit(normalizedTranscript, transcriptTokens, keyword) {
 }
 
 function scoreEntryAgainstText(normalizedTranscript, transcriptTokens, entry) {
-  const strongPhraseScores = entry._matchPhrases
+  const strongPhraseHits = entry._matchPhrases
     .map((phrase) => scoreStrongPhraseHit(normalizedTranscript, transcriptTokens, phrase))
-    .filter((score) => score > 0);
-  const strongScore = strongPhraseScores.reduce((sum, score) => sum + score, 0);
+    .filter(Boolean);
+  const bestStrongHit = strongPhraseHits.reduce(
+    (best, hit) => (!best || hit.score > best.score ? hit : best),
+    null
+  );
+  const strongScore = bestStrongHit
+    ? bestStrongHit.score + Math.min(strongPhraseHits.length - 1, 3) * 0.12
+    : 0;
+  const exactStrongHits = strongPhraseHits.filter((hit) => hit.exact && hit.hasSignal).length;
+  const exactWholeStrongHits = strongPhraseHits.filter((hit) => hit.exact && hit.hasSignal && hit.wholePhrase).length;
+  const exactStrongTokenScore = strongPhraseHits
+    .filter((hit) => hit.exact && hit.hasSignal)
+    .reduce((best, hit) => Math.max(best, hit.tokenCount), 0);
   const keywordHits = [];
   const distinctKeywordHits = new Set();
+  const exactKeywordHits = new Set();
   const titleTokenHits = entry._titleTokens.filter((token) =>
     transcriptTokens.some((transcriptToken) => token === transcriptToken || fuzzyTokenMatch(token, transcriptToken))
   ).length;
@@ -328,29 +418,42 @@ function scoreEntryAgainstText(normalizedTranscript, transcriptTokens, entry) {
     if (!hit) continue;
     keywordHits.push(hit);
     distinctKeywordHits.add(keyword);
+    if (hit.exact && hit.signalCount > 0 && hit.tokenCount > 1) {
+      exactKeywordHits.add(keyword);
+    }
   }
 
   const titlePhraseMatch = containsPhrase(normalizedTranscript, entry._normalizedTitle);
   const titleTokensCount = tokenize(entry.title).length;
   const qualifies =
+    exactStrongHits >= 1 ||
     strongScore >= 1 ||
+    exactKeywordHits.size >= 1 ||
     (titlePhraseMatch && titleTokensCount >= 2) ||
     distinctKeywordHits.size >= 2 ||
-    (strongScore >= 0.55 && distinctKeywordHits.size >= 1) ||
+    (strongScore >= 0.55 && (distinctKeywordHits.size >= 1 || titleTokenHits >= 1 || replyTokenHits >= 1)) ||
     (distinctKeywordHits.size >= 1 && titleTokenHits >= 2) ||
     (titleTokenHits >= 2 && replyTokenHits >= 2);
 
   const score =
-    strongScore * 30 +
+    strongScore * 35 +
+    exactStrongHits * 8 +
+    exactWholeStrongHits * 14 +
+    exactStrongTokenScore * 5 +
     (titlePhraseMatch ? (titleTokensCount >= 2 ? 15 : 5) : 0) +
+    exactKeywordHits.size * 5 +
     keywordHits.reduce((sum, hit) => sum + hit.score, 0) +
     Math.min(titleTokenHits, 4) * 0.6 +
     Math.min(replyTokenHits, 5) * 0.3;
 
   return {
     strongScore,
+    exactStrongHits,
+    exactWholeStrongHits,
+    exactStrongTokenScore,
     keywordHits,
     distinctKeywordHits,
+    exactKeywordHits,
     titleTokenHits,
     replyTokenHits,
     titlePhraseMatch,
@@ -380,6 +483,7 @@ function tryIssueMatch(transcript, kb) {
     if (
       transcriptTokens.length <= 2 &&
       !transcriptScore.strongScore &&
+      transcriptScore.exactKeywordHits.size < 1 &&
       transcriptScore.distinctKeywordHits.size < 2 &&
       transcriptScore.titleTokenHits < 2
     ) {
@@ -415,6 +519,8 @@ function tryIssueMatch(transcript, kb) {
       entry,
       score,
       strongScore: transcriptScore.strongScore,
+      exactStrongHits: transcriptScore.exactStrongHits,
+      exactKeywordHits: transcriptScore.exactKeywordHits.size,
       latestLineBonus,
       isVagueInput
     });
@@ -428,7 +534,8 @@ function tryIssueMatch(transcript, kb) {
   if (!best.strongScore && best.score < threshold) return null;
 
   const runnerUp = candidates[1];
-  if (runnerUp && best.score - runnerUp.score < (best.strongScore ? 1 : 3)) {
+  const margin = best.exactStrongHits || best.exactKeywordHits ? 0.25 : best.strongScore ? 1 : 3;
+  if (runnerUp && best.score - runnerUp.score < margin) {
     return null;
   }
 

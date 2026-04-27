@@ -651,7 +651,7 @@ test("trusted link database adds and removes links", async () => {
   assert.equal(linksAfterRemove.length, 0);
 });
 
-test("restricted reactions on staff messages remove the reaction and time out the user", async () => {
+test("restricted reactions on staff messages remove the reaction and DM warn the user", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildRestrictedReactionFixture();
 
@@ -666,19 +666,17 @@ test("restricted reactions on staff messages remove the reaction and time out th
         animated: false
       }
     ],
-    getTimeout: async () => 15 * 60 * 1000,
     sendLog: fixture.sendLog
   });
 
   assert.equal(handled, true);
   assert.deepEqual(fixture.removedUsers, ["regular-user"]);
-  assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+  assert.equal(fixture.timeouts.length, 0);
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].header, /Restricted Reaction Timeout/i);
+  assert.match(fixture.logs[0].header, /Restricted Reaction Warning/i);
 
   const snapshot = await getDailyStatsSnapshot();
-  const reactionTimeout = snapshot.moderation.find((entry) => entry.eventKey === "restricted_reaction_timeout");
-  assert.equal(reactionTimeout?.eventCount, 1);
+  const reactionAlert = snapshot.moderation.find((entry) => entry.eventKey === "restricted_reaction_alert");
+  assert.equal(reactionAlert?.eventCount, 1);
 });

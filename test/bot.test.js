@@ -94,8 +94,43 @@ const kb = normalizeKb({
     {
       title: "How to Load a Config",
       category: "config",
-      keywords: ["load config", "import config", "config not showing"],
-      match_phrases: ["load config", "import config"]
+      keywords: [
+        "load config",
+        "import config",
+        "config not showing",
+        "where do i put config",
+        "where to put config",
+        "use config",
+        "apply config",
+        "add config"
+      ],
+      match_phrases: [
+        "load config",
+        "import config",
+        "where do i put config",
+        "how to put config",
+        "i have a config",
+        "got a config how to"
+      ]
+    },
+    {
+      title: "How to Get a Key and Get Whitelisted (Free and Premium)",
+      category: "key",
+      keywords: [
+        "how to get key",
+        "how to get free key",
+        "get key",
+        "free key",
+        "premium key",
+        "key system"
+      ],
+      match_phrases: [
+        "how to get key",
+        "how to get free key",
+        "get key",
+        "get free key",
+        "how do i get a key"
+      ]
     },
     {
       title: "Account Transfers / Discord Server Ban",
@@ -139,6 +174,24 @@ const kb = normalizeKb({
         "is kicia detected",
         "will i get banned"
       ]
+    },
+    {
+      title: "Silent Aim, Rage, and Projectile TP Not Working",
+      category: "feature",
+      keywords: ["silent aim", "rage", "projectile tp", "patched", "anticheat", "not working", "broken"],
+      match_phrases: [
+        "silent aim not working",
+        "rage not working",
+        "projectile tp broken",
+        "projectile tp not working",
+        "features not working"
+      ]
+    },
+    {
+      title: "Script Panel Link / Where to Get Script",
+      category: "script",
+      keywords: ["where is script", "where panel", "panel link", "script link", "where to get script", "get script"],
+      match_phrases: ["where is the script", "where do i get script", "panel link", "script panel", "how to get the script"]
     },
     {
       title: "GUI Layout Guide",
@@ -487,6 +540,32 @@ test("latest config line wins over an older different kb match", () => {
   assert.match(route.body, /How to Load a Config/i);
 });
 
+test("config questions do not get hijacked by key docs", () => {
+  for (const prompt of ["how to get config", "how do i get config", "@Kiciahook how to get config"]) {
+    const route = classifyTranscript(prompt, kb, "UP");
+    assert.equal(route.kind, "docs");
+    assert.match(route.body, /How to Load a Config/i);
+  }
+});
+
+test("key questions still route to key docs", () => {
+  const route = classifyTranscript("how to get key", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /How to Get a Key/i);
+});
+
+test("feature work questions do not become unknown executor replies", () => {
+  const route = classifyTranscript("does silent aim work", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /Silent Aim, Rage, and Projectile TP Not Working/i);
+});
+
+test("exact keyword phrases can route short docs questions", () => {
+  const route = classifyTranscript("where panel", kb, "UP");
+  assert.equal(route.kind, "docs");
+  assert.match(route.body, /Script Panel Link/i);
+});
+
 test("fresh vague question does not inherit an older docs match from transcript", () => {
   const route = classifyTranscript("load config\nhow to do lootlabs", kb, "UP");
   assert.equal(route.kind, "ticket");
@@ -679,7 +758,7 @@ test("owner status command bypasses cooldown logic", async () => {
   assert.equal(getRuntimeStatus(), "DOWN");
 });
 
-test("status command is kernel-only for non-owners", async () => {
+test("status command is owner-only for non-owners", async () => {
   let replyPayload = null;
 
   const handled = await maybeHandleStatusCommand({
@@ -771,6 +850,37 @@ test("owner fetch command refreshes kb immediately", async () => {
   assert.equal(replied, true);
 });
 
+test("owner role can refresh kb immediately", async () => {
+  let replied = false;
+  let refreshCalls = 0;
+
+  const handled = await maybeHandleStatusCommand(
+    {
+      content: "$fetch",
+      author: { id: "owner-role-user" },
+      member: {
+        roles: {
+          cache: {
+            has: (roleId) => roleId === "1484221158390890496"
+          }
+        }
+      },
+      reply: async () => {
+        replied = true;
+      }
+    },
+    {
+      refreshKb: async () => {
+        refreshCalls += 1;
+      }
+    }
+  );
+
+  assert.equal(handled, true);
+  assert.equal(refreshCalls, 1);
+  assert.equal(replied, true);
+});
+
 test("unauthorized fetch command is ignored silently", async () => {
   let replied = false;
   let refreshCalls = 0;
@@ -821,7 +931,32 @@ test("jarvis counts as an owner-only command", () => {
   assert.equal(isOwnerCommandMessage("$jarvis"), true);
 });
 
-test("emoji command is available to staff roles", async () => {
+test("emoji command is available to owner role", async () => {
+  let replyPayload = null;
+  const handled = await maybeHandleControlCommand({
+    content: "$emoji \u{1F62D}",
+    author: { id: "owner-role-user" },
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleId === "1484221158390890496"
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    listEmojis: async () => [{ display: "\u{1F62D}" }],
+    addEmoji: async () => ({ added: true })
+  });
+
+  assert.equal(handled, true);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /added/i);
+});
+
+test("emoji command ignores staff without owner role", async () => {
   let replyPayload = null;
   const handled = await maybeHandleControlCommand({
     content: "$emoji \u{1F62D}",
@@ -836,41 +971,13 @@ test("emoji command is available to staff roles", async () => {
     reply: async (payload) => {
       replyPayload = payload;
     }
-  }, {
-    getTimeout: async () => 10 * 60 * 1000,
-    listEmojis: async () => [{ display: "\u{1F62D}" }],
-    addEmoji: async () => ({ added: true })
   });
 
   assert.equal(handled, true);
-  assert.ok(replyPayload);
-  assert.match(replyPayload.embeds[0].data.description, /added/i);
+  assert.equal(replyPayload, null);
 });
 
-test("kernel config command updates emoji timeout", async () => {
-  let replyPayload = null;
-  let savedDuration = null;
-
-  const handled = await maybeHandleControlCommand({
-    content: "$config emoji 15m",
-    author: { id: "847703912932311091" },
-    reply: async (payload) => {
-      replyPayload = payload;
-    }
-  }, {
-    setTimeout: async (durationMs) => {
-      savedDuration = durationMs;
-      return durationMs;
-    }
-  });
-
-  assert.equal(handled, true);
-  assert.equal(savedDuration, 15 * 60 * 1000);
-  assert.ok(replyPayload);
-  assert.match(replyPayload.embeds[0].data.description, /15m/i);
-});
-
-test("kernel allowlink command adds and removes trusted links", async () => {
+test("owner allowlink command adds and removes trusted links", async () => {
   let replyPayload = null;
   const links = [];
   const message = {
@@ -910,7 +1017,7 @@ test("kernel allowlink command adds and removes trusted links", async () => {
   assert.match(replyPayload.embeds[0].data.description, /removed trusted link/i);
 });
 
-test("database command is kernel-only", async () => {
+test("database command is owner-only", async () => {
   let replyPayload = null;
 
   const handled = await maybeHandleControlCommand({
@@ -947,4 +1054,5 @@ test("database command is kernel-only", async () => {
   assert.match(replyPayload.embeds[0].data.description, /Trusted Link Rows:\*\* 2/i);
   assert.match(replyPayload.embeds[0].data.description, /Daily User Rows:\*\* 2/i);
   assert.match(replyPayload.embeds[0].data.description, /Daily Moderation Rows:\*\* 3/i);
+  assert.match(replyPayload.embeds[0].data.description, /remove reaction \+ DM warning/i);
 });

@@ -1,8 +1,6 @@
-const { buildPanel, DANGER, WARN } = require("../embed");
-const { formatDuration } = require("../duration");
+const { buildPanel, WARN } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const {
-  getEmojiTimeoutMs,
   listRestrictedEmojis,
   matchesStoredEmoji,
   recordDailyModerationEvent
@@ -57,28 +55,6 @@ async function tryRemoveReaction(reaction, userId) {
   }
 }
 
-async function tryTimeoutMember(member, durationMs, reason) {
-  if (!member?.timeout || member.moderatable === false) {
-    return {
-      applied: false,
-      reason: "bot cannot moderate that member"
-    };
-  }
-
-  try {
-    await member.timeout(durationMs, reason);
-    return {
-      applied: true,
-      reason: `timed out for ${formatDuration(durationMs)}`
-    };
-  } catch (err) {
-    return {
-      applied: false,
-      reason: err?.message || "timeout failed"
-    };
-  }
-}
-
 async function tryDirectMessage(user, payload) {
   return safeSend(user, payload);
 }
@@ -91,16 +67,16 @@ async function recordModerationStat(eventKey) {
   }
 }
 
-function buildUserTimeoutPayload({ message, emojiDisplay, durationMs }) {
+function buildUserWarningPayload({ message, emojiDisplay }) {
   return {
     embeds: [
       buildPanel({
-        header: "Reaction Timeout",
+        header: "Reaction Removed",
         body: [
           `you reacted with a restricted emoji (**${emojiDisplay}**) on a protected staff message`,
-          `**Timeout:** ${formatDuration(durationMs)}`,
+          "I removed the reaction. Please don't use restricted reactions on staff messages again.",
           `**Channel:** <#${message.channelId}>`,
-          "if you think this was a mistake, talk to staff after the timeout ends"
+          "if you think this was a mistake, talk to staff"
         ].join("\n"),
         color: WARN
       })
@@ -113,35 +89,29 @@ function buildRestrictedReactionLogPanel({
   targetMember,
   reactingUserId,
   emojiDisplay,
-  durationMs,
   reactionRemoved,
-  timeoutResult,
   dmSent
 }) {
   const jumpUrl = buildMessageUrl(message);
 
   return {
-    header: timeoutResult.applied ? "Restricted Reaction Timeout" : "Restricted Reaction Alert",
+    header: "Restricted Reaction Warning",
     body: [
-      timeoutResult.applied
-        ? "restricted emoji reaction removed and timeout applied"
-        : "restricted emoji reaction matched, but timeout could not be applied cleanly",
+      "restricted emoji reaction removed and user warned in DM",
       `**User:** <@${reactingUserId}>`,
       `**Emoji:** ${emojiDisplay}`,
       `**Target Staff Message:** <@${targetMember?.id || message.author?.id}> in <#${message.channelId}>`,
       jumpUrl ? `**Jump:** [Open message](${jumpUrl})` : null,
       `**Reaction Removed:** ${reactionRemoved ? "yes" : "failed"}`,
-      `**Timeout:** ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason}`,
       `**DM:** ${dmSent ? "sent" : "not sent"}`
     ].filter(Boolean).join("\n\n"),
-    color: timeoutResult.applied ? DANGER : WARN
+    color: WARN
   };
 }
 
 async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
   const {
     listEmojis = listRestrictedEmojis,
-    getTimeout = getEmojiTimeoutMs,
     sendLog = sendLogPanel
   } = deps;
 
@@ -164,35 +134,27 @@ async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
   const reactingMember = await resolveGuildMember(guild, user.id, hydratedReaction.members?.get?.(user.id) || null);
   if (!reactingMember || hasModerationBypassMember(reactingMember, user.id)) return false;
 
-  const durationMs = await getTimeout();
-  const actionReason = `restricted emoji reaction: ${matchedEmoji.display}`;
   const reactionRemoved = await tryRemoveReaction(hydratedReaction, user.id);
-  const timeoutResult = await tryTimeoutMember(reactingMember, durationMs, actionReason);
-  const dmSent = timeoutResult.applied
-    ? await tryDirectMessage(user, buildUserTimeoutPayload({
-        message,
-        emojiDisplay: matchedEmoji.display,
-        durationMs
-      }))
-    : false;
+  const dmSent = await tryDirectMessage(user, buildUserWarningPayload({
+    message,
+    emojiDisplay: matchedEmoji.display
+  }));
 
-  if (!timeoutResult.applied) {
-    recordRuntimeEvent("warn", "restricted-reaction-timeout", timeoutResult.reason);
+  if (!reactionRemoved) {
+    recordRuntimeEvent("warn", "restricted-reaction-remove", "reaction removal failed");
   }
-  await recordModerationStat(timeoutResult.applied ? "restricted_reaction_timeout" : "restricted_reaction_alert");
+  await recordModerationStat("restricted_reaction_alert");
 
   await sendLog(guild, buildRestrictedReactionLogPanel({
     message,
     targetMember,
     reactingUserId: user.id,
     emojiDisplay: matchedEmoji.display,
-    durationMs,
     reactionRemoved,
-    timeoutResult,
     dmSent
   })).catch(() => null);
 
-  return timeoutResult.applied || reactionRemoved;
+  return reactionRemoved || dmSent;
 }
 
 module.exports = {

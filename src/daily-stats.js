@@ -305,7 +305,7 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
     `**False Info Alerts:** ${counts.fakeInfoAlerts}`,
     `**Selling Guard:** ${counts.sellingAlerts + counts.sellingTimeouts} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`,
     `**Raid Alerts:** ${counts.raidAlerts}`,
-    `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionTimeouts} timeouts`,
+    `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} legacy timeouts`,
     latestEvent
       ? `**Last Moderation Event:** ${latestEvent.eventKey.replace(/_/g, " ")} ${formatDuration(Math.max(0, now - latestEvent.lastEventAt))} ago`
       : "**Last Moderation Event:** none",

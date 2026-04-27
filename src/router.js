@@ -126,6 +126,7 @@ function buildStatusReplyBody(runtimeStatus = "UP") {
 function detectBanQuestion(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
+  if (/\b(?:discord|server)\b/.test(normalized) && /\bban(?:ned)?\b/.test(normalized)) return false;
   return BAN_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
@@ -138,6 +139,16 @@ function hasExecutorIntent(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
   return EXECUTOR_SUPPORT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function hasExplicitExecutorWording(text) {
+  const normalized = normalizeText(text);
+  return (
+    containsExecutorishWord(normalized) ||
+    /\b(?:supported|support|compatible|compatibility)\b/.test(normalized) ||
+    /\b(?:with|for)\s+(?:kicia|kiciahook)\b/.test(normalized) ||
+    /\bdoes\s+(?:kicia|kiciahook)\s+support\b/.test(normalized)
+  );
 }
 
 function extractPatternCandidate(text, patterns) {
@@ -226,10 +237,17 @@ function detectExecutorListIntent(text, kb) {
 function detectExecutorQuestion(text, kb) {
   const supportCandidate = extractExecutorCandidate(text);
   if (supportCandidate || hasExecutorIntent(text)) {
+    const knownExecutor = supportCandidate
+      ? findExecutorMatch(supportCandidate, kb, { fallbackText: text })
+      : findExecutorMatch(text, kb);
+    if (!knownExecutor && !hasExplicitExecutorWording(text)) {
+      return null;
+    }
+
     return {
       type: "executor",
       line: normalizeText(text),
-      candidate: supportCandidate,
+      candidate: supportCandidate || knownExecutor?.name,
       intent: "support"
     };
   }

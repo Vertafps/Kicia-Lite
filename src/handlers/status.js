@@ -1,7 +1,8 @@
-const { OWNER_USER_ID, CHANNEL_LOCK_ROLE_ID } = require("../config");
+const { CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
+const { canUseOwnerCommands } = require("../permissions");
 const { buildStatusReplyBody } = require("../router");
 const { detectLongStatusPrompt, detectShortStatusPrompt } = require("../status-prompts");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
@@ -74,7 +75,7 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
 }
 
 async function handleJarvisCommand(message, refreshKb) {
-  if (message.author?.id !== OWNER_USER_ID) return true;
+  if (!canUseOwnerCommands(message)) return true;
 
   const progressPayload = (body) => ({
     embeds: [
@@ -134,7 +135,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   const jarvisCommand = isJarvisCommandMessage(message.content);
 
   if (statusCommand || nextStatus || fetchCommand || jarvisCommand) {
-    if (message.author?.id !== OWNER_USER_ID) return true;
+    if (!canUseOwnerCommands(message)) return true;
   }
 
   if (jarvisCommand) {

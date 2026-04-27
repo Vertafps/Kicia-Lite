@@ -1,6 +1,10 @@
 const path = require("path");
 const { buildPanel, DANGER, INFO, SUCCESS, WARN } = require("../embed");
-const { canUseOwnerCommands } = require("../permissions");
+const {
+  canUseEmojiCommands,
+  canUseOwnerCommands,
+  canUseTrustedLinkCommands
+} = require("../permissions");
 const {
   parseEmojiInput,
   listRestrictedEmojis,
@@ -100,11 +104,13 @@ function buildCommandsBody() {
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, log, false-info, suspicious-alert, and security diagnostics",
     "`$db` / `$database` inspect the SQLite moderation database",
+    "`$lock` lock the configured chat channels",
+    "`$unlock` unlock the configured chat channels",
+    "",
+    "## Staff + Higher",
     "`$allowlink` list trusted links",
     "`$allowlink <url>` add a trusted link",
     "`$removelink <url>` remove a trusted link",
-    "`$lock` lock the configured chat channels",
-    "`$unlock` unlock the configured chat channels",
     "`$emoji` list restricted emojis",
     "`$emoji <emoji>` add a restricted emoji",
     "`$emoji remove <emoji>` remove a restricted emoji"
@@ -282,13 +288,13 @@ async function handleTrustedLinkCommand(message, command, {
 async function maybeHandleControlCommand(message, deps = {}) {
   const trustedLinkCommand = parseTrustedLinkMessage(message.content);
   if (trustedLinkCommand) {
-    if (!canUseOwnerCommands(message)) return true;
+    if (!canUseTrustedLinkCommands(message)) return true;
     return handleTrustedLinkCommand(message, trustedLinkCommand, deps);
   }
 
   const emojiCommand = parseEmojiMessage(message.content);
   if (emojiCommand) {
-    if (!canUseOwnerCommands(message)) return true;
+    if (!canUseEmojiCommands(message)) return true;
     return handleEmojiCommand(message, emojiCommand, deps);
   }
 

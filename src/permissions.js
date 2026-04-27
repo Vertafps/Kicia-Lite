@@ -45,7 +45,11 @@ function canUseLockCommands(message) {
 }
 
 function canUseEmojiCommands(message) {
-  return canUseOwnerCommands(message);
+  return isKernelMessage(message) || hasAnyRole(message?.member, EMOJI_MANAGER_ROLE_IDS);
+}
+
+function canUseTrustedLinkCommands(message) {
+  return canUseEmojiCommands(message);
 }
 
 function hasModerationBypassMember(member, userId) {
@@ -81,6 +85,7 @@ module.exports = {
   canUseOwnerCommands,
   canUseLockCommands,
   canUseEmojiCommands,
+  canUseTrustedLinkCommands,
   hasModerationBypassMember,
   hasModerationBypassMessage,
   isProtectedReactionTargetMember,

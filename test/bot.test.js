@@ -956,7 +956,7 @@ test("emoji command is available to owner role", async () => {
   assert.match(replyPayload.embeds[0].data.description, /added/i);
 });
 
-test("emoji command ignores staff without owner role", async () => {
+test("emoji command is available to staff roles", async () => {
   let replyPayload = null;
   const handled = await maybeHandleControlCommand({
     content: "$emoji \u{1F62D}",
@@ -971,18 +971,29 @@ test("emoji command ignores staff without owner role", async () => {
     reply: async (payload) => {
       replyPayload = payload;
     }
+  }, {
+    listEmojis: async () => [{ display: "\u{1F62D}" }],
+    addEmoji: async () => ({ added: true })
   });
 
   assert.equal(handled, true);
-  assert.equal(replyPayload, null);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /added/i);
 });
 
-test("owner allowlink command adds and removes trusted links", async () => {
+test("staff allowlink command adds and removes trusted links", async () => {
   let replyPayload = null;
   const links = [];
   const message = {
     content: "$allowlink example.com/safe",
-    author: { id: "847703912932311091" },
+    author: { id: "staff-user" },
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleId === "1298767464678559794"
+        }
+      }
+    },
     reply: async (payload) => {
       replyPayload = payload;
     }
@@ -1015,6 +1026,34 @@ test("owner allowlink command adds and removes trusted links", async () => {
   assert.equal(handled, true);
   assert.equal(links.length, 0);
   assert.match(replyPayload.embeds[0].data.description, /removed trusted link/i);
+});
+
+test("allowlink command ignores non-staff users", async () => {
+  let replyPayload = null;
+  let addCalls = 0;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$allowlink example.com/safe",
+    author: { id: "regular-user" },
+    member: {
+      roles: {
+        cache: {
+          has: () => false
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    addLink: async () => {
+      addCalls += 1;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(addCalls, 0);
+  assert.equal(replyPayload, null);
 });
 
 test("database command is owner-only", async () => {

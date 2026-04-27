@@ -81,8 +81,36 @@ function sumMessageCounts(entries) {
   return (entries || []).reduce((sum, entry) => sum + Number(entry.messageCount || 0), 0);
 }
 
+function sumModerationCounts(entries) {
+  return (entries || []).reduce((sum, entry) => sum + Number(entry.eventCount || 0), 0);
+}
+
+function formatPercent(part, total) {
+  return total ? `${((Number(part || 0) / total) * 100).toFixed(1)}%` : "0.0%";
+}
+
 function topList(entries, limit = 5) {
   return Array.isArray(entries) ? entries.slice(0, limit) : [];
+}
+
+function getModerationCount(snapshot, eventKey) {
+  const entry = (snapshot.moderation || []).find((item) => item.eventKey === eventKey);
+  return entry ? Number(entry.eventCount || 0) : 0;
+}
+
+function getModerationCounts(snapshot) {
+  return {
+    blockedLinkAlerts: getModerationCount(snapshot, "blocked_link_alert"),
+    blockedLinkTimeouts: getModerationCount(snapshot, "blocked_link_timeout"),
+    sellingAlerts: getModerationCount(snapshot, "selling_alert"),
+    fakeInfoAlerts: getModerationCount(snapshot, "fake_info_alert"),
+    suspiciousAlerts: getModerationCount(snapshot, "suspicious_alert"),
+    suspiciousWarnings: getModerationCount(snapshot, "suspicious_warning"),
+    suspiciousTimeouts: getModerationCount(snapshot, "suspicious_timeout"),
+    raidAlerts: getModerationCount(snapshot, "raid_alert"),
+    restrictedReactionAlerts: getModerationCount(snapshot, "restricted_reaction_alert"),
+    restrictedReactionTimeouts: getModerationCount(snapshot, "restricted_reaction_timeout")
+  };
 }
 
 async function resolveDailyStatsChannel(guild) {
@@ -136,7 +164,12 @@ function buildDailyServerStatsBody(snapshot, windowStartedAt, now) {
   const activeUsers = snapshot.users.length;
   const activeChannels = snapshot.channels.length;
   const averageMessagesPerUser = activeUsers ? (totalMessages / activeUsers).toFixed(1) : "0.0";
+  const averageMessagesPerChannel = activeChannels ? (totalMessages / activeChannels).toFixed(1) : "0.0";
+  const windowHours = Math.max(1 / 60, (now - windowStartedAt) / (60 * 60 * 1000));
+  const messagesPerHour = (totalMessages / windowHours).toFixed(1);
   const busiestHour = snapshot.hours[0] || null;
+  const topUser = snapshot.users[0] || null;
+  const topChannel = snapshot.channels[0] || null;
   const latestUser = [...snapshot.users].sort((a, b) => b.lastMessageAt - a.lastMessageAt)[0] || null;
 
   const topUsersText = topList(snapshot.users)
@@ -156,6 +189,14 @@ function buildDailyServerStatsBody(snapshot, windowStartedAt, now) {
     `**Active Users:** ${activeUsers}`,
     `**Active Channels:** ${activeChannels}`,
     `**Avg Per Active User:** ${averageMessagesPerUser}`,
+    `**Avg Per Active Channel:** ${averageMessagesPerChannel}`,
+    `**Messages / Hour:** ${messagesPerHour}`,
+    topUser
+      ? `**Top User Share:** ${formatUserLabel(topUser)} - ${formatPercent(topUser.messageCount, totalMessages)}`
+      : "**Top User Share:** none",
+    topChannel
+      ? `**Top Channel Share:** <#${topChannel.channelId}> - ${formatPercent(topChannel.messageCount, totalMessages)}`
+      : "**Top Channel Share:** none",
     busiestHour
       ? `**Busiest Hour (UTC+5:30):** ${formatLocalHourLabel(busiestHour.localHour)} - ${busiestHour.messageCount} messages`
       : "**Busiest Hour (UTC+5:30):** none",
@@ -245,6 +286,35 @@ function buildDailyStaffStatsBody(snapshot, staffRoster, windowStartedAt, now) {
   ].filter(Boolean).join("\n");
 }
 
+function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
+  const counts = getModerationCounts(snapshot);
+  const linkGuardTotal = counts.blockedLinkAlerts + counts.blockedLinkTimeouts;
+  const suspiciousTotal = counts.suspiciousAlerts + counts.suspiciousWarnings + counts.suspiciousTimeouts;
+  const restrictedReactionTotal = counts.restrictedReactionAlerts + counts.restrictedReactionTimeouts;
+  const totalEvents = sumModerationCounts(snapshot.moderation);
+  const latestEvent = [...(snapshot.moderation || [])]
+    .filter((entry) => entry.lastEventAt > 0)
+    .sort((a, b) => b.lastEventAt - a.lastEventAt)[0] || null;
+
+  return [
+    `**Window:** ${formatDiscordTimestamp(windowStartedAt, "t")} -> ${formatDiscordTimestamp(now, "t")}`,
+    `**Total Moderation Events:** ${totalEvents}`,
+    `**Link Guard:** ${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkAlerts} alerts`,
+    `**Suspicious Alerts:** ${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`,
+    `**False Info Alerts:** ${counts.fakeInfoAlerts}`,
+    `**Selling Alerts:** ${counts.sellingAlerts}`,
+    `**Raid Alerts:** ${counts.raidAlerts}`,
+    `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionTimeouts} timeouts`,
+    latestEvent
+      ? `**Last Moderation Event:** ${latestEvent.eventKey.replace(/_/g, " ")} ${formatDuration(Math.max(0, now - latestEvent.lastEventAt))} ago`
+      : "**Last Moderation Event:** none",
+    "",
+    totalEvents
+      ? "mod guard had activity today; review the log channel for exact messages"
+      : "clean window: no moderation guard events recorded"
+  ].join("\n");
+}
+
 async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
   const windowStartedAt = await ensureDailyStatsWindowStartedAt(getDailyStatsBoundaryAtOrBefore(now));
   const snapshot = await getDailyStatsSnapshot();
@@ -261,9 +331,14 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
     body: buildDailyStaffStatsBody(snapshot, staffRoster, windowStartedAt, now),
     color: staffRoster.partial ? WARN : INFO
   });
+  const moderationPanel = buildPanel({
+    header: "Daily Moderation Summary",
+    body: buildDailyModerationStatsBody(snapshot, windowStartedAt, now),
+    color: sumModerationCounts(snapshot.moderation) ? WARN : SUCCESS
+  });
 
   return {
-    embeds: [serverPanel, staffPanel],
+    embeds: [serverPanel, staffPanel, moderationPanel],
     windowStartedAt,
     snapshot,
     staffRoster
@@ -355,6 +430,7 @@ module.exports = {
   getDailyStatsBoundaryAtOrBefore,
   getNextDailyStatsBoundary,
   getDailyStatsLocalHour,
+  buildDailyModerationStatsBody,
   buildDailyStatsEmbeds,
   trackDailyStatsMessage,
   runDailyStatsReport,

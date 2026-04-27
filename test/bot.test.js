@@ -893,7 +893,8 @@ test("database command is kernel-only", async () => {
         dailyUsers: 2,
         dailyChannels: 1,
         dailyHours: 1,
-        dailyStaff: 1
+        dailyStaff: 1,
+        dailyModeration: 3
       }
     })
   });
@@ -903,4 +904,5 @@ test("database command is kernel-only", async () => {
   assert.match(replyPayload.embeds[0].data.description, /SQLite Database/i);
   assert.match(replyPayload.embeds[0].data.description, /Restricted Emoji Rows:\*\* 1/i);
   assert.match(replyPayload.embeds[0].data.description, /Daily User Rows:\*\* 2/i);
+  assert.match(replyPayload.embeds[0].data.description, /Daily Moderation Rows:\*\* 3/i);
 });

@@ -192,6 +192,12 @@ function createSchema(db) {
       last_channel_id TEXT,
       last_channel_name TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS daily_moderation_stats (
+      event_key TEXT PRIMARY KEY,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      last_event_at INTEGER NOT NULL DEFAULT 0
+    );
   `);
 }
 
@@ -288,6 +294,14 @@ function mapDailyStaffRow(row) {
     lastMessageAt: Number(row.last_message_at || 0),
     lastChannelId: row.last_channel_id ? String(row.last_channel_id) : null,
     lastChannelName: row.last_channel_name ? String(row.last_channel_name) : null
+  };
+}
+
+function mapDailyModerationRow(row) {
+  return {
+    eventKey: String(row.event_key || ""),
+    eventCount: Number(row.event_count || 0),
+    lastEventAt: Number(row.last_event_at || 0)
   };
 }
 
@@ -605,6 +619,41 @@ async function recordDailyTrackedMessage({
   return true;
 }
 
+async function recordDailyModerationEvent(eventKey, {
+  amount = 1,
+  at = Date.now()
+} = {}) {
+  const key = String(eventKey || "").trim();
+  if (!key) {
+    throw new Error("Missing moderation event key");
+  }
+
+  const db = await getDatabase();
+  const safeAmount = Math.max(1, Math.round(Number(amount) || 1));
+  const eventAt = Math.max(1, Math.round(Number(at) || Date.now()));
+
+  db.run(
+    `
+      INSERT INTO daily_moderation_stats (
+        event_key,
+        event_count,
+        last_event_at
+      ) VALUES (?, ?, ?)
+      ON CONFLICT(event_key) DO UPDATE SET
+        event_count = daily_moderation_stats.event_count + excluded.event_count,
+        last_event_at = MAX(daily_moderation_stats.last_event_at, excluded.last_event_at)
+    `,
+    [
+      key,
+      safeAmount,
+      eventAt
+    ]
+  );
+
+  schedulePersist(db);
+  return true;
+}
+
 async function getDailyStatsSnapshot() {
   const db = await getDatabase();
   const windowStartedAt = await getDailyStatsWindowStartedAt();
@@ -640,13 +689,22 @@ async function getDailyStatsSnapshot() {
       ORDER BY message_count DESC, last_message_at DESC, display_name ASC, username ASC
     `
   ).map(mapDailyStaffRow);
+  const moderation = getRows(
+    db,
+    `
+      SELECT event_key, event_count, last_event_at
+      FROM daily_moderation_stats
+      ORDER BY event_count DESC, last_event_at DESC, event_key ASC
+    `
+  ).map(mapDailyModerationRow);
 
   return {
     windowStartedAt,
     users,
     channels,
     hours,
-    staff
+    staff,
+    moderation
   };
 }
 
@@ -657,6 +715,7 @@ async function clearDailyStatsTracking(newWindowStartedAt = Date.now()) {
     DELETE FROM daily_channel_message_stats;
     DELETE FROM daily_hour_message_stats;
     DELETE FROM daily_staff_message_stats;
+    DELETE FROM daily_moderation_stats;
   `);
   setAppConfigValue(db, DAILY_STATS_WINDOW_KEY, Math.max(1, Math.round(Number(newWindowStartedAt) || Date.now())), {
     immediate: true
@@ -681,7 +740,8 @@ async function getRestrictedEmojiDatabaseSnapshot() {
       dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
-      dailyStaff: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_staff_message_stats") || 0)
+      dailyStaff: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_staff_message_stats") || 0),
+      dailyModeration: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_moderation_stats") || 0)
     }
   };
 }
@@ -721,6 +781,7 @@ module.exports = {
   addRestrictedEmoji,
   removeRestrictedEmojiByKey,
   recordDailyTrackedMessage,
+  recordDailyModerationEvent,
   getDailyStatsSnapshot,
   clearDailyStatsTracking,
   getRestrictedEmojiDatabaseSnapshot,

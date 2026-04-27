@@ -4,7 +4,8 @@ const { sendLogPanel } = require("../log-channel");
 const {
   getEmojiTimeoutMs,
   listRestrictedEmojis,
-  matchesStoredEmoji
+  matchesStoredEmoji,
+  recordDailyModerationEvent
 } = require("../restricted-emoji-db");
 const {
   hasModerationBypassMember,
@@ -80,6 +81,14 @@ async function tryTimeoutMember(member, durationMs, reason) {
 
 async function tryDirectMessage(user, payload) {
   return safeSend(user, payload);
+}
+
+async function recordModerationStat(eventKey) {
+  try {
+    await recordDailyModerationEvent(eventKey);
+  } catch (err) {
+    recordRuntimeEvent("warn", "daily-moderation-track", err?.message || err);
+  }
 }
 
 function buildUserTimeoutPayload({ message, emojiDisplay, durationMs }) {
@@ -170,6 +179,7 @@ async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
   if (!timeoutResult.applied) {
     recordRuntimeEvent("warn", "restricted-reaction-timeout", timeoutResult.reason);
   }
+  await recordModerationStat(timeoutResult.applied ? "restricted_reaction_timeout" : "restricted_reaction_alert");
 
   await sendLog(guild, buildRestrictedReactionLogPanel({
     message,

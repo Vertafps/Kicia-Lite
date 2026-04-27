@@ -10,6 +10,8 @@ const path = require("path");
 const { normalizeKb } = require("../src/kb");
 const {
   addRestrictedEmoji,
+  clearDailyStatsTracking,
+  getDailyStatsSnapshot,
   getRestrictedEmojiDatabaseSnapshot,
   parseEmojiInput,
   removeRestrictedEmojiByKey,
@@ -381,6 +383,7 @@ test("raid detector alerts on repeated copy-paste by multiple users", () => {
 });
 
 test("blocked links are deleted, logged, and timed out", async () => {
+  await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("check this https://bing.com/search?q=kicia now");
 
   const handled = await maybeHandleModerationWatch(fixture.message, {
@@ -396,9 +399,14 @@ test("blocked links are deleted, logged, and timed out", async () => {
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Timeout/i);
+
+  const snapshot = await getDailyStatsSnapshot();
+  const blockedLinkTimeout = snapshot.moderation.find((entry) => entry.eventKey === "blocked_link_timeout");
+  assert.equal(blockedLinkTimeout?.eventCount, 1);
 });
 
 test("suspicious messages escalate from log to warning to timeout", async () => {
+  await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("OK MORE STUFF IS THERE, EXPLAIN: dm me");
   const baseNow = 1_000;
 
@@ -446,6 +454,12 @@ test("suspicious messages escalate from log to warning to timeout", async () => 
   assert.equal(fixture.dms.length, 2);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 10 * 60 * 1000);
+
+  const snapshot = await getDailyStatsSnapshot();
+  const byKey = new Map(snapshot.moderation.map((entry) => [entry.eventKey, entry.eventCount]));
+  assert.equal(byKey.get("suspicious_alert"), 1);
+  assert.equal(byKey.get("suspicious_warning"), 1);
+  assert.equal(byKey.get("suspicious_timeout"), 1);
 });
 
 test("restricted emoji database adds and removes emojis", async () => {
@@ -468,6 +482,7 @@ test("restricted emoji database adds and removes emojis", async () => {
 });
 
 test("restricted reactions on staff messages remove the reaction and time out the user", async () => {
+  await clearDailyStatsTracking(1);
   const fixture = buildRestrictedReactionFixture();
 
   const handled = await maybeHandleRestrictedReactionAdd(fixture.reaction, fixture.user, {
@@ -492,4 +507,8 @@ test("restricted reactions on staff messages remove the reaction and time out th
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Restricted Reaction Timeout/i);
+
+  const snapshot = await getDailyStatsSnapshot();
+  const reactionTimeout = snapshot.moderation.find((entry) => entry.eventKey === "restricted_reaction_timeout");
+  assert.equal(reactionTimeout?.eventCount, 1);
 });

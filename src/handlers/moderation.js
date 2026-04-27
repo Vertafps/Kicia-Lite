@@ -14,6 +14,7 @@ const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
+const { recordDailyModerationEvent } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText, normalizeText } = require("../text");
@@ -176,6 +177,14 @@ function buildSuspiciousUserKey(message) {
 
 function hasBypassPermission(message) {
   return hasModerationBypassMessage(message);
+}
+
+async function recordModerationStat(eventKey, now = Date.now()) {
+  try {
+    await recordDailyModerationEvent(eventKey, { at: now });
+  } catch (err) {
+    recordRuntimeEvent("warn", "daily-moderation-track", err?.message || err);
+  }
 }
 
 function isAssertiveStatement(content) {
@@ -718,7 +727,11 @@ function mightContainLink(content) {
   return extractUrlsFromText(content).length > 0;
 }
 
-async function handleBlockedLinkMessage(message, signal, { sendLog = sendLogPanel, timeoutMs = LINK_MODERATION_TIMEOUT_MS } = {}) {
+async function handleBlockedLinkMessage(message, signal, {
+  sendLog = sendLogPanel,
+  timeoutMs = LINK_MODERATION_TIMEOUT_MS,
+  now = Date.now()
+} = {}) {
   const deleteResult = await tryDeleteMessage(message);
   const timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "unapproved link");
   const dmSent = timeoutResult.applied
@@ -735,6 +748,7 @@ async function handleBlockedLinkMessage(message, signal, { sendLog = sendLogPane
   if (!timeoutResult.applied) {
     recordRuntimeEvent("warn", "blocked-link-timeout", timeoutResult.reason);
   }
+  await recordModerationStat(timeoutResult.applied ? "blocked_link_timeout" : "blocked_link_alert", now);
 
   await sendLog(message.guild, buildBlockedLinkLogPanel({
     message,
@@ -782,6 +796,10 @@ async function handleSuspiciousMessage(message, signals, {
       count: state.count
     }));
   }
+  await recordModerationStat(
+    state.action === "warn" ? "suspicious_warning" : `suspicious_${state.action}`,
+    now
+  );
 
   await sendLog(message.guild, buildSuspiciousLogPanel({
     message,
@@ -816,7 +834,7 @@ async function maybeHandleModerationWatch(message, {
     if (hasLink && resolvedKb) {
       const blockedLinkSignal = detectBlockedLinkSignal(message.content, { kb: resolvedKb });
       if (blockedLinkSignal) {
-        await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog });
+        await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });
         return true;
       }
     }
@@ -837,6 +855,12 @@ async function maybeHandleModerationWatch(message, {
 
     if (contentSignals.length) {
       await sendLog(message.guild, buildSignalAlertPanel(message, contentSignals));
+      const eventTypes = new Set(contentSignals.map((signal) => signal.type));
+      for (const eventType of eventTypes) {
+        if (eventType === "selling" || eventType === "fake_info") {
+          await recordModerationStat(`${eventType}_alert`, now);
+        }
+      }
     }
 
     if (suspiciousSignals.length) {
@@ -846,6 +870,7 @@ async function maybeHandleModerationWatch(message, {
     const raidAlert = observeRaidMessage(message);
     if (raidAlert) {
       await sendLog(message.guild, buildRaidAlertPanel(message, raidAlert));
+      await recordModerationStat("raid_alert", now);
     }
   } catch (err) {
     console.warn("Moderation watcher failed:", err.message);

@@ -21,6 +21,7 @@ const {
   getDailyStatsSnapshot,
   getRestrictedEmojiDatabaseSnapshot,
   parseEmojiInput,
+  recordDailyModerationEvent,
   recordDailyTrackedMessage,
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
@@ -118,6 +119,7 @@ test("clearing daily stats tracking preserves restricted emojis", async () => {
     localHour: 21,
     trackStaffOnly: false
   });
+  await recordDailyModerationEvent("blocked_link_timeout", { at: startAt + 20_000 });
 
   await clearDailyStatsTracking(startAt + 100_000);
 
@@ -126,6 +128,7 @@ test("clearing daily stats tracking preserves restricted emojis", async () => {
   assert.equal(snapshot.tableCounts.dailyUsers, 0);
   assert.equal(snapshot.tableCounts.dailyChannels, 0);
   assert.equal(snapshot.tableCounts.dailyStaff, 0);
+  assert.equal(snapshot.tableCounts.dailyModeration, 0);
 });
 
 test("daily stats embeds show top users and silent staff without counting mods", async () => {
@@ -164,26 +167,37 @@ test("daily stats embeds show top users and silent staff without counting mods",
     localHour: 21,
     trackStaffOnly: true
   });
+  await recordDailyModerationEvent("blocked_link_timeout", { at: windowStartedAt + 4 * 60_000 });
+  await recordDailyModerationEvent("suspicious_warning", { at: windowStartedAt + 5 * 60_000 });
+  await recordDailyModerationEvent("fake_info_alert", { at: windowStartedAt + 6 * 60_000 });
 
   const guild = buildGuildForDailyStats();
   const report = await buildDailyStatsEmbeds(guild, { now: reportTime });
 
-  assert.equal(report.embeds.length, 2);
+  assert.equal(report.embeds.length, 3);
   const serverDescription = report.embeds[0].data.description;
   const staffDescription = report.embeds[1].data.description;
+  const moderationDescription = report.embeds[2].data.description;
 
   assert.match(serverDescription, /Top Users/i);
   assert.match(serverDescription, /Peak Hours/i);
+  assert.match(serverDescription, /Messages \/ Hour/i);
+  assert.match(serverDescription, /Top Channel Share/i);
   assert.match(serverDescription, /Most Recent Message/i);
   assert.match(serverDescription, /Alpha/i);
   assert.match(staffDescription, /Staff Silent/i);
   assert.match(staffDescription, /Staff Share of Server Messages/i);
   assert.match(staffDescription, /no staff messages this window/i);
   assert.doesNotMatch(staffDescription, /Mod Beta/i);
+  assert.match(moderationDescription, /Daily Moderation/i);
+  assert.match(moderationDescription, /Link Guard:\*\* 1 total/i);
+  assert.match(moderationDescription, /Suspicious Alerts:\*\* 1 total/i);
+  assert.match(moderationDescription, /False Info Alerts:\*\* 1/i);
 
   const snapshot = await getDailyStatsSnapshot();
   assert.equal(snapshot.staff.length, 1);
   assert.equal(snapshot.staff[0].userId, "staff-1");
+  assert.equal(snapshot.moderation.length, 3);
 });
 
 test("daily stats scheduler catches up a missed report on startup", async () => {

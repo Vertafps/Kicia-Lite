@@ -166,6 +166,16 @@ function isGoogleHost(hostname) {
   );
 }
 
+function isYouTubeHost(hostname) {
+  return (
+    hostname === "youtu.be" ||
+    hostname === "youtube.com" ||
+    hostname.endsWith(".youtube.com") ||
+    hostname === "youtube-nocookie.com" ||
+    hostname.endsWith(".youtube-nocookie.com")
+  );
+}
+
 function isGifLikeUrl(url) {
   if (!url) return false;
   if (/\.gif$/i.test(url.pathname || "")) return true;
@@ -178,6 +188,7 @@ function isAllowedLink(url, rules) {
   if (isGifLikeUrl(url)) return true;
   if (isGithubLikeHost(url.hostname)) return true;
   if (isGoogleHost(url.hostname)) return true;
+  if (isYouTubeHost(url.hostname)) return true;
   if (rules.exactKeys.has(url.key)) return true;
   if (rules.rootHosts.has(url.hostname)) return true;
   return false;

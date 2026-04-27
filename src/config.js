@@ -62,7 +62,8 @@ const TRUSTED_LINK_URLS = [
   "https://rdd.weao.gg/",
   "https://whatexpsare.online/",
   "https://inject.today/",
-  "https://inject.today/rdd"
+  "https://inject.today/rdd",
+  "https://rivalscheats.shop/"
 ];
 
 module.exports = {

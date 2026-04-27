@@ -336,6 +336,12 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://google.com/search?q=kicia", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://docs.google.com/document/d/abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://youtube.com/watch?v=abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://www.youtube.com/shorts/abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://m.youtube.com/watch?v=abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://music.youtube.com/watch?v=abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://youtu.be/abc123", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://www.youtube-nocookie.com/embed/abc123", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://tenor.com/view/cat-123", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://example.com/memes/dancing-cat.gif", { kb }), null);
@@ -350,6 +356,9 @@ test("link detection allows docs links and gif links while blocking other files"
   assert.equal(detectBlockedLinkSignal("https://whatexpsare.online/", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://inject.today", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://inject.today/rdd", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://rivalscheats.shop", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://rivalscheats.shop/safe/path?x=1", { kb }), null);
+  assert.equal(detectBlockedLinkSignal("https://www.rivalscheats.shop/another/path", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://dynamic.example/file", {
     kb,
     trustedLinks: [{ url: "https://dynamic.example/" }]

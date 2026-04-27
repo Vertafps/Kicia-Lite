@@ -73,11 +73,6 @@ const SUSPICIOUS_PATTERNS = [
     reason: "moving the conversation into private messages"
   },
   {
-    label: "disable-defender",
-    pattern: /\b(?:disable|turn off)\s+(?:windows\s+)?(?:defender|antivirus)\b/,
-    reason: "telling people to disable security tools"
-  },
-  {
     label: "cracked-or-leaked",
     pattern: /\b(?:cracked|leaked)\s+(?:kicia|kiciahook|premium)\b/,
     reason: "mentioning cracked or leaked product access"
@@ -95,8 +90,7 @@ const SUSPICIOUS_PATTERNS = [
 ];
 const SUSPICIOUS_ANTI_PATTERNS = [
   /\b(?:don t|dont|do not|stop)\s+(?:dm|pm|message|msg)\s+me\b/,
-  /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/,
-  /\b(?:don t|dont|do not|never)\s+(?:disable|turn off)\s+(?:windows\s+)?(?:defender|antivirus)\b/
+  /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/
 ];
 
 const ASSERTION_EXCLUDE_PATTERNS = [

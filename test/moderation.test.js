@@ -303,6 +303,8 @@ test("suspicious detection catches private DM steering while skipping reminders"
   assert.match(vagueSignal.reason, /private messages/i);
 
   assert.equal(detectSuspiciousSignal("dont dm me"), null);
+  assert.equal(detectSuspiciousSignal("disable antivirus before injecting"), null);
+  assert.equal(detectSuspiciousSignal("turn off windows defender then open kicia"), null);
 });
 
 test("link detection allows docs links and gif links while blocking other files", () => {

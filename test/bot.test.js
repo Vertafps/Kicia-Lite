@@ -221,8 +221,9 @@ const kb = normalizeKb({
   ]
 });
 
-function buildMockLockChannel(id, { sendMessagesState = true, botPermissions = [] } = {}) {
+function buildMockLockChannel(id, { sendMessagesState = null, botPermissions = [], failEdit = false } = {}) {
   let state = sendMessagesState;
+  let editCalls = 0;
 
   return {
     id,
@@ -242,11 +243,14 @@ function buildMockLockChannel(id, { sendMessagesState = true, botPermissions = [
         }
       },
       edit: async (_roleId, options) => {
+        editCalls += 1;
+        if (failEdit) throw Object.assign(new Error("missing access"), { code: 50013 });
         state = options.SendMessages ?? null;
         return null;
       }
     },
-    getSendMessagesState: () => state
+    getSendMessagesState: () => state,
+    getEditCalls: () => editCalls
   };
 }
 
@@ -616,10 +620,13 @@ test("parses lock command aliases", () => {
   assert.equal(parseLockCommand("$lock on"), "lock");
   assert.equal(parseLockCommand("$unlock"), "unlock");
   assert.equal(parseLockCommand("$lock off"), "unlock");
+  assert.equal(parseLockCommand("$lock status"), "status");
+  assert.equal(parseLockCommand("$lock check"), "status");
+  assert.equal(parseLockCommand("$lock state"), "status");
 });
 
 test("unauthorized users only get a cross reaction for lock commands", async () => {
-  const general = buildMockLockChannel("1484218577589637233", {
+  const general = buildMockLockChannel("1498745066339045406", {
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
   const support = buildMockLockChannel("1489747706980339773", {
@@ -639,7 +646,7 @@ test("unauthorized users only get a cross reaction for lock commands", async () 
 });
 
 test("lock command disables send messages for the member role in both channels", async () => {
-  const general = buildMockLockChannel("1484218577589637233", {
+  const general = buildMockLockChannel("1498745066339045406", {
     sendMessagesState: true,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
@@ -657,12 +664,12 @@ test("lock command disables send messages for the member role in both channels",
   assert.equal(general.getSendMessagesState(), false);
   assert.equal(support.getSendMessagesState(), false);
   assert.match(message.replies[0].embeds[0].data.description, /locked channels/i);
-  assert.match(message.replies[0].embeds[0].data.description, /1484218577589637233/);
+  assert.match(message.replies[0].embeds[0].data.description, /1498745066339045406/);
   assert.match(message.replies[0].embeds[0].data.description, /1489747706980339773/);
 });
 
 test("$lock no longer toggles and stays locked when both channels are already locked", async () => {
-  const general = buildMockLockChannel("1484218577589637233", {
+  const general = buildMockLockChannel("1498745066339045406", {
     sendMessagesState: false,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
@@ -683,7 +690,7 @@ test("$lock no longer toggles and stays locked when both channels are already lo
 });
 
 test("explicit lock command reports when channels are already locked", async () => {
-  const general = buildMockLockChannel("1484218577589637233", {
+  const general = buildMockLockChannel("1498745066339045406", {
     sendMessagesState: false,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
@@ -702,7 +709,30 @@ test("explicit lock command reports when channels are already locked", async () 
 });
 
 test("explicit unlock command reports when channels are already unlocked", async () => {
-  const general = buildMockLockChannel("1484218577589637233", {
+  const general = buildMockLockChannel("1498745066339045406", {
+    sendMessagesState: null,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: null,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$unlock", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getSendMessagesState(), null);
+  assert.equal(support.getSendMessagesState(), null);
+  assert.equal(general.getEditCalls(), 0);
+  assert.equal(support.getEditCalls(), 0);
+  assert.match(message.replies[0].embeds[0].data.description, /already unlocked/i);
+});
+
+test("unlock command clears explicit allows back to neutral overwrites", async () => {
+  const general = buildMockLockChannel("1498745066339045406", {
     sendMessagesState: true,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
@@ -717,11 +747,37 @@ test("explicit unlock command reports when channels are already unlocked", async
   const handled = await maybeHandleLockCommand(message);
 
   assert.equal(handled, true);
-  assert.match(message.replies[0].embeds[0].data.description, /already unlocked/i);
+  assert.equal(general.getSendMessagesState(), null);
+  assert.equal(support.getSendMessagesState(), null);
+  assert.match(message.replies[0].embeds[0].data.description, /unlocked channels/i);
+  assert.match(message.replies[0].embeds[0].data.description, /\*\*Changed:\*\* 2/i);
+});
+
+test("lock status reports per-channel permission state without changing channels", async () => {
+  const general = buildMockLockChannel("1498745066339045406", {
+    sendMessagesState: false,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: null,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$lock status", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getEditCalls(), 0);
+  assert.equal(support.getEditCalls(), 0);
+  assert.match(message.replies[0].embeds[0].data.description, /channel lock status/i);
+  assert.match(message.replies[0].embeds[0].data.description, /general chat.*locked/is);
+  assert.match(message.replies[0].embeds[0].data.description, /community support chat.*unlocked/is);
 });
 
 test("lock command reports missing bot permissions before changing anything", async () => {
-  const general = buildMockLockChannel("1484218577589637233", {
+  const general = buildMockLockChannel("1498745066339045406", {
     sendMessagesState: true,
     botPermissions: [PermissionFlagsBits.ViewChannel]
   });
@@ -739,6 +795,31 @@ test("lock command reports missing bot permissions before changing anything", as
   assert.equal(general.getSendMessagesState(), true);
   assert.equal(support.getSendMessagesState(), true);
   assert.match(message.replies[0].embeds[0].data.description, /Manage Channels/i);
+  assert.match(message.replies[0].embeds[0].data.description, /Manage Roles/i);
+});
+
+test("lock command rolls back partial permission overwrite failures", async () => {
+  const general = buildMockLockChannel("1498745066339045406", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles],
+    failEdit: true
+  });
+  const message = buildLockCommandMessage("$lock", {
+    channels: [general, support]
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getSendMessagesState(), true);
+  assert.equal(support.getSendMessagesState(), true);
+  assert.equal(general.getEditCalls(), 2);
+  assert.equal(support.getEditCalls(), 1);
+  assert.match(message.replies[0].embeds[0].data.description, /rolled back/i);
 });
 
 test("owner status command bypasses cooldown logic", async () => {
@@ -813,18 +894,18 @@ test("auto status matcher stays focused on actual status prompts", () => {
 });
 
 test("marks the configured general chat as no-response", () => {
-  assert.equal(isNoResponseChannel("1484218577589637233"), true);
+  assert.equal(isNoResponseChannel("1498745066339045406"), true);
   assert.equal(isNoResponseChannel("1489747706980339773"), false);
 });
 
 test("detects no-response messages only for guild traffic", () => {
   assert.equal(isNoResponseMessage({
     inGuild: () => true,
-    channelId: "1484218577589637233"
+    channelId: "1498745066339045406"
   }), true);
   assert.equal(isNoResponseMessage({
     inGuild: () => false,
-    channelId: "1484218577589637233"
+    channelId: "1498745066339045406"
   }), false);
 });
 

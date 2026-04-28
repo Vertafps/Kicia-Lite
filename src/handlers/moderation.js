@@ -81,12 +81,6 @@ const SUSPICIOUS_PATTERNS = [
     confidence: 93
   },
   {
-    label: "private-contact",
-    pattern: /\b(?:dm|pm|message|msg)\s+me\b/,
-    reason: "moving the conversation into private messages",
-    confidence: 78
-  },
-  {
     label: "cracked-or-leaked",
     pattern: /\b(?:cracked|leaked)\s+(?:kicia|kiciahook|premium)\b/,
     reason: "mentioning cracked or leaked product access",

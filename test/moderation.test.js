@@ -327,6 +327,7 @@ test("suspicious detection catches private DM steering while skipping reminders"
   assert.match(vagueSignal.reason, /private messages/i);
   assert.ok(vagueSignal.confidence < 90);
 
+  assert.equal(detectSuspiciousSignal("dm me"), null);
   assert.equal(detectSuspiciousSignal("dont dm me"), null);
   assert.equal(detectSuspiciousSignal("disable antivirus before injecting"), null);
   assert.equal(detectSuspiciousSignal("turn off windows defender then open kicia"), null);
@@ -626,7 +627,7 @@ test("suspicious messages timeout on the second hit in one hour", async () => {
   assert.equal(fixture.timeouts.length, 0);
 
   fixture.message.id = "message-2";
-  fixture.message.content = "dm me";
+  fixture.message.content = "extra files dm me";
   await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",

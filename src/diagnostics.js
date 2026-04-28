@@ -9,6 +9,8 @@ const {
   SUSPICIOUS_ALERT_WINDOW_MS,
   SUSPICIOUS_TIMEOUT_THRESHOLD,
   SUSPICIOUS_TIMEOUT_MS,
+  SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_THRESHOLD,
   SELLING_REPEAT_WINDOW_MS,
@@ -143,7 +145,8 @@ function buildModerationGuardLines() {
     [
       "**Suspicious Alerts:**",
       `timeout at ${SUSPICIOUS_TIMEOUT_THRESHOLD} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
-      `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`
+      `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`,
+      `or confidence > ${SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD}% timeout ${formatDuration(SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS)}`
     ].join(" "),
     "**Suspicious Rules:** private DM steering, credential asks, cracked/leaked/free premium, paste/run/download prompts",
     [

@@ -320,10 +320,12 @@ test("suspicious detection catches private DM steering while skipping reminders"
   const signal = detectSuspiciousSignal("dm me for the link");
   assert.ok(signal);
   assert.match(signal.reason, /links privately/i);
+  assert.ok(signal.confidence > 90);
 
   const vagueSignal = detectSuspiciousSignal("OK MORE STUFF IS THERE, EXPLAIN: dm me");
   assert.ok(vagueSignal);
   assert.match(vagueSignal.reason, /private messages/i);
+  assert.ok(vagueSignal.confidence < 90);
 
   assert.equal(detectSuspiciousSignal("dont dm me"), null);
   assert.equal(detectSuspiciousSignal("disable antivirus before injecting"), null);
@@ -598,7 +600,7 @@ test("suspicious messages timeout on the second hit in one hour", async () => {
   assert.equal(fixture.timeouts.length, 0);
 
   fixture.message.id = "message-2";
-  fixture.message.content = "dm me for the script";
+  fixture.message.content = "dm me";
   await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",
@@ -619,6 +621,29 @@ test("suspicious messages timeout on the second hit in one hour", async () => {
   const byKey = new Map(snapshot.moderation.map((entry) => [entry.eventKey, entry.eventCount]));
   assert.equal(byKey.get("suspicious_alert"), 1);
   assert.equal(byKey.get("suspicious_timeout"), 1);
+});
+
+test("high-confidence suspicious messages timeout for one hour immediately", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("dm me for the script");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.replies.length, 1);
+  assert.match(fixture.replies[0].content, /\(2\/2\)$/);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Suspicious Message Timeout/i);
+  assert.match(fixture.logs[0].body, /Confidence:\*\* 93%/i);
+  assert.match(fixture.logs[0].body, /confidence 93% > 90%/i);
+  assert.equal(fixture.dms.length, 1);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 60 * 60 * 1000);
+  assert.match(fixture.timeouts[0].reason, /high-confidence suspicious/i);
 });
 
 test("restricted emoji database adds and removes emojis", async () => {

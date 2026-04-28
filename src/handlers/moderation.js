@@ -7,6 +7,8 @@ const {
   SUSPICIOUS_WARNING_THRESHOLD,
   SUSPICIOUS_TIMEOUT_THRESHOLD,
   SUSPICIOUS_TIMEOUT_MS,
+  SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_THRESHOLD,
   SELLING_REPEAT_WINDOW_MS,
@@ -63,37 +65,44 @@ const SUSPICIOUS_PATTERNS = [
   {
     label: "credential-request",
     pattern: /\b(?:send|give|share|paste)\s+(?:me\s+)?(?:your\s+)?(?:password|token|cookie|cookies|login)\b/,
-    reason: "asking for private account credentials"
+    reason: "asking for private account credentials",
+    confidence: 98
   },
   {
     label: "private-more-info",
     pattern: /\b(?:more|extra|other)\s+(?:stuff|info|details|links?|files?)\b.*\b(?:dm|pm|message|msg)\s+me\b/,
-    reason: "moving extra details into private messages"
+    reason: "moving extra details into private messages",
+    confidence: 86
   },
   {
     label: "dm-link-offer",
     pattern: /\b(?:dm|pm|message|msg)\s+me\s+for\s+(?:the\s+|a\s+)?(?:link|download|invite|crack|leak|file|script|executor|key|account|config)\b/,
-    reason: "offering links privately"
+    reason: "offering links privately",
+    confidence: 93
   },
   {
     label: "private-contact",
     pattern: /\b(?:dm|pm|message|msg)\s+me\b/,
-    reason: "moving the conversation into private messages"
+    reason: "moving the conversation into private messages",
+    confidence: 78
   },
   {
     label: "cracked-or-leaked",
     pattern: /\b(?:cracked|leaked)\s+(?:kicia|kiciahook|premium)\b/,
-    reason: "mentioning cracked or leaked product access"
+    reason: "mentioning cracked or leaked product access",
+    confidence: 96
   },
   {
     label: "paste-this",
     pattern: /\b(?:paste|run|download)\s+this\b/,
-    reason: "asking users to run, download, or paste unknown content"
+    reason: "asking users to run, download, or paste unknown content",
+    confidence: 92
   },
   {
     label: "free-premium",
     pattern: /\bfree premium\b/,
-    reason: "claiming free premium access"
+    reason: "claiming free premium access",
+    confidence: 91
   }
 ];
 const SUSPICIOUS_ANTI_PATTERNS = [
@@ -420,7 +429,8 @@ function detectSuspiciousSignal(content) {
       return {
         type: "suspicious",
         reason: candidate.reason,
-        label: candidate.label
+        label: candidate.label,
+        confidence: candidate.confidence || 75
       };
     }
   }
@@ -621,7 +631,8 @@ function pruneSellingUserState(now = Date.now()) {
   }
 }
 
-function getSuspiciousAction(count) {
+function getSuspiciousAction({ count, confidence }) {
+  if (confidence > SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD) return "timeout";
   if (count >= SUSPICIOUS_TIMEOUT_THRESHOLD) return "timeout";
   if (count >= SUSPICIOUS_WARNING_THRESHOLD) return "warn";
   return "alert";
@@ -633,7 +644,8 @@ function pickPublicReplyLine(lines) {
 }
 
 function buildSuspiciousPublicReply(state) {
-  const hit = Math.max(1, Math.min(state?.count || 1, SUSPICIOUS_TIMEOUT_THRESHOLD));
+  const displayCount = state?.highConfidence ? SUSPICIOUS_TIMEOUT_THRESHOLD : state?.count || 1;
+  const hit = Math.max(1, Math.min(displayCount, SUSPICIOUS_TIMEOUT_THRESHOLD));
   const line = pickPublicReplyLine(SUSPICIOUS_PUBLIC_REPLIES_BY_HIT[hit - 1]);
   return `${line} (${hit}/${SUSPICIOUS_TIMEOUT_THRESHOLD})`;
 }
@@ -660,10 +672,17 @@ async function tryReplyModerationMessage(message, content, replyType) {
 
 function rememberSuspiciousMessage(message, signals, now = Date.now()) {
   const key = buildSuspiciousUserKey(message);
+  const confidence = getMaxSignalConfidence(signals);
+  const highConfidence = confidence > SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD;
   if (!key) {
     return {
       count: 1,
-      action: "alert",
+      confidence,
+      highConfidence,
+      action: highConfidence ? "timeout" : "alert",
+      trigger: highConfidence
+        ? `confidence ${confidence}% > ${SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD}%`
+        : "below immediate-timeout confidence",
       events: []
     };
   }
@@ -675,6 +694,7 @@ function rememberSuspiciousMessage(message, signals, now = Date.now()) {
     channelId: message.channelId,
     messageId: message.id,
     url: buildMessageUrl(message),
+    confidence,
     reasons: signals.map((signal) => signal.reason)
   });
   entry.events = entry.events.slice(-Math.max(SUSPICIOUS_TIMEOUT_THRESHOLD + 2, 5));
@@ -682,7 +702,14 @@ function rememberSuspiciousMessage(message, signals, now = Date.now()) {
 
   return {
     count: entry.events.length,
-    action: getSuspiciousAction(entry.events.length),
+    confidence,
+    highConfidence,
+    action: getSuspiciousAction({ count: entry.events.length, confidence }),
+    trigger: highConfidence
+      ? `confidence ${confidence}% > ${SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD}%`
+      : entry.events.length >= SUSPICIOUS_TIMEOUT_THRESHOLD
+        ? `${entry.events.length} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`
+        : "below immediate-timeout confidence",
     events: [...entry.events]
   };
 }
@@ -943,7 +970,7 @@ function formatSignalReasons(signals) {
     .join("\n");
 }
 
-function buildSuspiciousDmPayload({ message, signals, action, durationMs, count }) {
+function buildSuspiciousDmPayload({ message, signals, action, durationMs, count, confidence = 0, highConfidence = false }) {
   const isTimeout = action === "timeout";
 
   return {
@@ -952,10 +979,13 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count 
         header: isTimeout ? "Suspicious Message Timeout" : "Suspicious Message Warning",
         body: [
           isTimeout
-            ? `i timed you out for ${formatDuration(durationMs)} because multiple recent messages looked suspicious`
+            ? highConfidence
+              ? `i timed you out for ${formatDuration(durationMs)} because this message looked highly suspicious`
+              : `i timed you out for ${formatDuration(durationMs)} because multiple recent messages looked suspicious`
             : "i flagged one of your recent messages as suspicious",
           "please do not repeat this kind of message; staff have been notified",
           `**Channel:** <#${message.channelId}>`,
+          `**Confidence:** ${confidence}%`,
           `**Suspicious Hits:** ${count}`,
           `**Why:**\n${formatSignalReasons(signals)}`,
           `**Message:** ${trimExcerpt(message.content, 180)}`
@@ -990,6 +1020,8 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
       `**Channel:** <#${message.channelId}>`,
       link ? `**Jump:** [Open message](${link})` : null,
       `**Action:** ${action}`,
+      `**Confidence:** ${state.confidence || 0}%`,
+      `**Trigger:** ${state.trigger || "watch window"}`,
       `**Suspicious Hits:** ${state.count} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
       `**Why:**\n${formatSignalReasons(signals)}`,
       `**Message:** ${trimExcerpt(message.content)}`
@@ -1117,9 +1149,11 @@ async function handleSellingMessage(message, signals, {
 async function handleSuspiciousMessage(message, signals, {
   sendLog = sendLogPanel,
   timeoutMs = SUSPICIOUS_TIMEOUT_MS,
+  highConfidenceTimeoutMs = SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
   now = Date.now()
 } = {}) {
   const state = rememberSuspiciousMessage(message, signals, now);
+  const effectiveTimeoutMs = state.highConfidence ? highConfidenceTimeoutMs : timeoutMs;
   const publicReplySent = await tryReplyModerationMessage(
     message,
     buildSuspiciousPublicReply(state),
@@ -1132,13 +1166,19 @@ async function handleSuspiciousMessage(message, signals, {
   };
 
   if (state.action === "timeout") {
-    timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "repeated suspicious messages");
+    timeoutResult = await tryTimeoutMessageMember(
+      message.member,
+      effectiveTimeoutMs,
+      state.highConfidence ? "high-confidence suspicious message" : "repeated suspicious messages"
+    );
     dmSent = await safeSend(message.author, buildSuspiciousDmPayload({
       message,
       signals,
       action: state.action,
-      durationMs: timeoutMs,
-      count: state.count
+      durationMs: effectiveTimeoutMs,
+      count: state.count,
+      confidence: state.confidence,
+      highConfidence: state.highConfidence
     }));
 
     if (!timeoutResult.applied) {
@@ -1149,8 +1189,10 @@ async function handleSuspiciousMessage(message, signals, {
       message,
       signals,
       action: state.action,
-      durationMs: timeoutMs,
-      count: state.count
+      durationMs: effectiveTimeoutMs,
+      count: state.count,
+      confidence: state.confidence,
+      highConfidence: state.highConfidence
     }));
   }
   await recordModerationStat(
@@ -1164,7 +1206,7 @@ async function handleSuspiciousMessage(message, signals, {
     state,
     timeoutResult,
     dmSent,
-    durationMs: timeoutMs
+    durationMs: effectiveTimeoutMs
   })).catch(() => null);
 
   return {

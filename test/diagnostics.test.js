@@ -10,7 +10,10 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   const body = buildModerationGuardLines().join("\n");
 
   assert.match(body, /False Info Guard/i);
-  assert.match(body, /trusted extras/i);
+  assert.match(body, /docs\/trusted\/gifs/i);
+  assert.match(body, /homoglyphs/i);
+  assert.match(body, /masked links/i);
+  assert.match(body, /shorteners\/invites warn/i);
   assert.match(body, /Suspicious Alerts/i);
   assert.match(body, /timeout at 2 in 1h/i);
   assert.match(body, /timeout 10m/i);

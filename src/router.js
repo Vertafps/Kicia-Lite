@@ -116,11 +116,16 @@ function detectStatusQuestion(text) {
 }
 
 function buildStatusReplyBody(runtimeStatus = "UP") {
+  const statusLine = runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY;
+  const detailLine = runtimeStatus === "DOWN"
+    ? "KiciaHook is marked down right now, so docs fixes may not solve it until status changes."
+    : "KiciaHook is marked online right now. If your setup still fails, check executor support and the docs match below.";
   return [
-    runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY,
-    STATUS_CHANNEL_REPLY,
-    STATUS_COMMAND_REPLY
-  ].join("\n\n");
+    `**Current:** ${statusLine}`,
+    detailLine,
+    `**Updates:** ${STATUS_CHANNEL_REPLY}`,
+    `**Quick Check:** ${STATUS_COMMAND_REPLY}`
+  ].join("\n");
 }
 
 function detectBanQuestion(text) {
@@ -222,6 +227,8 @@ function detectExecutorListIntent(text, kb) {
     /\bwhich\s+(?:free\s+|paid\s+)?executors?\s+(?:are\s+)?(?:recommended|supported|working|work)\b/.test(normalized) ||
     /\bshow\s+me\s+(?:the\s+)?(?:recommended|supported|best|working)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
     /\bexecutors?\s+(?:that|which)?\s*(?:are\s+)?(?:working|work|supported)\b/.test(normalized) ||
+    /\b(?:executor|executors)\s+list\b/.test(normalized) ||
+    /\blist\s+(?:free\s+|paid\s+)?(?:supported\s+|recommended\s+|working\s+)?executors?\b/.test(normalized) ||
     /^executors?$/.test(normalized); // Support "executors" or "executor" alone
   const mentionsExecutorSet = /\bexecutors?\b/.test(normalized);
 
@@ -378,6 +385,7 @@ function buildExecutorListReply(kb, options = {}) {
       kind: "executor_list",
       header: "\u{1F9E9} Executor Picks",
       body: `not seeing a ${typeLabel}supported executor listed in the documentation rn`,
+      buttons: [{ label: "Open Supported Executors", url: BRAND.DOCS_JUMP_URL }],
       color: "info"
     };
   }
@@ -393,6 +401,7 @@ function buildExecutorListReply(kb, options = {}) {
     kind: "executor_list",
     header: "\u{1F9E9} Executor Picks",
     body: `${intro}\n\n${lines.join("\n")}`,
+    buttons: [{ label: "Open Supported Executors", url: BRAND.DOCS_JUMP_URL }],
     color: "success"
   };
 }
@@ -444,6 +453,7 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
       kind: "executor_unknown",
       header: "\u2753 Couldn't Find That Executor",
       body: bodyLines.join("\n\n"),
+      buttons: [{ label: "Open Supported Executors", url: BRAND.DOCS_JUMP_URL }],
       color: "info"
     };
   }
@@ -481,6 +491,10 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
     tip: firstLink ? `## \u{1F517} [Open ${executor.name}](${firstLink.url})` : undefined,
     tipStyle: "heading",
     tipLevel: "##",
+    buttons: [
+      firstLink ? { label: `Open ${executor.name}`, url: firstLink.url } : null,
+      { label: "Supported Executors", url: BRAND.DOCS_JUMP_URL }
+    ].filter(Boolean),
     color
   };
 }
@@ -543,6 +557,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
       kind: "status",
       header: "\u{1F4E1} KiciaHook Status",
       body: buildStatusReplyBody(runtimeStatus),
+      buttons: [{ label: "Open Status Channel", url: BRAND.STATUS_JUMP_URL }],
       color: runtimeStatus === "DOWN" ? "warn" : "success"
     };
   }
@@ -591,6 +606,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         tip: `## \u{1F4D8} [Full docs](${BRAND.DOCS_JUMP_URL})`,
         tipStyle: "heading",
         tipLevel: "##",
+        buttons: [{ label: "Open Full Docs", url: BRAND.DOCS_JUMP_URL }],
         color: "success"
       },
       runtimeStatus
@@ -609,6 +625,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         ? `Hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out.`
         : `Open a ticket here: **[ticket panel](${BRAND.TICKET_JUMP_URL})**.`,
       tip: "Drop screenshots and what you've already tried.",
+      buttons: [{ label: "Open Ticket Panel", url: BRAND.TICKET_JUMP_URL }],
       color: supportOnly ? "warn" : "info"
     },
     runtimeStatus

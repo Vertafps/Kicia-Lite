@@ -909,24 +909,33 @@ async function replyToRoastingMessage(message) {
   return tryReplyModerationMessage(message, buildRoastingPublicReply(), "roasting");
 }
 
-function buildBlockedLinkTimeoutPayload({ message, signal, durationMs }) {
+function formatBlockedLinkReasons(signal) {
+  const reasons = signal.reasons?.length ? signal.reasons : [signal.reason || "risky link detected"];
+  return reasons.map((reason) => `- ${reason}`).join("\n");
+}
+
+function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
   const shownLinks = signal.blockedLinks
     .slice(0, 3)
     .map((entry) => `- ${entry.raw}`)
     .join("\n");
+  const isTimeout = signal.action === "timeout";
 
   return {
     embeds: [
       buildPanel({
-        header: "Link Timeout",
+        header: isTimeout ? "Link Timeout" : "Link Warning",
         body: [
-          "you sent a link that isn't on the approved docs allowlist",
-          `**Timeout:** ${Math.round(durationMs / 1000)}s`,
+          isTimeout
+            ? `i timed you out for ${formatDuration(durationMs)} because that link looked high-risk`
+            : "i removed that link because it looked risky",
           `**Channel:** <#${message.channelId}>`,
+          `**Threat Level:** ${signal.threatLevel}`,
+          `**Why:**\n${formatBlockedLinkReasons(signal)}`,
           "**Blocked Link(s):**",
           shownLinks,
-          "tenor gifs and links already listed in docs are allowed"
-        ].join("\n"),
+          "docs links, trusted staff-added links, common safe links, and gif links are allowed"
+        ].join("\n\n"),
         color: WARN
       })
     ]
@@ -941,18 +950,27 @@ function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult
     .join("\n");
 
   return {
-    header: timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert",
+    header:
+      signal.action === "timeout"
+        ? timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert"
+        : signal.action === "warn"
+          ? "Blocked Link Warning"
+          : "Link Review",
     body: [
       timeoutResult.applied
         ? "link guard triggered and action was applied"
-        : "link guard triggered, but the action did not fully apply",
+        : signal.action === "review"
+          ? "link guard logged a low-risk link for staff review"
+          : "link guard triggered, but the action did not fully apply",
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
-      `**Action:** delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | timeout ${
-        timeoutResult.applied ? `${Math.round(durationMs / 1000)}s` : timeoutResult.reason
+      `**Action:** ${signal.action} | delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | timeout ${
+        timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason
       } | dm ${dmSent ? "sent" : "not sent"}`,
-      `**Policy:** only docs-listed links and tenor gifs are allowed`,
+      `**Threat:** ${signal.threatLevel} (${signal.confidence || 0}%)`,
+      `**Policy:** docs/trusted/gif/common-safe links pass; risky links escalate by threat`,
       `**Blocked Link Count:** ${signal.blockedCount}`,
+      `**Why:**\n${formatBlockedLinkReasons(signal)}`,
       "**Blocked Link(s):**",
       shownLinks,
       `**Message Excerpt:** ${trimExcerpt(message.content)}`
@@ -1071,23 +1089,35 @@ async function handleBlockedLinkMessage(message, signal, {
   timeoutMs = LINK_MODERATION_TIMEOUT_MS,
   now = Date.now()
 } = {}) {
-  const deleteResult = await tryDeleteMessage(message);
-  const timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "unapproved link");
-  const dmSent = timeoutResult.applied
-    ? await safeSend(message.author, buildBlockedLinkTimeoutPayload({
+  const action = signal.action || "timeout";
+  const deleteResult = action === "review"
+    ? { deleted: false, reason: "not needed" }
+    : await tryDeleteMessage(message);
+  const timeoutResult = action === "timeout"
+    ? await tryTimeoutMessageMember(message.member, timeoutMs, "high-risk link")
+    : { applied: false, reason: action === "warn" ? "warning only" : "not needed" };
+  const dmSent = action === "timeout" || action === "warn"
+    ? await safeSend(message.author, buildBlockedLinkUserPayload({
         message,
         signal,
         durationMs: timeoutMs
       }))
     : false;
 
-  if (!deleteResult.deleted) {
+  if (action !== "review" && !deleteResult.deleted) {
     recordRuntimeEvent("warn", "blocked-link-delete", deleteResult.reason);
   }
-  if (!timeoutResult.applied) {
+  if (action === "timeout" && !timeoutResult.applied) {
     recordRuntimeEvent("warn", "blocked-link-timeout", timeoutResult.reason);
   }
-  await recordModerationStat(timeoutResult.applied ? "blocked_link_timeout" : "blocked_link_alert", now);
+  await recordModerationStat(
+    action === "timeout"
+      ? timeoutResult.applied ? "blocked_link_timeout" : "blocked_link_alert"
+      : action === "warn"
+        ? "blocked_link_warning"
+        : "blocked_link_review",
+    now
+  );
 
   await sendLog(message.guild, buildBlockedLinkLogPanel({
     message,
@@ -1098,7 +1128,7 @@ async function handleBlockedLinkMessage(message, signal, {
     durationMs: timeoutMs
   })).catch(() => null);
 
-  return true;
+  return action !== "review";
 }
 
 async function handleSellingMessage(message, signals, {
@@ -1243,8 +1273,8 @@ async function maybeHandleModerationWatch(message, {
         trustedLinks
       });
       if (blockedLinkSignal) {
-        await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });
-        return true;
+        const linkHandled = await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });
+        if (linkHandled) return true;
       }
     }
 

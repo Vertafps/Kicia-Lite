@@ -140,7 +140,13 @@ function buildRuntimeSection(message) {
 
 function buildModerationGuardLines() {
   return [
-    `**Link Guard:** docs allowlist + trusted extras + tenor | timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`,
+    [
+      "**Link Guard:**",
+      "docs/trusted/gifs/common-safe links pass;",
+      "unknown low-risk links stay quiet;",
+      "shorteners/invites warn;",
+      `file hosts, homoglyphs, masked links, and malware files timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`
+    ].join(" "),
     "**False Info Guard:** status + executor claim mismatch alerts to logs",
     [
       "**Suspicious Alerts:**",
@@ -164,8 +170,11 @@ async function buildKbSection(refreshKb) {
     const kb = await refreshKb();
     const issueCount = Array.isArray(kb?.issues) ? kb.issues.length : 0;
     const executorAliases = Object.keys(kb?.executorAliasIndex || {}).length;
+    const metaLines = [];
+    if (kb?.meta?.version) metaLines.push(`**Version:** ${kb.meta.version}`);
+    if (kb?.meta?.last_updated) metaLines.push(`**Last Updated:** ${kb.meta.last_updated}`);
     return {
-      text: `## KB\n**Refresh:** ok\n**Issues:** ${issueCount}\n**Executor Aliases:** ${executorAliases}`,
+      text: `## KB\n**Refresh:** ok\n${metaLines.length ? `${metaLines.join("\n")}\n` : ""}**Issues:** ${issueCount}\n**Executor Aliases:** ${executorAliases}`,
       hasIssue: false
     };
   } catch (err) {
@@ -277,7 +286,7 @@ async function runJarvisDiagnostics(message, {
     }
   };
 
-  await progress(0, "warming up fake arc reactor and checking command uplink");
+  await progress(0, "checking command uplink");
   await sleep(stepDelayMs);
 
   await progress(1, "reading runtime status and recent logs");
@@ -299,7 +308,7 @@ async function runJarvisDiagnostics(message, {
   const hasIssue = runtimeSection.hasIssue || kbSection.hasIssue || securitySection.hasIssue;
 
   return {
-    body: [runtimeSection.text, kbSection.text, securitySection.text, "Ready to cook boi <3"].join("\n\n"),
+    body: [runtimeSection.text, kbSection.text, securitySection.text, "Sweep complete."].join("\n\n"),
     color: hasIssue ? WARN : SUCCESS
   };
 }

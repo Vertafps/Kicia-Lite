@@ -100,6 +100,8 @@ function getModerationCount(snapshot, eventKey) {
 
 function getModerationCounts(snapshot) {
   return {
+    blockedLinkReviews: getModerationCount(snapshot, "blocked_link_review"),
+    blockedLinkWarnings: getModerationCount(snapshot, "blocked_link_warning"),
     blockedLinkAlerts: getModerationCount(snapshot, "blocked_link_alert"),
     blockedLinkTimeouts: getModerationCount(snapshot, "blocked_link_timeout"),
     sellingAlerts: getModerationCount(snapshot, "selling_alert"),
@@ -289,7 +291,11 @@ function buildDailyStaffStatsBody(snapshot, staffRoster, windowStartedAt, now) {
 
 function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
   const counts = getModerationCounts(snapshot);
-  const linkGuardTotal = counts.blockedLinkAlerts + counts.blockedLinkTimeouts;
+  const linkGuardTotal =
+    counts.blockedLinkReviews +
+    counts.blockedLinkWarnings +
+    counts.blockedLinkAlerts +
+    counts.blockedLinkTimeouts;
   const suspiciousTotal = counts.suspiciousAlerts + counts.suspiciousWarnings + counts.suspiciousTimeouts;
   const restrictedReactionTotal = counts.restrictedReactionAlerts + counts.restrictedReactionTimeouts;
   const totalEvents = sumModerationCounts(snapshot.moderation);
@@ -300,7 +306,7 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
   return [
     `**Window:** ${formatDiscordTimestamp(windowStartedAt, "t")} -> ${formatDiscordTimestamp(now, "t")}`,
     `**Total Moderation Events:** ${totalEvents}`,
-    `**Link Guard:** ${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkAlerts} alerts`,
+    `**Link Guard:** ${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkWarnings} warnings | ${counts.blockedLinkReviews + counts.blockedLinkAlerts} reviews`,
     `**Suspicious Alerts:** ${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`,
     `**False Info Alerts:** ${counts.fakeInfoAlerts}`,
     `**Selling Guard:** ${counts.sellingAlerts + counts.sellingTimeouts} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`,

@@ -71,6 +71,7 @@ function keepSignalToken(token) {
 function normalizeExecutorLinks(entry) {
   const seen = new Set();
   const links = [];
+  const executorName = typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : "executor";
   const rawLinks = [
     entry.link,
     ...(Array.isArray(entry.links) ? entry.links : [])
@@ -82,10 +83,10 @@ function normalizeExecutorLinks(entry) {
 
     if (typeof rawLink === "string") {
       url = rawLink.trim();
-      label = `Open ${entry.name}`;
+      label = `Open ${executorName}`;
     } else if (rawLink && typeof rawLink === "object") {
       url = typeof rawLink.url === "string" ? rawLink.url.trim() : "";
-      label = typeof rawLink.label === "string" && rawLink.label.trim() ? rawLink.label.trim() : `Open ${entry.name}`;
+      label = typeof rawLink.label === "string" && rawLink.label.trim() ? rawLink.label.trim() : `Open ${executorName}`;
     }
 
     if (!url || seen.has(url)) continue;
@@ -100,38 +101,70 @@ function normalizeKb(data) {
   const raw = Array.isArray(data) ? { issues: data } : data;
   if (!raw || !Array.isArray(raw.issues)) throw new Error("KB not an array");
 
-  const issues = raw.issues.map((entry) => ({
-    ...entry,
-    category: entry.category || null,
-    match_phrases: entry.match_phrases || entry.strong_keywords || [],
-    strong_keywords: entry.strong_keywords || entry.match_phrases || [],
-    _normalizedTitle: normalizeText(entry.title),
-    _matchPhrases: uniqueNormalized(entry.match_phrases || entry.strong_keywords || []),
-    _keywords: uniqueNormalized(entry.keywords || []),
-    _titleTokens: [...new Set(tokenize(entry.title).filter(keepSignalToken))],
-    _replyTokens: [
-      ...new Set(
-        tokenize(`${entry.reply || ""} ${(entry.steps || []).join(" ")}`).filter(keepSignalToken)
-      )
-    ]
-  }));
+  const issues = raw.issues.map((entry) => {
+    const title = typeof entry.title === "string" && entry.title.trim()
+      ? entry.title.trim()
+      : "Untitled KB Issue";
+    const steps = Array.isArray(entry.steps)
+      ? entry.steps.filter((step) => step != null && String(step).trim()).map(String)
+      : [];
+    const keywords = Array.isArray(entry.keywords)
+      ? entry.keywords
+      : entry.keywords ? [entry.keywords] : [];
+    const matchPhrases = [
+      ...(Array.isArray(entry.match_phrases) ? entry.match_phrases : entry.match_phrases ? [entry.match_phrases] : []),
+      ...(Array.isArray(entry.strong_keywords) ? entry.strong_keywords : entry.strong_keywords ? [entry.strong_keywords] : [])
+    ];
+    const cause = typeof entry.cause === "string" ? entry.cause : "";
+    const reply = typeof entry.reply === "string" ? entry.reply : "";
+
+    return {
+      ...entry,
+      title,
+      reply,
+      steps,
+      category: entry.category || null,
+      match_phrases: matchPhrases,
+      strong_keywords: matchPhrases,
+      _normalizedTitle: normalizeText(title),
+      _matchPhrases: uniqueNormalized(matchPhrases),
+      _keywords: uniqueNormalized(keywords),
+      _titleTokens: [...new Set(tokenize(title).filter(keepSignalToken))],
+      _replyTokens: [
+        ...new Set(
+          tokenize(`${reply} ${cause} ${steps.join(" ")}`).filter(keepSignalToken)
+        )
+      ]
+    };
+  });
 
   const executorsByStatus = Object.fromEntries(
     EXECUTOR_STATUSES.map((status) => {
       const list = Array.isArray(raw.executors?.[status]) ? raw.executors[status] : [];
       return [
         status,
-        list.map((entry) => ({
-          ...entry,
-          status,
-          type: entry.type || null,
-          compatibility: entry.compatibility || null,
-          reply: entry.reply || null,
-          notes: Array.isArray(entry.notes) ? entry.notes.filter(Boolean) : entry.notes ? [entry.notes] : [],
-          links: normalizeExecutorLinks(entry),
-          aliases: [...new Set([entry.name, ...(entry.aliases || [])])],
-          normalizedAliases: uniqueNormalized([entry.name, ...(entry.aliases || [])])
-        }))
+        list.map((entry) => {
+          const name = typeof entry.name === "string" && entry.name.trim()
+            ? entry.name.trim()
+            : "Unknown Executor";
+          const rawAliases = Array.isArray(entry.aliases)
+            ? entry.aliases
+            : entry.aliases ? [entry.aliases] : [];
+          const aliases = [...new Set([name, ...rawAliases].filter(Boolean))];
+
+          return {
+            ...entry,
+            name,
+            status,
+            type: entry.type || null,
+            compatibility: entry.compatibility || null,
+            reply: entry.reply || null,
+            notes: Array.isArray(entry.notes) ? entry.notes.filter(Boolean) : entry.notes ? [entry.notes] : [],
+            links: normalizeExecutorLinks({ ...entry, name }),
+            aliases,
+            normalizedAliases: uniqueNormalized(aliases)
+          };
+        })
       ];
     })
   );
@@ -155,6 +188,7 @@ function normalizeKb(data) {
     : null;
 
   return {
+    meta: raw.meta && typeof raw.meta === "object" ? raw.meta : {},
     issues,
     executorsByStatus,
     executorAliasIndex,

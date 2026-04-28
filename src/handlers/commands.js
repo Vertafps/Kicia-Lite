@@ -96,9 +96,12 @@ function formatTrustedLinkList(links) {
 
 function buildCommandsBody() {
   return [
+    "## Everyone",
+    "`$status` show the current KiciaHook status",
+    "Ping me after describing an issue and I will match the docs",
+    "",
     "## Owners",
     "`$cmd` show this command list",
-    "`$status` show the current public status reply",
     "`$status up` mark status as up",
     "`$status down` mark status as down",
     "`$fetch` refresh the KB cache",
@@ -126,7 +129,7 @@ async function replyWithCommandPanel(message, panel) {
 
 async function handleCommandsList(message) {
   await replyWithCommandPanel(message, {
-    header: "Owner Commands",
+    header: "Bot Commands",
     body: buildCommandsBody(),
     color: INFO
   });

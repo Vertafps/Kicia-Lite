@@ -1,5 +1,6 @@
-const { CHANNEL_LOCK_ROLE_ID } = require("../config");
+const { BRAND, CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
+const { buildLinkButtonRows } = require("../components");
 const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
 const { canUseOwnerCommands } = require("../permissions");
@@ -34,7 +35,12 @@ function isJarvisCommandMessage(content) {
 }
 
 function isOwnerCommandMessage(content) {
-  return isStatusCommandMessage(content) || isFetchCommandMessage(content) || isJarvisCommandMessage(content);
+  return (
+    parseStatusCommand(content) !== null ||
+    (isStatusCommandMessage(content) && !isPublicStatusQueryMessage(content)) ||
+    isFetchCommandMessage(content) ||
+    isJarvisCommandMessage(content)
+  );
 }
 
 function isShortStatusPrompt(content) {
@@ -64,6 +70,7 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
 
   await safeReply(message, {
     embeds: [buildStatusEmbed(getRuntimeStatus())],
+    components: buildLinkButtonRows([{ label: "Open Status Channel", url: BRAND.STATUS_JUMP_URL }]),
     allowedMentions: { repliedUser: false }
   });
 
@@ -134,7 +141,11 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   const fetchCommand = isFetchCommandMessage(message.content);
   const jarvisCommand = isJarvisCommandMessage(message.content);
 
-  if (statusCommand || nextStatus || fetchCommand || jarvisCommand) {
+  if (statusCommand && isPublicStatusQueryMessage(message.content)) {
+    return maybeReplyWithPublicStatus(message, { useCooldown: false });
+  }
+
+  if (nextStatus || fetchCommand || jarvisCommand || statusCommand) {
     if (!canUseOwnerCommands(message)) return true;
   }
 
@@ -183,10 +194,6 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   }
 
   if (statusCommand) {
-    if (isPublicStatusQueryMessage(message.content)) {
-      return maybeReplyWithPublicStatus(message, { useCooldown: false });
-    }
-
     await safeReply(message, {
       embeds: [
         buildPanel({

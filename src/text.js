@@ -1,11 +1,65 @@
 const STRIP_USER_MENTIONS_RE = /<@!?\d+>/g;
+const INVISIBLE_TEXT_RE = /[\u200B-\u200D\u2060\uFEFF]/g;
+const COMBINING_MARK_RE = /[\u0300-\u036f]/g;
+const CONFUSABLE_CHAR_MAP = new Map([
+  ["\u0430", "a"],
+  ["\u03B1", "a"],
+  ["\uFF41", "a"],
+  ["\u0184", "b"],
+  ["\u0421", "c"],
+  ["\u0441", "c"],
+  ["\u03F2", "c"],
+  ["\uFF43", "c"],
+  ["\u0501", "d"],
+  ["\u0435", "e"],
+  ["\u0451", "e"],
+  ["\u03B5", "e"],
+  ["\uFF45", "e"],
+  ["\u0261", "g"],
+  ["\u04BB", "h"],
+  ["\u0456", "i"],
+  ["\u0406", "i"],
+  ["\u03B9", "i"],
+  ["\uFF49", "i"],
+  ["\u0458", "j"],
+  ["\u0131", "i"],
+  ["\u04CF", "l"],
+  ["\u217C", "l"],
+  ["\uFF4C", "l"],
+  ["\u043C", "m"],
+  ["\u03BC", "m"],
+  ["\u043E", "o"],
+  ["\u03BF", "o"],
+  ["\uFF4F", "o"],
+  ["\u0440", "p"],
+  ["\u03C1", "p"],
+  ["\uFF50", "p"],
+  ["\u0455", "s"],
+  ["\uFF53", "s"],
+  ["\u0442", "t"],
+  ["\uFF54", "t"],
+  ["\u0445", "x"],
+  ["\u03C7", "x"],
+  ["\uFF58", "x"],
+  ["\u0443", "y"],
+  ["\uFF59", "y"]
+]);
 const TOKEN_CANONICAL_MAP = new Map([
   ["cna", "can"],
   ["cant", "can"],
+  ["isnt", "is"],
+  ["isn", "is"],
+  ["arent", "are"],
+  ["aren", "are"],
   ["couldnt", "could"],
+  ["couldn", "could"],
+  ["shouldnt", "should"],
+  ["shouldn", "should"],
   ["dont", "do"],
   ["doesn", "does"],
+  ["doesnt", "does"],
   ["wont", "will"],
+  ["won", "will"],
   ["recomend", "recommend"],
   ["recomended", "recommended"],
   ["reccomended", "recommended"],
@@ -65,6 +119,14 @@ const TOKEN_CANONICAL_MAP = new Map([
   ["rly", "really"]
 ]);
 
+function foldConfusableText(text) {
+  return String(text || "")
+    .replace(INVISIBLE_TEXT_RE, "")
+    .normalize("NFKD")
+    .replace(COMBINING_MARK_RE, "")
+    .replace(/./gu, (char) => CONFUSABLE_CHAR_MAP.get(char) || char);
+}
+
 function cleanText(text) {
   return String(text || "")
     .replace(STRIP_USER_MENTIONS_RE, " ")
@@ -73,7 +135,7 @@ function cleanText(text) {
 }
 
 function normalizeText(text) {
-  return cleanText(text)
+  return cleanText(foldConfusableText(text))
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -151,6 +213,13 @@ function fuzzyTokenMatch(a, b) {
   if (!a || !b) return false;
   if (Math.min(a.length, b.length) < 4) return false;
   if (a[0] !== b[0]) return false;
+  if (
+    Math.min(a.length, b.length) >= 8 &&
+    a.slice(0, 3) === b.slice(0, 3) &&
+    isEditDistanceAtMost(a, b, 2)
+  ) {
+    return true;
+  }
   return isEditDistanceAtMost(a, b, 1);
 }
 
@@ -160,6 +229,7 @@ function uniqueNormalized(values) {
 
 module.exports = {
   cleanText,
+  foldConfusableText,
   normalizeText,
   tokenize,
   containsPhrase,

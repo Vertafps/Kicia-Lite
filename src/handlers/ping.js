@@ -1,4 +1,5 @@
 const { buildPanel, SUCCESS, DANGER, WARN, INFO } = require("../embed");
+const { buildLinkButtonRows } = require("../components");
 const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
 const { fetchKb } = require("../kb");
 const { classifyTranscript } = require("../router");
@@ -72,7 +73,11 @@ async function handleGuildPing(message) {
     color: COLOR_BY_NAME[route.color] || INFO
   });
 
-  await safeReply(message, { embeds: [embed], allowedMentions: { repliedUser: false } });
+  await safeReply(message, {
+    embeds: [embed],
+    components: buildLinkButtonRows(route.buttons),
+    allowedMentions: { repliedUser: false }
+  });
   markGuildReply(message.author.id);
 }
 
@@ -84,7 +89,11 @@ async function replyWithError(message) {
   });
 
   try {
-    await safeReply(message, { embeds: [errorEmbed], allowedMentions: { repliedUser: false } });
+    await safeReply(message, {
+      embeds: [errorEmbed],
+      components: buildLinkButtonRows([{ label: "Open Ticket Panel", url: BRAND.TICKET_JUMP_URL }]),
+      allowedMentions: { repliedUser: false }
+    });
   } catch {
     // Nothing we can do at this point.
   }

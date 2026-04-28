@@ -758,7 +758,7 @@ test("owner status command bypasses cooldown logic", async () => {
   assert.equal(getRuntimeStatus(), "DOWN");
 });
 
-test("status command is owner-only for non-owners", async () => {
+test("public status command is available to non-owners", async () => {
   let replyPayload = null;
 
   const handled = await maybeHandleStatusCommand({
@@ -774,7 +774,9 @@ test("status command is owner-only for non-owners", async () => {
   });
 
   assert.equal(handled, true);
-  assert.equal(replyPayload, null);
+  assert.ok(replyPayload);
+  assert.match(replyPayload.embeds[0].data.description, /status says it's up rn/i);
+  assert.equal(replyPayload.components.length, 1);
 });
 
 test("generic no-ping working prompt auto-replies with status", async () => {
@@ -927,8 +929,10 @@ test("owner fetch command replies cleanly on kb refresh failure", async () => {
   assert.equal(replied, true);
 });
 
-test("jarvis counts as an owner-only command", () => {
+test("jarvis counts as an owner-only command while public status does not", () => {
   assert.equal(isOwnerCommandMessage("$jarvis"), true);
+  assert.equal(isOwnerCommandMessage("$status"), false);
+  assert.equal(isOwnerCommandMessage("$status down"), true);
 });
 
 test("emoji command is available to owner role", async () => {

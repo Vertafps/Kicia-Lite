@@ -332,7 +332,7 @@ test("suspicious detection catches private DM steering while skipping reminders"
   assert.equal(detectSuspiciousSignal("turn off windows defender then open kicia"), null);
 });
 
-test("link detection allows docs links and gif links while blocking other files", () => {
+test("link detection allows docs/common links while escalating risky links", () => {
   assert.equal(detectBlockedLinkSignal("example.com", { kb }), null);
   assert.equal(detectBlockedLinkSignal("some random word like thing.gg but not a link", { kb }), null);
   assert.equal(detectBlockedLinkSignal("https://potassium.pro/download", { kb }), null);
@@ -369,18 +369,43 @@ test("link detection allows docs links and gif links while blocking other files"
     kb,
     trustedLinks: [{ url: "https://path-only.example/safe" }]
   }), null);
-  assert.ok(detectBlockedLinkSignal("https://path-only.example/other", {
+  assert.equal(detectBlockedLinkSignal("https://path-only.example/other", {
     kb,
     trustedLinks: [{ url: "https://path-only.example/safe" }]
-  }));
+  }), null);
+  assert.equal(detectBlockedLinkSignal("check https://bing.com/search?q=kicia", { kb }), null);
 
-  const signal = detectBlockedLinkSignal("check https://bing.com/search?q=kicia", { kb });
-  assert.ok(signal);
-  assert.equal(signal.blockedCount, 1);
-  assert.equal(signal.blockedLinks[0].hostname, "bing.com");
-  assert.ok(detectBlockedLinkSignal("gofile.io/d/abc123", { kb }));
-  assert.ok(detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/not-a-gif.png", { kb }));
-  assert.ok(detectBlockedLinkSignal("https://klipy.com/videos/not-a-gif", { kb }));
+  const gofileSignal = detectBlockedLinkSignal("gofile.io/d/abc123", { kb });
+  assert.ok(gofileSignal);
+  assert.equal(gofileSignal.action, "timeout");
+  assert.match(gofileSignal.reason, /file-sharing/i);
+
+  const megaSignal = detectBlockedLinkSignal("mega dot nz slash file/abc123", { kb });
+  assert.ok(megaSignal);
+  assert.equal(megaSignal.action, "timeout");
+
+  const homoglyphSignal = detectBlockedLinkSignal("https://d\u0456scord.com/gift/free", { kb });
+  assert.ok(homoglyphSignal);
+  assert.equal(homoglyphSignal.action, "timeout");
+  assert.match(homoglyphSignal.reason, /discord\.com/i);
+
+  const embeddedBrandSignal = detectBlockedLinkSignal("https://discord.com.evil.example/login", { kb });
+  assert.ok(embeddedBrandSignal);
+  assert.equal(embeddedBrandSignal.action, "timeout");
+  assert.match(embeddedBrandSignal.reason, /embeds discord\.com/i);
+
+  const maskedSignal = detectBlockedLinkSignal("[https://discord.com](https://evil.example/login)", { kb });
+  assert.ok(maskedSignal);
+  assert.equal(maskedSignal.action, "timeout");
+  assert.match(maskedSignal.reason, /masked link/i);
+
+  const shortenerSignal = detectBlockedLinkSignal("https://bit.ly/abc123", { kb });
+  assert.ok(shortenerSignal);
+  assert.equal(shortenerSignal.action, "warn");
+
+  const exeSignal = detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/update.exe", { kb });
+  assert.ok(exeSignal);
+  assert.equal(exeSignal.action, "timeout");
 });
 
 test("fake info guard catches wrong status claims", () => {
@@ -428,7 +453,7 @@ test("raid detector alerts on repeated copy-paste by multiple users", () => {
 
 test("blocked links are deleted, logged, and timed out", async () => {
   await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("check this https://bing.com/search?q=kicia now");
+  const fixture = buildModerationMessage("check this https://mega.nz/file/abc123 now");
 
   const handled = await maybeHandleModerationWatch(fixture.message, {
     kb,
@@ -443,6 +468,7 @@ test("blocked links are deleted, logged, and timed out", async () => {
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Timeout/i);
+  assert.match(fixture.logs[0].body, /file-sharing host is blocked/i);
 
   const snapshot = await getDailyStatsSnapshot();
   const blockedLinkTimeout = snapshot.moderation.find((entry) => entry.eventKey === "blocked_link_timeout");

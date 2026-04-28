@@ -710,11 +710,11 @@ test("explicit lock command reports when channels are already locked", async () 
 
 test("explicit unlock command reports when channels are already unlocked", async () => {
   const general = buildMockLockChannel("1498745066339045406", {
-    sendMessagesState: null,
+    sendMessagesState: true,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
   const support = buildMockLockChannel("1489747706980339773", {
-    sendMessagesState: null,
+    sendMessagesState: true,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
   const message = buildLockCommandMessage("$unlock", {
@@ -724,20 +724,20 @@ test("explicit unlock command reports when channels are already unlocked", async
   const handled = await maybeHandleLockCommand(message);
 
   assert.equal(handled, true);
-  assert.equal(general.getSendMessagesState(), null);
-  assert.equal(support.getSendMessagesState(), null);
+  assert.equal(general.getSendMessagesState(), true);
+  assert.equal(support.getSendMessagesState(), true);
   assert.equal(general.getEditCalls(), 0);
   assert.equal(support.getEditCalls(), 0);
   assert.match(message.replies[0].embeds[0].data.description, /already unlocked/i);
 });
 
-test("unlock command clears explicit allows back to neutral overwrites", async () => {
+test("unlock command restores denied channels to explicit allow overwrites", async () => {
   const general = buildMockLockChannel("1498745066339045406", {
-    sendMessagesState: true,
+    sendMessagesState: false,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
   const support = buildMockLockChannel("1489747706980339773", {
-    sendMessagesState: true,
+    sendMessagesState: false,
     botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
   });
   const message = buildLockCommandMessage("$unlock", {
@@ -747,8 +747,8 @@ test("unlock command clears explicit allows back to neutral overwrites", async (
   const handled = await maybeHandleLockCommand(message);
 
   assert.equal(handled, true);
-  assert.equal(general.getSendMessagesState(), null);
-  assert.equal(support.getSendMessagesState(), null);
+  assert.equal(general.getSendMessagesState(), true);
+  assert.equal(support.getSendMessagesState(), true);
   assert.match(message.replies[0].embeds[0].data.description, /unlocked channels/i);
   assert.match(message.replies[0].embeds[0].data.description, /\*\*Changed:\*\* 2/i);
 });
@@ -773,7 +773,7 @@ test("lock status reports per-channel permission state without changing channels
   assert.equal(support.getEditCalls(), 0);
   assert.match(message.replies[0].embeds[0].data.description, /channel lock status/i);
   assert.match(message.replies[0].embeds[0].data.description, /general chat.*locked/is);
-  assert.match(message.replies[0].embeds[0].data.description, /community support chat.*unlocked/is);
+  assert.match(message.replies[0].embeds[0].data.description, /community support chat.*neutral/is);
 });
 
 test("lock command reports missing bot permissions before changing anything", async () => {

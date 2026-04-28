@@ -98,8 +98,8 @@ function getOverwriteSendMessagesState(channel) {
 
 function getLockStateLabel(state) {
   if (state === false) return "locked";
-  if (state === true) return "explicit allow";
-  return "unlocked";
+  if (state === true) return "unlocked";
+  return "neutral";
 }
 
 function getAggregateLockState(channels) {
@@ -107,7 +107,7 @@ function getAggregateLockState(channels) {
   return {
     states,
     allLocked: states.length > 0 && states.every((state) => state === false),
-    allUnlocked: states.length > 0 && states.every((state) => state === null),
+    allUnlocked: states.length > 0 && states.every((state) => state === true),
     hasExplicitAllow: states.some((state) => state === true),
     mixed: new Set(states).size > 1
   };
@@ -172,7 +172,7 @@ async function replyWithPanel(message, panel) {
 
 function getNextSendMessagesState(command) {
   if (command === "lock") return false;
-  if (command === "unlock") return null;
+  if (command === "unlock") return true;
   return undefined;
 }
 
@@ -203,7 +203,7 @@ function buildLockStatusPanel({ channels, failures }) {
     failures.length ? `\n## Resolve Issues\n${formatResolveFailures(failures)}` : null,
     "",
     "`$lock` denies Send Messages for the configured member role.",
-    "`$unlock` clears that override back to neutral."
+    "`$unlock` explicitly allows Send Messages for that role again."
   ].filter(Boolean).join("\n");
 
   return {

@@ -365,7 +365,7 @@ test("suspicious detection catches private DM steering while skipping reminders"
   assert.equal(detectSuspiciousSignal("dm me"), null);
   assert.equal(detectSuspiciousSignal("dont dm me"), null);
   assert.match(detectSuspiciousSignal("I accidentally reported your account, contact me to appeal").reason, /account scam/i);
-  assert.match(detectSuspiciousSignal("disable windows defender before opening it").reason, /device security/i);
+  assert.equal(detectSuspiciousSignal("disable windows defender before opening it"), null);
   assert.equal(detectSuspiciousSignal("avoid the accidental report scam"), null);
 });
 

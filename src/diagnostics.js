@@ -165,7 +165,7 @@ function buildModerationGuardLines() {
       `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`,
       `or confidence > ${SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD}% timeout ${formatDuration(SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS)}`
     ].join(" "),
-    "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, disable-security prompts, paste/run/download prompts",
+    "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, paste/run/download prompts",
     [
       "**Scam/Trade Guard:**",
       "context-first prefilter checks the target user's last 3 messages plus replied-to message;",

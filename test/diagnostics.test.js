@@ -36,7 +36,7 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   assert.match(body, /credential\/2FA/i);
   assert.match(body, /accidental-report/i);
   assert.match(body, /QR\/OAuth/i);
-  assert.match(body, /disable-security/i);
+  assert.doesNotMatch(body, /disable-security/i);
 });
 
 test("jarvis progress body is clean and current", () => {

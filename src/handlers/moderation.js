@@ -124,12 +124,6 @@ const SUSPICIOUS_PATTERNS = [
     pattern: /\b(?:scan\s+(?:this\s+)?qr|oauth|authorize\s+(?:this\s+)?(?:bot|app|application))\b/,
     reason: "steering users into QR or OAuth authorization flow",
     confidence: 88
-  },
-  {
-    label: "disable-security",
-    pattern: /\b(?:disable|turn\s+off)\s+(?:antivirus|defender|windows\s+defender|security)\b/,
-    reason: "asking users to disable device security",
-    confidence: 97
   }
 ];
 const SUSPICIOUS_ANTI_PATTERNS = [

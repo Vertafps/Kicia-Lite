@@ -27,6 +27,7 @@ const { hasModerationBypassMessage } = require("../permissions");
 const { isModerationWhitelistedUser, listTrustedLinks, recordDailyModerationEvent } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
+const { classifyScamContextWithGemini } = require("../scam-ai");
 const { cleanText, normalizeText } = require("../text");
 const { safeReply, safeSend } = require("../utils/respond");
 
@@ -36,17 +37,21 @@ const recentUserMessages = new Map();
 const suspiciousUserBuckets = new Map();
 const sellingUserBuckets = new Map();
 
-const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits)\b/;
-const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|bucks?|dollars?)\b/;
+const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|configuration|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits|robux|nitro)\b/;
+const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|buyer|buying|bucks?|dollars?|trade|trades|trading|swap|swapping|exchange|middleman|mm)\b/;
 const SELL_PRICE_RE = /(?:^|\s)(?:for\s+)?(?:[$\u20ac\u00a3]\s*)?\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd)?(?:\s|$)/;
 const SELL_CONTEXT_WINDOW_MS = 2 * 60 * 1000;
 const SELL_CONTEXT_MAX_MESSAGES = 3;
 const SELL_OFFER_PATTERNS = [
   /\b(?:i am|im|i m)\s+selling\b/,
+  /\b(?:i am|im|i m)\s+trading\b/,
+  /\b(?:i am|im|i m)\s+buying\b/,
   /\bfor sale\b/,
   /\bdm (?:me )?(?:to buy|for prices?|for price|if you want to buy)\b/,
   /\bbuy (?:my|from me)\b/,
-  /\btaking offers\b/
+  /\btaking offers\b/,
+  /\bwts\b/,
+  /\bwtb\b/
 ];
 const SELL_ANTI_PATTERNS = [
   /\b(?:stop|dont|don't|do not|no)\s+selling\b/,
@@ -57,11 +62,13 @@ const SELL_ANTI_PATTERNS = [
   /\bnot\s+allowed\s+to\s+sell\b/
 ];
 const SELL_NEUTRAL_WORD_RE = /\bresellers?\b/g;
-const SELL_BROAD_INTENT_RE = /\b(?:sell|selling|seller|sold)\b/;
-const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+|e+r+)?)|(?:s+o+l+d+)|(?:w+t+s+)|(?:f+o+r+s+a+l+e+)/;
+const SELL_BROAD_INTENT_RE = /\b(?:sell|selling|seller|sold|buy|buying|buyer|trade|trading|trader|swap|swapping|exchange|scam|scamming)\b/;
+const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+|e+r+)?)|(?:s+o+l+d+)|(?:b+u+y+(?:i+n+g+)?)|(?:t+r+a+d+(?:i+n+g+|e+r+)?)|(?:s+w+a+p+)|(?:w+t+s+)|(?:w+t+b+)|(?:f+o+r+s+a+l+e+)/;
 const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:l+v+l+|l+e+v+e+l+)|(?:c+f+g+|c+o+n+f+i+g+)|(?:e+x+e+c+u+t+o+r+)|(?:s+c+r+i+p+t+)|(?:p+r+e+m+i+u+m+)|(?:l+i+c+e+n+s+e+)|(?:k+e+y+)|(?:k+i+c+i+a+)|(?:k+i+c+i+a+h+o+o+k+)/;
-const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?selling\b|^sell\b|^wts\b|^for sale\b/;
-const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|rules say|rule says)\b/;
+const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?(?:selling|trading|buying)\b|^(?:sell|trade|buy)\b|^(?:wts|wtb)\b|^for sale\b/;
+const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|trading is|buying is|rules say|rule says|scammer|scamming is|report scam|avoid scam)\b/;
+const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/;
+const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone)\b/;
 
 const SUSPICIOUS_PATTERNS = [
   {
@@ -156,15 +163,15 @@ const SUSPICIOUS_PUBLIC_REPLIES_BY_HIT = [
   ]
 ];
 const SELLING_PUBLIC_REPLIES = [
-  "marketplace energy spotted...",
-  "selling arc detected...",
-  "that price tag blinked at me...",
-  "ok vro this is not the bazaar...",
-  "commerce jumpscare...",
-  "bro opened a tiny shop...",
-  "price-tag aura detected...",
+  "scam radar blinked...",
+  "private-deal energy spotted...",
+  "that offer looked risky...",
+  "ok vro this deal stays out of chat...",
+  "trade-risk check passed the threshold...",
+  "that pitch looked a little too slick...",
+  "unsafe deal aura detected...",
   "checkout lane closed...",
-  "that sounded a bit too salesy...",
+  "that sounded like scam/trade bait...",
   "not the trading floor..."
 ];
 const ROASTING_PATTERNS = [
@@ -376,15 +383,15 @@ function scoreSellingConfidence({
   const rawLower = raw.toLowerCase();
   const hasQuestionTone =
     raw.includes("?") ||
-    /^(?:anyone|who|where|can i|am i allowed|is it allowed)\b/.test(spaced);
+    MARKET_QUESTION_RE.test(spaced);
   const hasStrongIntent =
     SELL_STRONG_INTENT_RE.test(spaced) ||
-    /\bwts\b/.test(spaced) ||
+    /\b(?:wts|wtb)\b/.test(spaced) ||
     /f+o+r+s+a+l+e+/.test(condensed);
   const hasCondensedIntent = SELL_CONDENSED_INTENT_RE.test(condensed);
   const hasPriceSignal = /\$\s*\d/.test(raw) || SELL_PRICE_RE.test(rawLower);
   const hasPrivateTradeSignal =
-    /\bdm\s+me\b/.test(spaced) &&
+    PRIVATE_HANDOFF_RE.test(spaced) &&
     /\b(?:buy|price|prices|offer|offers|account|script|config|key|premium)\b/.test(spaced);
 
   let score = 35;
@@ -396,7 +403,7 @@ function scoreSellingConfidence({
   if (hasCondensedIntent && !hasStrongIntent) score += 10;
   if (hasPrivateTradeSignal) score += 12;
   if (hasQuestionTone) score -= 35;
-  if (/^(?:anyone|who|can i|am i allowed|is it allowed)\b/.test(spaced)) score -= 15;
+  if (MARKET_QUESTION_RE.test(spaced)) score -= 15;
 
   return clampConfidence(score);
 }
@@ -420,13 +427,33 @@ function detectSellingSignal(content) {
     SELL_MARKET_RE.test(rawLower) ||
     /\$\s*\d/.test(content) ||
     SELL_PRICE_RE.test(rawLower);
+  const hasPriceSignal = /\$\s*\d/.test(content) || SELL_PRICE_RE.test(rawLower);
+  const hasQuestionTone = rawLower.includes("?") || MARKET_QUESTION_RE.test(spaced);
+  const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(spaced);
+  const hasStrongIntent =
+    SELL_STRONG_INTENT_RE.test(spaced) ||
+    /\b(?:wts|wtb)\b/.test(spaced) ||
+    /f+o+r+s+a+l+e+/.test(condensed);
 
   if (!hasBroadSellIntent) {
     return null;
   }
 
+  // Single words like "selling" or loose questions are context candidates,
+  // not deterministic moderation events.
+  if (!hasExplicitOffer && !hasItemSignal && !hasMarketSignal && !hasPrivateHandoff) {
+    return null;
+  }
+  if (hasQuestionTone && !hasPrivateHandoff && !SELL_PRICE_RE.test(rawLower)) {
+    return null;
+  }
+  if (!hasExplicitOffer && !hasPrivateHandoff && !(hasItemSignal && (hasMarketSignal || hasStrongIntent)) && !(hasPriceSignal && hasStrongIntent)) {
+    return null;
+  }
+
   return {
     type: "selling",
+    source: "local",
     confidence: scoreSellingConfidence({
       content,
       spaced,
@@ -442,11 +469,115 @@ function detectSellingSignal(content) {
   };
 }
 
-function detectContextualSellingSignal(messageTexts) {
-  if (!Array.isArray(messageTexts) || messageTexts.length < 2) return null;
+function getScamTradeTextFeatures(text) {
+  const rawLower = String(text || "").toLowerCase();
+  const spaced = buildSellingSpacedText(text);
+  const condensed = buildSellingCondensedText(text);
+  const tokens = spaced.split(/\s+/).filter(Boolean);
+  const intentTokens = new Set(["sell", "selling", "seller", "sold", "buy", "buying", "buyer", "trade", "trading", "trader", "swap", "swapping", "exchange", "wts", "wtb", "for", "sale"]);
+  const objectishTokens = tokens.filter((token) => !intentTokens.has(token) && token.length > 1);
+  const hasPriceSignal = /\$\s*\d/.test(text) || SELL_PRICE_RE.test(rawLower);
+  return {
+    rawLower,
+    spaced,
+    condensed,
+    tokens,
+    hasAnti: SELL_ANTI_PATTERNS.some((pattern) => pattern.test(rawLower) || pattern.test(spaced)) ||
+      SELL_CONTEXT_NEGATIVE_RE.test(spaced),
+    hasExplicitOffer: SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced)),
+    hasBroadIntent: SELL_BROAD_INTENT_RE.test(spaced) || SELL_CONDENSED_INTENT_RE.test(condensed),
+    hasItemSignal: SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed),
+    hasMarketSignal: SELL_MARKET_RE.test(rawLower) || hasPriceSignal,
+    hasPriceSignal,
+    hasPrivateHandoff: PRIVATE_HANDOFF_RE.test(spaced),
+    hasQuestionTone: String(text || "").includes("?") || MARKET_QUESTION_RE.test(spaced),
+    hasOfferTone: /\b(?:you|u)\s+want\b/.test(spaced) || /\b(?:want|need)\s+(?:it|this|one)\b/.test(spaced),
+    hasObjectishSignal: objectishTokens.length > 0
+  };
+}
+
+function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) {
+  const texts = (Array.isArray(messageTexts) ? messageTexts : [])
+    .map((text) => String(text || "").trim())
+    .filter(Boolean)
+    .slice(-SELL_CONTEXT_MAX_MESSAGES);
+  if (!texts.length) return null;
+
+  const combined = texts.join("\n");
+  const combinedFeatures = getScamTradeTextFeatures(combined);
+  if (combinedFeatures.hasAnti) return null;
+
+  const latest = texts[texts.length - 1] || "";
+  const latestFeatures = getScamTradeTextFeatures(latest);
+  const previousFeatures = texts.slice(0, -1).map(getScamTradeTextFeatures);
+  const latestHasDealDetail =
+    latestFeatures.hasItemSignal ||
+    latestFeatures.hasPriceSignal ||
+    latestFeatures.hasPrivateHandoff ||
+    latestFeatures.hasOfferTone;
+  const referenceText = repliedToMessage?.content || "";
+  const referenceFeatures = getScamTradeTextFeatures(referenceText);
+  const referenceAsksForLink =
+    /\b(?:where|send|give|drop|link|download|site|get)\b/.test(referenceFeatures.spaced) &&
+    /\b(?:link|download|executor|script|key|config|account|acc|site)\b/.test(referenceFeatures.spaced);
+
+  if (
+    latestFeatures.hasPrivateHandoff &&
+    (referenceAsksForLink || referenceFeatures.hasItemSignal || referenceFeatures.hasMarketSignal)
+  ) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: 72,
+      reason: "private DM handoff in reply to a link/trade/support request"
+    };
+  }
+
+  const splitIntentAndItem =
+    texts.length >= 2 &&
+    (
+      previousFeatures.some((features) => features.hasBroadIntent || features.hasExplicitOffer) &&
+      latestHasDealDetail
+    );
+  if (splitIntentAndItem) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: 76,
+      reason: "possible scam/trade offer split across recent messages"
+    };
+  }
+
+  if (
+    combinedFeatures.hasBroadIntent &&
+    (
+      combinedFeatures.hasItemSignal ||
+      combinedFeatures.hasPriceSignal ||
+      combinedFeatures.hasPrivateHandoff ||
+      combinedFeatures.hasOfferTone
+    )
+  ) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: combinedFeatures.hasPriceSignal || combinedFeatures.hasPrivateHandoff ? 86 : combinedFeatures.hasQuestionTone ? 54 : 72,
+      reason: "possible scam/trade intent in recent message context"
+    };
+  }
+
+  return null;
+}
+
+function detectContextualSellingSignal(messageTexts, repliedToMessage = null) {
+  if (!Array.isArray(messageTexts) || !messageTexts.length) return null;
 
   const latest = String(messageTexts[messageTexts.length - 1] || "");
-  if (!isSellPriceFollowUp(latest)) return null;
+  if (!isSellPriceFollowUp(latest)) {
+    return detectScamTradeCandidateContext(messageTexts, repliedToMessage);
+  }
 
   const previousTexts = messageTexts
     .slice(0, -1)
@@ -459,10 +590,12 @@ function detectContextualSellingSignal(messageTexts) {
     !SELL_CONTEXT_NEGATIVE_RE.test(text)
   );
 
-  if (!hasStrongPriorIntent) return null;
+  if (!hasStrongPriorIntent) return detectScamTradeCandidateContext(messageTexts, repliedToMessage);
 
   return {
     type: "selling",
+    source: "context",
+    requiresAi: true,
     confidence: 86,
     reason: "sell offer completed across recent messages"
   };
@@ -821,7 +954,7 @@ function rememberSellingMessage(message, signals, now = Date.now()) {
     trigger: highConfidence
       ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
       : repeated
-        ? `${entry.events.length}/${repeatThreshold} selling messages in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`
+        ? `${entry.events.length}/${repeatThreshold} scam/trade signals in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`
         : "below immediate-timeout confidence",
     events: [...entry.events]
   };
@@ -842,6 +975,42 @@ function rememberRecentUserMessage(message, now = Date.now()) {
   }
   recentUserMessages.set(key, entry);
   return entry.messages.map((item) => item.content);
+}
+
+async function resolveReferencedMessageContext(message) {
+  if (!message?.reference?.messageId && !message?.fetchReference) return null;
+
+  let referenced = null;
+  if (typeof message.fetchReference === "function") {
+    referenced = await message.fetchReference().catch(() => null);
+  }
+
+  if (!referenced && message.reference?.messageId && typeof message.channel?.messages?.fetch === "function") {
+    referenced = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+  }
+
+  const content = cleanText(referenced?.content || "");
+  if (!content) return null;
+  return {
+    content,
+    authorId: referenced.author?.id || null,
+    authorLabel: referenced.member?.displayName || referenced.author?.username || referenced.author?.id || "other user"
+  };
+}
+
+function buildScamAiContext({ message, recentMessages, repliedToMessage }) {
+  const userMessages = (recentMessages || [])
+    .map((text) => cleanText(text))
+    .filter(Boolean)
+    .slice(-SELL_CONTEXT_MAX_MESSAGES);
+
+  return {
+    userId: message.author?.id || null,
+    channelId: message.channelId || null,
+    userMessages,
+    repliedToMessage: repliedToMessage || null,
+    currentMessageUrl: buildMessageUrl(message)
+  };
 }
 
 function observeRaidMessage(message, now = Date.now()) {
@@ -877,7 +1046,7 @@ function observeRaidMessage(message, now = Date.now()) {
 
 function buildPrimaryAlertHeader(signals) {
   if (signals.some((signal) => signal.type === "blocked_link")) return "Blocked Link Alert";
-  if (signals.some((signal) => signal.type === "selling")) return "Selling Alert";
+  if (signals.some((signal) => signal.type === "selling")) return "Scam/Trade Alert";
   if (signals.some((signal) => signal.type === "suspicious")) return "Suspicious Message Alert";
   return "Fake Info Alert";
 }
@@ -904,10 +1073,10 @@ function buildSellingDmPayload({ message, signals, state, durationMs }) {
   return {
     embeds: [
       buildPanel({
-        header: "Selling Timeout",
+        header: "Scam/Trade Timeout",
         body: [
-          `i timed you out for ${formatDuration(durationMs)} because your recent message looked like selling/trading`,
-          "please keep buying, selling, and trading out of the chat",
+          `i timed you out for ${formatDuration(durationMs)} because your recent message looked like scam/trade behavior`,
+          "please keep buying, selling, trading, account deals, and private download handoffs out of the chat",
           `**Channel:** <#${message.channelId}>`,
           `**Confidence:** ${state.confidence}%`,
           `**Trigger:** ${state.trigger}`,
@@ -925,33 +1094,64 @@ function buildSellingLogPanel({ message, signals, state, timeoutResult, dmSent, 
   const confidenceLines = signals
     .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
     .join("\n");
+  const aiLines = formatAiVerdictLines(signals);
   const action =
     state.action === "timeout"
       ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
       : "log only";
 
   return {
-    header: state.action === "timeout" ? "Selling Timeout" : "Selling Alert",
+    header: state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
     body: [
       state.action === "timeout"
-        ? "selling guard triggered and action was applied"
-        : "selling guard saw a lower-confidence message",
+        ? "scam/trade guard triggered and action was applied"
+        : "scam/trade guard saw a lower-confidence message",
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
       link ? `**Jump:** [Open message](${link})` : null,
       `**Action:** ${action}`,
       `**Confidence:** ${state.confidence}%`,
       `**Trigger:** ${state.trigger}`,
-      `**Selling Hits:** ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      `**Scam/Trade Hits:** ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `**Why:**\n${confidenceLines}`,
+      aiLines ? `**AI Scam Verdict:**\n${aiLines}` : null,
       `**Message:** ${trimExcerpt(message.content)}`
     ].filter(Boolean).join("\n\n"),
     color: state.action === "timeout" ? DANGER : WARN
   };
 }
 
+function formatAiVerdictLines(signals) {
+  const lines = (signals || [])
+    .map((signal) => signal.ai)
+    .filter(Boolean)
+    .map((ai) => {
+      const detail = ai.skipped ? ` (${ai.skipped})` : "";
+      return `- ${ai.model || "Gemini"}: ${ai.answer || "NO_ANSWER"}${detail}`;
+    });
+  return lines.length ? lines.join("\n") : "";
+}
+
+function buildScamAiClearedLogPanel({ message, candidateSignal, aiResult }) {
+  const link = buildMessageUrl(message);
+  return {
+    header: "Scam AI Cleared",
+    body: [
+      "local scam/trade prefilter asked AI for a verdict and AI returned false",
+      `**User:** <@${message.author?.id}>`,
+      `**Channel:** <#${message.channelId}>`,
+      link ? `**Jump:** [Open message](${link})` : null,
+      `**Candidate:** ${candidateSignal.reason}`,
+      `**AI Answer:** ${aiResult.answer || "FALSE"}`,
+      `**Model:** ${aiResult.model || "Gemini"}`,
+      `**Message:** ${trimExcerpt(message.content)}`
+    ].filter(Boolean).join("\n\n"),
+    color: WARN
+  };
+}
+
 async function replyToSellingMessage(message) {
-  return tryReplyModerationMessage(message, buildSellingPublicReply(), "selling");
+  return tryReplyModerationMessage(message, buildSellingPublicReply(), "scam-trade");
 }
 
 async function replyToRoastingMessage(message) {
@@ -1197,7 +1397,7 @@ async function handleSellingMessage(message, signals, {
   let dmSent = false;
 
   if (state.action === "timeout") {
-    timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "selling or trading in chat");
+    timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "scam/trade behavior in chat");
     dmSent = await safeSend(message.author, buildSellingDmPayload({
       message,
       signals,
@@ -1223,6 +1423,53 @@ async function handleSellingMessage(message, signals, {
     ...state,
     publicReplySent
   };
+}
+
+async function confirmScamTradeSignals(message, signals, scamContext, {
+  classifyScam = classifyScamContextWithGemini,
+  sendLog = sendLogPanel,
+  now = Date.now()
+} = {}) {
+  if (!signals.length) return [];
+
+  const strongest = signals.reduce(
+    (best, signal) => (!best || (signal.confidence || 0) > (best.confidence || 0) ? signal : best),
+    null
+  );
+  const needsAi = signals.some((signal) => signal.requiresAi) || Boolean(strongest);
+  if (!needsAi) return signals;
+
+  const aiResult = await classifyScam(scamContext, { now });
+  if (aiResult?.verdict === true) {
+    return signals.map((signal) => ({
+      ...signal,
+      confidence: Math.max(signal.confidence || 0, 88),
+      reason: `AI-confirmed scam/trade intent: ${signal.reason}`,
+      ai: aiResult
+    }));
+  }
+
+  if (aiResult?.verdict === false) {
+    await sendLog(message.guild, buildScamAiClearedLogPanel({
+      message,
+      candidateSignal: strongest,
+      aiResult
+    })).catch(() => null);
+    return [];
+  }
+
+  if (aiResult?.attempted && aiResult.skipped && aiResult.skipped !== "missing_key") {
+    recordRuntimeEvent("warn", "scam-ai", aiResult.error || aiResult.skipped);
+  }
+
+  // Local development or missing AI key keeps the deterministic guard working.
+  if (!aiResult?.attempted && aiResult?.skipped === "missing_key") {
+    return signals.filter((signal) => !signal.requiresAi || (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+  }
+
+  // If Gemini is configured but unavailable/rate-limited, only act on very
+  // strong deterministic evidence. Ambiguous scam candidates wait for AI.
+  return signals.filter((signal) => !signal.requiresAi && (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
 }
 
 async function handleSuspiciousMessage(message, signals, {
@@ -1298,6 +1545,7 @@ async function maybeHandleModerationWatch(message, {
   kb,
   runtimeStatus,
   fetchKbFn = fetchKb,
+  classifyScam = classifyScamContextWithGemini,
   sendLog = sendLogPanel,
   now = Date.now()
 } = {}) {
@@ -1307,6 +1555,8 @@ async function maybeHandleModerationWatch(message, {
 
   try {
     const recentMessages = rememberRecentUserMessage(message, now);
+    const repliedToMessage = await resolveReferencedMessageContext(message);
+    const scamContext = buildScamAiContext({ message, recentMessages, repliedToMessage });
     let resolvedKb = kb || null;
     const hasLink = mightContainLink(message.content);
     if (!resolvedKb && (hasLink || mightContainFakeInfo(message.content))) {
@@ -1337,7 +1587,7 @@ async function maybeHandleModerationWatch(message, {
     const contentSignals = signals.filter((signal) => signal.type !== "suspicious");
 
     if (!contentSignals.some((signal) => signal.type === "selling")) {
-      const contextualSellingSignal = detectContextualSellingSignal(recentMessages);
+      const contextualSellingSignal = detectContextualSellingSignal(recentMessages, repliedToMessage);
       if (contextualSellingSignal) {
         contentSignals.push(contextualSellingSignal);
       }
@@ -1348,8 +1598,16 @@ async function maybeHandleModerationWatch(message, {
     const otherContentSignals = contentSignals.filter((signal) => signal.type !== "selling");
     const hasSellingSignal = sellingSignals.length > 0;
 
-    if (sellingSignals.length) {
-      const state = await handleSellingMessage(message, sellingSignals, {
+    const confirmedSellingSignals = sellingSignals.length
+      ? await confirmScamTradeSignals(message, sellingSignals, scamContext, {
+          classifyScam,
+          sendLog,
+          now
+        })
+      : [];
+
+    if (confirmedSellingSignals.length) {
+      const state = await handleSellingMessage(message, confirmedSellingSignals, {
         sendLog,
         now,
         replyPublic: !suspiciousSignals.length
@@ -1372,7 +1630,7 @@ async function maybeHandleModerationWatch(message, {
       publicReplySent = publicReplySent || state.publicReplySent;
     }
 
-    if (!hasSellingSignal && !suspiciousSignals.length) {
+    if (!confirmedSellingSignals.length && !suspiciousSignals.length) {
       const roastingSignal = detectRoastingSignal(message.content);
       if (roastingSignal) {
         await replyToRoastingMessage(message);
@@ -1386,7 +1644,7 @@ async function maybeHandleModerationWatch(message, {
       await recordModerationStat("raid_alert", now);
     }
 
-    if (hasSellingSignal || suspiciousSignals.length) return true;
+    if (confirmedSellingSignals.length || suspiciousSignals.length) return true;
   } catch (err) {
     console.warn("Moderation watcher failed:", err.message);
     recordRuntimeEvent("warn", "moderation-watch", err?.message || err);
@@ -1406,6 +1664,7 @@ function resetModerationState() {
 module.exports = {
   detectSellingSignal,
   detectContextualSellingSignal,
+  detectScamTradeCandidateContext,
   detectSuspiciousSignal,
   detectRoastingSignal,
   detectFakeInfoSignal,

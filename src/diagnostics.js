@@ -156,7 +156,7 @@ function buildModerationGuardLines() {
     ].join(" "),
     "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, disable-security prompts, paste/run/download prompts",
     [
-      "**Selling Guard:**",
+      "**Scam/Trade Guard:**",
       `timeout when confidence > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`,
       `or ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
@@ -300,7 +300,7 @@ async function runJarvisDiagnostics(message, {
   const kbSection = await buildKbSection(refreshKb);
   await sleep(stepDelayMs);
 
-  await progress(3, "cross-checking false-info, suspicious, selling, and link guard policy");
+  await progress(3, "cross-checking false-info, suspicious, scam/trade, and link guard policy");
   await sleep(stepDelayMs);
 
   await progress(4, "checking log channels, emoji db, daily tracking, no-response channels, and lockdown targets");

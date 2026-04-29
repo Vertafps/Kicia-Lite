@@ -28,6 +28,7 @@ const {
   detectBlockedLinkSignal,
   detectSellingSignal,
   detectContextualSellingSignal,
+  detectScamTradeCandidateContext,
   detectSuspiciousSignal,
   detectRoastingSignal,
   detectFakeInfoSignal,
@@ -92,7 +93,8 @@ function buildModerationMessage(content, {
   moderatable = true,
   channelId = "channel-1",
   createdTimestamp = 0,
-  joinedTimestamp = 0
+  joinedTimestamp = 0,
+  referencedContent = null
 } = {}) {
   const deleted = [];
   const timeouts = [];
@@ -138,6 +140,18 @@ function buildModerationMessage(content, {
       dms.push(payload);
     }
   };
+  const referencedMessage = referencedContent
+    ? {
+        content: referencedContent,
+        author: {
+          id: "other-user",
+          username: "otheruser"
+        },
+        member: {
+          displayName: "Other User"
+        }
+      }
+    : null;
 
   const message = {
     id: "message-1",
@@ -148,7 +162,9 @@ function buildModerationMessage(content, {
     guild,
     author,
     member,
+    reference: referencedMessage ? { messageId: "referenced-message" } : null,
     inGuild: () => true,
+    fetchReference: referencedMessage ? async () => referencedMessage : undefined,
     reply: async (payload) => {
       replies.push(payload);
     },
@@ -282,20 +298,24 @@ test.after(async () => {
 test("selling detection flags broad sell wording while skipping anti-sell reminders", () => {
   assert.ok(detectSellingSignal("selling kicia config cheap dm me"));
   assert.ok(detectSellingSignal("selling lvl 888 account"));
-  assert.ok(detectSellingSignal("selling ue"));
-  assert.ok(detectSellingSignal("anyone selling ue?"));
-  assert.ok(detectSellingSignal("who sell ue"));
-  assert.ok(detectSellingSignal("can i sell ue here"));
+  assert.ok(detectSellingSignal("buying lvl 888 account for 2 usd"));
+  assert.ok(detectSellingSignal("trading kicia config for robux"));
   assert.ok(detectSellingSignal("selling ue for 1 bucks"));
   assert.ok(detectSellingSignal("selling ue for 2 dollars"));
   assert.ok(detectSellingSignal("selling ue for 1 usd"));
   assert.ok(detectSellingSignal("s e l l i n g lvl 888 a c c"));
   assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
   assert.ok(detectSellingSignal("wts lvl 888 acc"));
-  assert.ok(detectSellingSignal("anyone selling kicia config?"));
+  assert.equal(detectSellingSignal("selling"), null);
+  assert.equal(detectSellingSignal("trading"), null);
+  assert.equal(detectSellingSignal("buying"), null);
+  assert.equal(detectSellingSignal("selling ue"), null);
+  assert.equal(detectSellingSignal("anyone selling ue?"), null);
+  assert.equal(detectSellingSignal("who sell ue"), null);
+  assert.equal(detectSellingSignal("can i sell ue here"), null);
+  assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
   assert.equal(detectSellingSignal("trusted reseller"), null);
   assert.equal(detectSellingSignal("official reseller only"), null);
-  assert.equal(detectSellingSignal("buying lvl 888 account"), null);
   assert.equal(detectSellingSignal("stop selling lvl 888 account"), null);
   assert.equal(detectSellingSignal("dont sell ue here"), null);
   assert.equal(detectSellingSignal("selling is against rules"), null);
@@ -309,8 +329,15 @@ test("contextual selling detection catches split sell and price messages", () =>
 
   assert.ok(signal);
   assert.match(signal.reason, /recent messages/i);
+  assert.ok(detectScamTradeCandidateContext(["selling", "configs"]));
+  assert.ok(detectScamTradeCandidateContext(["trading this u want??"]));
+  assert.ok(detectScamTradeCandidateContext(["dms"], {
+    content: "where is executor link"
+  }));
+  assert.equal(detectScamTradeCandidateContext(["selling"]), null);
+  assert.equal(detectScamTradeCandidateContext(["selling", "trading", "buying"]), null);
   assert.equal(detectContextualSellingSignal(["selling is against rules", "1 buck"]), null);
-  assert.equal(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]), null);
+  assert.ok(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]));
 });
 
 test("roasting detection catches playful cooking without logging food talk", () => {
@@ -523,7 +550,107 @@ test("new account link scrutiny warns without escalating to timeout by itself", 
   assert.match(suspiciousFixture.logs[0].body, /new account|recent server join/i);
 });
 
-test("high-confidence selling mutes and shows confidence in logs", async () => {
+test("single scam-market words do not trigger without context", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test" };
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
+test("AI scam classifier confirms split selling context before action", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling");
+  const contexts = [];
+  const classifyScam = async (context) => {
+    contexts.push(context);
+    return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+  };
+
+  const firstHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam,
+    now: 1_000
+  });
+  assert.equal(firstHandled, false);
+
+  fixture.message.id = "message-2";
+  fixture.message.content = "configs";
+  const secondHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam,
+    now: 2_000
+  });
+
+  assert.equal(secondHandled, true);
+  assert.equal(contexts.length, 1);
+  assert.deepEqual(contexts[0].userMessages, ["selling", "configs"]);
+  assert.equal(fixture.replies.length, 1);
+  assert.match(fixture.logs[0].body, /AI Scam Verdict/i);
+  assert.match(fixture.logs[0].body, /test-gemini: TRUE/i);
+});
+
+test("AI scam classifier uses replied-to message context", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("dms", {
+    referencedContent: "where is executor link"
+  });
+  let capturedContext = null;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async (context) => {
+      capturedContext = context;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(capturedContext.repliedToMessage.content, "where is executor link");
+  assert.match(fixture.logs[0].body, /private DM handoff/i);
+  assert.match(fixture.logs[0].body, /test-gemini: TRUE/i);
+});
+
+test("AI scam classifier can clear ambiguous market questions", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("anyone selling kicia config?");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => ({ attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" })
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Scam AI Cleared/i);
+  assert.match(fixture.logs[0].body, /AI Answer:\*\* FALSE/i);
+});
+
+test("high-confidence scam/trade mutes and shows confidence in logs", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("selling ue for 1 bucks", {
     channelId: "1484218577589637233"
@@ -537,99 +664,122 @@ test("high-confidence selling mutes and shows confidence in logs", async () => {
 
   assert.equal(handled, true);
   assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.replies[0].content, /(marketplace|selling|price|bazaar|commerce|shop|checkout|salesy|trading)/i);
+  assert.match(fixture.replies[0].content, /(scam|trade|deal|risk|checkout)/i);
   assert.doesNotMatch(fixture.replies[0].content, /staff|ping|log/i);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].header, /Selling Timeout/i);
+  assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
   assert.match(fixture.logs[0].body, /confidence \d+% > 70%/i);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
   assert.equal(fixture.dms.length, 1);
-  assert.match(fixture.dms[0].embeds[0].data.description, /selling\/trading/i);
+  assert.match(fixture.dms[0].embeds[0].data.description, /scam\/trade behavior/i);
 
   const snapshot = await getDailyStatsSnapshot();
   const sellingTimeout = snapshot.moderation.find((entry) => entry.eventKey === "selling_timeout");
   assert.equal(sellingTimeout?.eventCount, 1);
 });
 
-test("mid-confidence selling repeats mute on the second hit in 30 minutes", async () => {
+test("repeated bare scam-market words stay quiet without context", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("selling");
   const baseNow = 1_000;
+  let aiCalls = 0;
 
   const firstHandled = await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",
     sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    },
     now: baseNow
   });
 
-  assert.equal(firstHandled, true);
-  assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].header, /Selling Alert/i);
-  assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
-  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(firstHandled, false);
 
   fixture.message.id = "message-2";
-  fixture.message.content = "selling";
-  await maybeHandleModerationWatch(fixture.message, {
+  fixture.message.content = "trading";
+  const secondHandled = await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",
     sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    },
     now: baseNow + 10 * 60 * 1000
   });
-
-  assert.equal(fixture.logs.length, 2);
-  assert.match(fixture.logs[1].header, /Selling Timeout/i);
-  assert.match(fixture.logs[1].body, /2\/2 selling messages in 30m/i);
-  assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
-  assert.equal(fixture.dms.length, 1);
-  assert.match(fixture.logs[1].body, /dm sent/i);
-});
-
-test("low-confidence selling repeats mute on the third hit in 30 minutes", async () => {
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("anyone selling ue?");
-  const baseNow = 1_000;
-
-  await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: baseNow
-  });
-
-  fixture.message.id = "message-2";
-  fixture.message.content = "who sell ue";
-  await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: baseNow + 10 * 60 * 1000
-  });
-
-  assert.equal(fixture.logs.length, 2);
-  assert.match(fixture.logs[1].header, /Selling Alert/i);
-  assert.match(fixture.logs[1].body, /2\/3 in 30m/i);
-  assert.equal(fixture.timeouts.length, 0);
 
   fixture.message.id = "message-3";
-  fixture.message.content = "can i sell ue here";
-  await maybeHandleModerationWatch(fixture.message, {
+  fixture.message.content = "buying";
+  const thirdHandled = await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",
     sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    },
     now: baseNow + 20 * 60 * 1000
   });
 
+  assert.equal(secondHandled, false);
+  assert.equal(thirdHandled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
+test("AI-cleared repeated scam/trade questions do not punish users", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("anyone selling kicia config?");
+  const baseNow = 1_000;
+  let aiCalls = 0;
+  const classifyScam = async () => {
+    aiCalls += 1;
+    return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+  };
+
+  const firstHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam,
+    now: baseNow
+  });
+
+  fixture.message.id = "message-2";
+  fixture.message.content = "where can i buy configs?";
+  const secondHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam,
+    now: baseNow + 10 * 60 * 1000
+  });
+
+  fixture.message.id = "message-3";
+  fixture.message.content = "can i trade kicia config here?";
+  const thirdHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam,
+    now: baseNow + 20 * 60 * 1000
+  });
+
+  assert.equal(firstHandled, false);
+  assert.equal(secondHandled, false);
+  assert.equal(thirdHandled, false);
+  assert.equal(aiCalls, 3);
   assert.equal(fixture.logs.length, 3);
-  assert.match(fixture.logs[2].header, /Selling Timeout/i);
-  assert.match(fixture.logs[2].body, /3\/3 selling messages in 30m/i);
-  assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
-  assert.equal(fixture.dms.length, 1);
+  assert.ok(fixture.logs.every((entry) => /Scam AI Cleared/i.test(entry.header)));
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.dms.length, 0);
 });
 
 test("roasting detector replies without logs or moderation actions", async () => {

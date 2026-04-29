@@ -309,7 +309,7 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
     `**Link Guard:** ${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkWarnings} warnings | ${counts.blockedLinkReviews + counts.blockedLinkAlerts} reviews`,
     `**Suspicious Alerts:** ${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`,
     `**False Info Alerts:** ${counts.fakeInfoAlerts}`,
-    `**Selling Guard:** ${counts.sellingAlerts + counts.sellingTimeouts} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`,
+    `**Scam/Trade Guard:** ${counts.sellingAlerts + counts.sellingTimeouts} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`,
     `**Raid Alerts:** ${counts.raidAlerts}`,
     `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} legacy timeouts`,
     latestEvent

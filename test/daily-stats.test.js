@@ -194,7 +194,7 @@ test("daily stats embeds show top users and silent staff without counting mods",
   assert.match(moderationDescription, /Link Guard:\*\* 1 total/i);
   assert.match(moderationDescription, /Suspicious Alerts:\*\* 1 total/i);
   assert.match(moderationDescription, /False Info Alerts:\*\* 1/i);
-  assert.match(moderationDescription, /Selling Guard:\*\* 1 total \| 1 timeouts/i);
+  assert.match(moderationDescription, /Scam\/Trade Guard:\*\* 1 total \| 1 timeouts/i);
 
   const snapshot = await getDailyStatsSnapshot();
   assert.equal(snapshot.staff.length, 1);

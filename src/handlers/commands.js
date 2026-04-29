@@ -344,7 +344,7 @@ async function handleWhitelistCommand(message, command, {
       result.added
         ? `added <@${userId}> to the manual moderation whitelist`
         : `<@${userId}> is already on the manual moderation whitelist`,
-      "They will be skipped for links, suspicious-message checks, selling checks, fake-info checks, and raid tracking.",
+      "They will be skipped for links, suspicious-message checks, scam/trade checks, fake-info checks, and raid tracking.",
       "Channel lockdown permissions are unchanged.",
       `**Count:** ${users.length}`
     ].join("\n"),

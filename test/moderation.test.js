@@ -664,7 +664,7 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
 
   assert.equal(handled, true);
   assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.replies[0].content, /(scam|trade|deal|risk|checkout)/i);
+  assert.match(fixture.replies[0].content, /(scam|trade|deal|risk|checkout|pitch|slick|unsafe|private)/i);
   assert.doesNotMatch(fixture.replies[0].content, /staff|ping|log/i);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);

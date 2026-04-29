@@ -1,5 +1,6 @@
 process.env.DISCORD_TOKEN = process.env.DISCORD_TOKEN || "test-token";
 process.env.KB_URL = process.env.KB_URL || "https://example.com/kb.json";
+process.env.GEMINI_API_KEY = "";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");

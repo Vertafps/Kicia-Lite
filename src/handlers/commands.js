@@ -163,7 +163,7 @@ function buildCommandsBody() {
     "`$status up` mark status as up",
     "`$status down` mark status as down",
     "`$fetch` refresh the KB cache",
-    "`$jarvis` run runtime, log, false-info, suspicious-alert, and security diagnostics",
+    "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
     "`$db` / `$database` inspect the SQLite moderation database",
     "`$whitelist` list manual moderation whitelist users",
     "`$whitelist <user>` exempt a user from message moderation tracking",

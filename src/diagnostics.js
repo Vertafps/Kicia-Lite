@@ -16,7 +16,15 @@ const {
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
-  SELLING_TIMEOUT_MS
+  SELLING_TIMEOUT_MS,
+  GEMINI_API_KEY,
+  GEMINI_SCAM_CACHE_MS,
+  GEMINI_SCAM_MIN_INTERVAL_MS,
+  GEMINI_SCAM_MODEL,
+  GEMINI_SCAM_TIMEOUT_MS,
+  GOOGLE_SAFE_BROWSING_API_KEY,
+  GOOGLE_WEB_RISK_API_KEY,
+  VIRUSTOTAL_API_KEY
 } = require("./config");
 const { formatDuration } = require("./duration");
 const { SUCCESS, WARN } = require("./embed");
@@ -25,14 +33,16 @@ const { getRuntimeHealthSnapshot } = require("./runtime-health");
 const { getRuntimeStatus } = require("./runtime-status");
 
 const JARVIS_STEPS = [
-  "Wake core",
-  "Runtime and log scan",
-  "KB refresh",
-  "Moderation matrix",
-  "Security audit",
-  "Final compile"
+  "Wake Core",
+  "Runtime + Logs",
+  "KB Cache",
+  "Moderation Policy",
+  "Guild Security",
+  "Final Report"
 ];
-const JARVIS_STEP_DELAY_MS = 1_800;
+const JARVIS_MIN_VISIBLE_MS = 15_000;
+const JARVIS_MAX_VISIBLE_MS = 30_000;
+const JARVIS_PROGRESS_MARKS = [0, 0.18, 0.38, 0.58, 0.78, 0.94, 1];
 const LOG_CHANNEL_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
@@ -95,23 +105,24 @@ function describeLockState(channel, roleId) {
 
 function buildJarvisProgressBody(stepIndex, note) {
   const completed = Math.max(0, Math.min(JARVIS_STEPS.length, stepIndex));
-  const progressWidth = 12;
+  const progressWidth = 18;
+  const percent = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * 100);
   const filled = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * progressWidth);
-  const progressBar = `${"#".repeat(filled)}${"-".repeat(Math.max(0, progressWidth - filled))}`;
+  const progressBar = `${"=".repeat(filled)}${"-".repeat(Math.max(0, progressWidth - filled))}`;
   const lines = [
-    "JARVIS // diagnostic sweep online",
-    `Core heat: [${progressBar}]`,
-    "Running staged checks; max sweep target is under 15 seconds.",
+    "JARVIS diagnostic sweep",
+    `Progress: [${progressBar}] ${percent}%`,
+    `Visible sweep target: ${formatDuration(JARVIS_MIN_VISIBLE_MS)}-${formatDuration(JARVIS_MAX_VISIBLE_MS)}`,
     "",
     ...JARVIS_STEPS.map((step, index) => {
-      if (index < stepIndex) return `[ok] ${step}`;
-      if (index === stepIndex) return `[scan] ${step}`;
-      return `[wait] ${step}`;
+      if (index < stepIndex) return `[done] ${step}`;
+      if (index === stepIndex) return `[now ] ${step}`;
+      return `[next] ${step}`;
     })
   ];
 
   if (note) {
-    lines.push("", `**Current:** ${note}`);
+    lines.push("", `Current: ${note}`);
   }
 
   return lines.join("\n");
@@ -157,11 +168,25 @@ function buildModerationGuardLines() {
     "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, disable-security prompts, paste/run/download prompts",
     [
       "**Scam/Trade Guard:**",
-      `timeout when confidence > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`,
-      `or ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      "context-first prefilter checks the target user's last 3 messages plus replied-to message;",
+      `Gemini model ${GEMINI_SCAM_MODEL};`,
+      `AI cache ${formatDuration(GEMINI_SCAM_CACHE_MS)};`,
+      `local AI gap ${formatDuration(GEMINI_SCAM_MIN_INTERVAL_MS)};`,
+      `API timeout ${formatDuration(GEMINI_SCAM_TIMEOUT_MS)};`,
+      `local confidence timeout > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%;`,
+      `repeat fallback ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
       `timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
     ].join(" ")
+  ];
+}
+
+function buildIntelligenceGuardLines() {
+  return [
+    `**Gemini Scam AI:** ${GEMINI_API_KEY ? `enabled (${GEMINI_SCAM_MODEL})` : "not configured"}`,
+    `**Safe Browsing:** ${GOOGLE_SAFE_BROWSING_API_KEY ? "enabled" : "not configured"}`,
+    `**Google Web Risk:** ${GOOGLE_WEB_RISK_API_KEY ? "enabled" : "not configured"}`,
+    `**VirusTotal:** ${VIRUSTOTAL_API_KEY ? "enabled" : "not configured"}`
   ];
 }
 
@@ -255,7 +280,13 @@ async function buildSecuritySection(message, channelLockRoleId) {
       `**Manual Moderation Whitelist:** ${emojiDb.tableCounts.moderationWhitelist || 0} users | lockdown unaffected`
     );
     securityLines.push(
+      `**Trusted Links:** ${emojiDb.tableCounts.trustedLinks || 0} dynamic entries | static allowlist still loaded`
+    );
+    securityLines.push(
       `**Daily Tracking DB:** users ${emojiDb.tableCounts.dailyUsers} | channels ${emojiDb.tableCounts.dailyChannels} | staff ${emojiDb.tableCounts.dailyStaff}`
+    );
+    securityLines.push(
+      ...buildIntelligenceGuardLines()
     );
     securityLines.push(
       ...buildModerationGuardLines()
@@ -273,41 +304,76 @@ async function buildSecuritySection(message, channelLockRoleId) {
   };
 }
 
+function pickJarvisVisibleMs(random = Math.random) {
+  const roll = Math.max(0, Math.min(1, Number(random()) || 0));
+  return Math.round(JARVIS_MIN_VISIBLE_MS + ((JARVIS_MAX_VISIBLE_MS - JARVIS_MIN_VISIBLE_MS) * roll));
+}
+
+async function waitForJarvisMark({
+  startedAt,
+  targetVisibleMs,
+  mark,
+  sleepFn,
+  nowFn
+}) {
+  const targetElapsed = Math.round(targetVisibleMs * mark);
+  const elapsed = nowFn() - startedAt;
+  if (targetElapsed > elapsed) {
+    await sleepFn(targetElapsed - elapsed);
+  }
+}
+
 async function runJarvisDiagnostics(message, {
   refreshKb,
   channelLockRoleId,
   onProgress,
-  stepDelayMs = JARVIS_STEP_DELAY_MS
+  targetVisibleMs,
+  random = Math.random,
+  sleepFn = sleep,
+  nowFn = Date.now
 } = {}) {
+  const startedAt = nowFn();
+  const visibleMs = Number.isFinite(targetVisibleMs)
+    ? Math.max(0, Number(targetVisibleMs))
+    : pickJarvisVisibleMs(random);
+  const pace = (markIndex) => waitForJarvisMark({
+    startedAt,
+    targetVisibleMs: visibleMs,
+    mark: JARVIS_PROGRESS_MARKS[markIndex] ?? 1,
+    sleepFn,
+    nowFn
+  });
   const progress = async (stepIndex, note) => {
     if (typeof onProgress === "function") {
       await onProgress({
         stepIndex,
         stepName: JARVIS_STEPS[stepIndex],
-        body: buildJarvisProgressBody(stepIndex, note)
+        body: buildJarvisProgressBody(stepIndex, note),
+        targetVisibleMs: visibleMs
       });
     }
   };
 
   await progress(0, "checking command uplink");
-  await sleep(stepDelayMs);
+  await pace(1);
 
   await progress(1, "reading runtime status and recent logs");
   const runtimeSection = buildRuntimeSection(message);
-  await sleep(stepDelayMs);
+  await pace(2);
 
   await progress(2, "refreshing KB and validating docs cache");
   const kbSection = await buildKbSection(refreshKb);
-  await sleep(stepDelayMs);
+  await pace(3);
 
   await progress(3, "cross-checking false-info, suspicious, scam/trade, and link guard policy");
-  await sleep(stepDelayMs);
+  await pace(4);
 
   await progress(4, "checking log channels, emoji db, daily tracking, no-response channels, and lockdown targets");
   const securitySection = await buildSecuritySection(message, channelLockRoleId);
-  await sleep(Math.min(stepDelayMs, 1_200));
+  await pace(5);
 
   await progress(5, "compiling final report");
+  await pace(6);
   const hasIssue = runtimeSection.hasIssue || kbSection.hasIssue || securitySection.hasIssue;
 
   return {
@@ -318,6 +384,8 @@ async function runJarvisDiagnostics(message, {
 
 module.exports = {
   buildJarvisProgressBody,
+  buildIntelligenceGuardLines,
   buildModerationGuardLines,
+  pickJarvisVisibleMs,
   runJarvisDiagnostics
 };

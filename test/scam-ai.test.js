@@ -4,6 +4,8 @@ process.env.GEMINI_API_KEY = "";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
 
 const {
   buildGeminiPrompt,
@@ -55,4 +57,47 @@ test("Gemini scam classifier skips cleanly when no API key is configured", async
   assert.equal(result.attempted, false);
   assert.equal(result.skipped, "missing_key");
   assert.equal(result.verdict, null);
+});
+
+test("Gemini scam classifier enters cooldown after remote rate limit", () => {
+  const script = `
+    process.env.DISCORD_TOKEN = "test-token";
+    process.env.KB_URL = "https://example.com/kb.json";
+    process.env.GEMINI_API_KEY = "test-key";
+    const { classifyScamContextWithGemini, resetScamAiState } = require("./src/scam-ai");
+    (async () => {
+      resetScamAiState();
+      const context = { userMessages: ["anyone selling kicia config?"], repliedToMessage: null };
+      const first = await classifyScamContextWithGemini(context, {
+        now: 20_000,
+        fetchFn: async () => ({ ok: false, status: 429 })
+      });
+      const second = await classifyScamContextWithGemini(context, {
+        now: 20_001,
+        fetchFn: async () => { throw new Error("fetch should be skipped during cooldown"); }
+      });
+      process.stdout.write(JSON.stringify({ first, second }));
+    })().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+  `;
+
+  const child = spawnSync(process.execPath, ["-e", script], {
+    cwd: path.join(__dirname, ".."),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GEMINI_API_KEY: "test-key",
+      DISCORD_TOKEN: "test-token",
+      KB_URL: "https://example.com/kb.json"
+    }
+  });
+
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.first.attempted, true);
+  assert.equal(result.first.skipped, "remote_rate_limit");
+  assert.equal(result.second.attempted, false);
+  assert.equal(result.second.skipped, "cooldown");
 });

@@ -38,6 +38,7 @@ const {
   resetModerationState
 } = require("../src/handlers/moderation");
 const { maybeHandleRestrictedReactionAdd } = require("../src/handlers/restricted-reactions");
+const { classifyScamContextLocally, isKiciaLegitPurchaseIntent } = require("../src/scam-local-classifier");
 
 const kb = normalizeKb({
   issues: [],
@@ -314,11 +315,34 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("who sell ue"), null);
   assert.equal(detectSellingSignal("can i sell ue here"), null);
   assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
+  assert.equal(detectSellingSignal("buying kicia"), null);
+  assert.equal(detectSellingSignal("how to buy kicia"), null);
+  assert.equal(detectSellingSignal("where do i buy kicia premium"), null);
   assert.equal(detectSellingSignal("trusted reseller"), null);
   assert.equal(detectSellingSignal("official reseller only"), null);
   assert.equal(detectSellingSignal("stop selling lvl 888 account"), null);
   assert.equal(detectSellingSignal("dont sell ue here"), null);
   assert.equal(detectSellingSignal("selling is against rules"), null);
+});
+
+test("local scam classifier protects official Kicia purchase questions", () => {
+  assert.equal(isKiciaLegitPurchaseIntent(["buying kicia"]), true);
+  assert.equal(isKiciaLegitPurchaseIntent(["where can i buy kicia premium"]), true);
+  assert.equal(isKiciaLegitPurchaseIntent(["buy kicia from me cheaper"]), false);
+  assert.equal(detectScamTradeCandidateContext(["where can i buy kicia premium"]), null);
+
+  const legitVerdict = classifyScamContextLocally({
+    userMessages: ["where can i buy kicia premium"]
+  });
+  assert.equal(legitVerdict.verdict, false);
+  assert.ok(legitVerdict.confidence >= 90);
+
+  const resellerVerdict = classifyScamContextLocally({
+    userMessages: ["buy kicia from me cheaper dm"]
+  }, {
+    strongestSignal: { confidence: 86 }
+  });
+  assert.equal(resellerVerdict.verdict, true);
 });
 
 test("contextual selling detection catches split sell and price messages", () => {
@@ -455,6 +479,25 @@ test("fake info guard catches wrong status claims", () => {
   assert.match(signal.reason, /runtime status is up/i);
 });
 
+test("fake info guard replies publicly without moderation action", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("kicia is down");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.logs.length, 1);
+  assert.equal(fixture.replies.length, 1);
+  assert.match(fixture.replies[0].content, /## False info bro!/);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.deleted.length, 0);
+});
+
 test("fake info guard catches wrong executor claims conservatively", () => {
   const signal = detectFakeInfoSignal("wave is supported", {
     kb,
@@ -569,6 +612,28 @@ test("single scam-market words do not trigger without context", async () => {
   assert.equal(aiCalls, 0);
   assert.equal(fixture.replies.length, 0);
   assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
+test("official Kicia purchase questions do not call scam AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("where can i buy kicia premium?");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
   assert.equal(fixture.timeouts.length, 0);
 });
 

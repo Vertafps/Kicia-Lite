@@ -28,6 +28,7 @@ const { isModerationWhitelistedUser, listTrustedLinks, recordDailyModerationEven
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { classifyScamContextWithGemini } = require("../scam-ai");
+const { classifyScamContextLocally, isKiciaLegitPurchaseIntent } = require("../scam-local-classifier");
 const { cleanText, normalizeText } = require("../text");
 const { safeReply, safeSend } = require("../utils/respond");
 
@@ -408,6 +409,7 @@ function detectSellingSignal(content) {
   const condensed = buildSellingCondensedText(content);
   if (!spaced || !condensed) return null;
   if (SELL_ANTI_PATTERNS.some((pattern) => pattern.test(rawLower) || pattern.test(spaced))) return null;
+  if (isKiciaLegitPurchaseIntent([content])) return null;
 
   const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced));
   const hasBroadSellIntent =
@@ -496,6 +498,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     .filter(Boolean)
     .slice(-SELL_CONTEXT_MAX_MESSAGES);
   if (!texts.length) return null;
+  if (isKiciaLegitPurchaseIntent(texts)) return null;
 
   const combined = texts.join("\n");
   const combinedFeatures = getScamTradeTextFeatures(combined);
@@ -1126,12 +1129,27 @@ function formatAiVerdictLines(signals) {
   return lines.length ? lines.join("\n") : "";
 }
 
+function buildClassifierVerdictResult(result) {
+  if (!result) return null;
+  const answer = result.verdict === true ? "TRUE" : result.verdict === false ? "FALSE" : "BORDERLINE";
+  return {
+    attempted: false,
+    verdict: result.verdict,
+    answer,
+    model: result.model || "local classifier",
+    skipped: result.verdict === null ? "borderline" : "local_confident",
+    confidence: result.confidence,
+    score: result.score,
+    reason: result.reason
+  };
+}
+
 function buildScamAiClearedLogPanel({ message, candidateSignal, aiResult }) {
   const link = buildMessageUrl(message);
   return {
     header: "Scam AI Cleared",
     body: [
-      "local scam/trade prefilter asked AI for a verdict and AI returned false",
+      "scam/trade prefilter asked for a verdict and the classifier returned false",
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
       link ? `**Jump:** [Open message](${link})` : null,
@@ -1146,6 +1164,18 @@ function buildScamAiClearedLogPanel({ message, candidateSignal, aiResult }) {
 
 async function replyToSellingMessage(message) {
   return tryReplyModerationMessage(message, buildSellingPublicReply(), "scam-trade");
+}
+
+function buildFakeInfoPublicReply(signals = []) {
+  const reason = signals.find((signal) => signal.reason)?.reason;
+  return [
+    "## False info bro!",
+    reason ? `Kicia docs/runtime disagree: ${reason}.` : null
+  ].filter(Boolean).join("\n");
+}
+
+async function replyToFakeInfoMessage(message, signals) {
+  return tryReplyModerationMessage(message, buildFakeInfoPublicReply(signals), "fake-info");
 }
 
 async function replyToRoastingMessage(message) {
@@ -1433,6 +1463,26 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   const needsAi = signals.some((signal) => signal.requiresAi) || Boolean(strongest);
   if (!needsAi) return signals;
 
+  const localResult = classifyScamContextLocally(scamContext, { strongestSignal: strongest });
+  const localVerdict = buildClassifierVerdictResult(localResult);
+  if (localResult?.verdict === true && (localResult.confidence || 0) >= 92) {
+    return signals.map((signal) => ({
+      ...signal,
+      confidence: Math.max(signal.confidence || 0, 88),
+      reason: `classifier-confirmed scam/trade intent: ${signal.reason}`,
+      ai: localVerdict
+    }));
+  }
+
+  if (localResult?.verdict === false && (localResult.confidence || 0) >= 92) {
+    await sendLog(message.guild, buildScamAiClearedLogPanel({
+      message,
+      candidateSignal: strongest,
+      aiResult: localVerdict
+    })).catch(() => null);
+    return [];
+  }
+
   const aiResult = await classifyScam(scamContext, { now });
   if (aiResult?.verdict === true) {
     return signals.map((signal) => ({
@@ -1590,7 +1640,6 @@ async function maybeHandleModerationWatch(message, {
     let publicReplySent = false;
     const sellingSignals = contentSignals.filter((signal) => signal.type === "selling");
     const otherContentSignals = contentSignals.filter((signal) => signal.type !== "selling");
-    const hasSellingSignal = sellingSignals.length > 0;
 
     const confirmedSellingSignals = sellingSignals.length
       ? await confirmScamTradeSignals(message, sellingSignals, scamContext, {
@@ -1611,6 +1660,10 @@ async function maybeHandleModerationWatch(message, {
 
     if (otherContentSignals.length) {
       await sendLog(message.guild, buildSignalAlertPanel(message, otherContentSignals));
+      const fakeInfoSignals = otherContentSignals.filter((signal) => signal.type === "fake_info");
+      if (fakeInfoSignals.length && !confirmedSellingSignals.length && !suspiciousSignals.length) {
+        publicReplySent = publicReplySent || await replyToFakeInfoMessage(message, fakeInfoSignals);
+      }
       const eventTypes = new Set(otherContentSignals.map((signal) => signal.type));
       for (const eventType of eventTypes) {
         if (eventType === "fake_info") {
@@ -1638,7 +1691,7 @@ async function maybeHandleModerationWatch(message, {
       await recordModerationStat("raid_alert", now);
     }
 
-    if (confirmedSellingSignals.length || suspiciousSignals.length) return true;
+    if (confirmedSellingSignals.length || suspiciousSignals.length || publicReplySent) return true;
   } catch (err) {
     console.warn("Moderation watcher failed:", err.message);
     recordRuntimeEvent("warn", "moderation-watch", err?.message || err);

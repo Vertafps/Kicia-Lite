@@ -1,6 +1,7 @@
 const {
   GEMINI_API_KEY,
   GEMINI_SCAM_CACHE_MS,
+  GEMINI_SCAM_FAILURE_COOLDOWN_MS,
   GEMINI_SCAM_MIN_INTERVAL_MS,
   GEMINI_SCAM_MODEL,
   GEMINI_SCAM_TIMEOUT_MS
@@ -10,6 +11,7 @@ const { fetchWithTimeout } = require("./utils/fetch");
 
 const cache = new Map();
 let lastGeminiCallAt = 0;
+let geminiUnavailableUntil = 0;
 
 function clip(value, max = 420) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -44,6 +46,14 @@ function setCachedVerdict(cacheKey, result, now = Date.now()) {
   return result;
 }
 
+function enterGeminiCooldown(now, reason) {
+  geminiUnavailableUntil = Math.max(geminiUnavailableUntil, now + GEMINI_SCAM_FAILURE_COOLDOWN_MS);
+  return {
+    cooldownUntil: geminiUnavailableUntil,
+    cooldownReason: reason
+  };
+}
+
 function buildGeminiPrompt(context) {
   const userMessages = (context.userMessages || [])
     .slice(-3)
@@ -59,6 +69,7 @@ function buildGeminiPrompt(context) {
     "Return exactly TRUE or FALSE.",
     "TRUE means the target user likely has disallowed intent: scamming, selling/trading/buying accounts/configs/scripts/keys/executors, moving a trade/download/link/account deal to DMs, phishing, or asking someone to bypass safety.",
     "FALSE means harmless context: asking a support question, warning others, quoting or joking without offering a deal, asking whether something is allowed, or directing users to official docs/support.",
+    "Server context: Kicia/Kicia premium is the official product. Asking how or where to buy Kicia/Kicia premium is FALSE unless the target user is offering a private resale, trade, account/config sale, or unofficial cheaper DM deal.",
     "",
     "Message replied to by target user:",
     repliedTo,
@@ -98,6 +109,16 @@ async function classifyScamContextWithGemini(context, {
   const cacheKey = buildCacheKey(context);
   const cached = getCachedVerdict(cacheKey, now);
   if (cached) return cached;
+
+  if (geminiUnavailableUntil > now) {
+    return {
+      attempted: false,
+      skipped: "cooldown",
+      cooldownUntil: geminiUnavailableUntil,
+      verdict: null,
+      answer: null
+    };
+  }
 
   if (now - lastGeminiCallAt < GEMINI_SCAM_MIN_INTERVAL_MS) {
     return {
@@ -140,10 +161,12 @@ async function classifyScamContextWithGemini(context, {
     );
 
     if (!response.ok) {
+      const skipped = response.status === 429 ? "remote_rate_limit" : "http_error";
       return {
         attempted: true,
-        skipped: response.status === 429 ? "remote_rate_limit" : "http_error",
+        skipped,
         status: response.status,
+        ...enterGeminiCooldown(now, skipped),
         verdict: null,
         answer: null
       };
@@ -159,12 +182,16 @@ async function classifyScamContextWithGemini(context, {
       answer,
       model: GEMINI_SCAM_MODEL
     };
+    if (verdict != null) {
+      geminiUnavailableUntil = 0;
+    }
     return verdict == null ? result : setCachedVerdict(cacheKey, result, now);
   } catch (err) {
     return {
       attempted: true,
       skipped: "error",
       error: err?.message || String(err),
+      ...enterGeminiCooldown(now, "error"),
       verdict: null,
       answer: null
     };
@@ -174,6 +201,7 @@ async function classifyScamContextWithGemini(context, {
 function resetScamAiState() {
   cache.clear();
   lastGeminiCallAt = 0;
+  geminiUnavailableUntil = 0;
 }
 
 module.exports = {

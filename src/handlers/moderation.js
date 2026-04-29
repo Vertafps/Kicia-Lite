@@ -1,5 +1,7 @@
 const {
   LINK_MODERATION_TIMEOUT_MS,
+  NEW_ACCOUNT_LINK_SCRUTINY_MS,
+  NEW_MEMBER_LINK_SCRUTINY_MS,
   RAID_WINDOW_MS,
   RAID_MIN_DISTINCT_USERS,
   RAID_ALERT_COOLDOWN_MS,
@@ -19,10 +21,10 @@ const {
 const { formatDuration } = require("../duration");
 const { buildPanel, DANGER, WARN } = require("../embed");
 const { fetchKb } = require("../kb");
-const { detectBlockedLinkSignal, extractUrlsFromText } = require("../link-policy");
+const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
-const { listTrustedLinks, recordDailyModerationEvent } = require("../restricted-emoji-db");
+const { isModerationWhitelistedUser, listTrustedLinks, recordDailyModerationEvent } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText, normalizeText } = require("../text");
@@ -64,7 +66,7 @@ const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|rul
 const SUSPICIOUS_PATTERNS = [
   {
     label: "credential-request",
-    pattern: /\b(?:send|give|share|paste)\s+(?:me\s+)?(?:your\s+)?(?:password|token|cookie|cookies|login)\b/,
+    pattern: /\b(?:send|give|share|paste)\s+(?:me\s+)?(?:your\s+)?(?:password|token|cookie|cookies|login|2fa|mfa|otp|code)\b/,
     reason: "asking for private account credentials",
     confidence: 98
   },
@@ -97,11 +99,38 @@ const SUSPICIOUS_PATTERNS = [
     pattern: /\bfree premium\b/,
     reason: "claiming free premium access",
     confidence: 91
+  },
+  {
+    label: "account-report-scam",
+    pattern: /\b(?:accidentally|mistakenly)\s+reported\s+(?:you|your\s+account|ur\s+account)\b/,
+    reason: "using the accidental-report account scam wording",
+    confidence: 94
+  },
+  {
+    label: "account-urgency",
+    pattern: /\b(?:your\s+)?(?:account|profile)\s+(?:will\s+be\s+)?(?:deleted|disabled|suspended|terminated|locked)\b.*\b(?:verify|appeal|contact|dm|message|link)\b/,
+    reason: "pressuring a user to verify or appeal an account issue",
+    confidence: 90
+  },
+  {
+    label: "qr-or-oauth-steering",
+    pattern: /\b(?:scan\s+(?:this\s+)?qr|oauth|authorize\s+(?:this\s+)?(?:bot|app|application))\b/,
+    reason: "steering users into QR or OAuth authorization flow",
+    confidence: 88
+  },
+  {
+    label: "disable-security",
+    pattern: /\b(?:disable|turn\s+off)\s+(?:antivirus|defender|windows\s+defender|security)\b/,
+    reason: "asking users to disable device security",
+    confidence: 97
   }
 ];
 const SUSPICIOUS_ANTI_PATTERNS = [
   /\b(?:don t|dont|do not|stop)\s+(?:dm|pm|message|msg)\s+me\b/,
-  /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/
+  /\b(?:don t|dont|do not|never)\s+(?:paste|run|download|click|open)\s+this\b/,
+  /\b(?:watch|avoid|report)\s+(?:the\s+)?(?:accidental|account)\s+report\s+scam\b/,
+  /\b(?:never|do not|dont|don t)\s+(?:scan|use)\s+(?:a\s+)?qr\b/,
+  /\b(?:never|do not|dont|don t)\s+(?:authorize|oauth)\b/
 ];
 const SUSPICIOUS_PUBLIC_REPLIES_BY_HIT = [
   [
@@ -256,6 +285,32 @@ function buildSellingUserKey(message) {
 
 function hasBypassPermission(message) {
   return hasModerationBypassMessage(message);
+}
+
+async function hasManualWhitelistBypass(message) {
+  const userId = message?.author?.id;
+  if (!userId) return false;
+
+  try {
+    return await isModerationWhitelistedUser(userId);
+  } catch (err) {
+    recordRuntimeEvent("warn", "moderation-whitelist-check", err?.message || err);
+    return false;
+  }
+}
+
+function getPosterLinkContext(message, now = Date.now()) {
+  const userCreatedAt = Number(message?.author?.createdTimestamp || 0);
+  const memberJoinedAt = Number(message?.member?.joinedTimestamp || 0);
+  const accountAgeMs = userCreatedAt > 0 ? now - userCreatedAt : null;
+  const memberAgeMs = memberJoinedAt > 0 ? now - memberJoinedAt : null;
+
+  return {
+    accountAgeMs,
+    memberAgeMs,
+    isNewAccount: Number.isFinite(accountAgeMs) && accountAgeMs >= 0 && accountAgeMs < NEW_ACCOUNT_LINK_SCRUTINY_MS,
+    isNewMember: Number.isFinite(memberAgeMs) && memberAgeMs >= 0 && memberAgeMs < NEW_MEMBER_LINK_SCRUTINY_MS
+  };
 }
 
 async function recordModerationStat(eventKey, now = Date.now()) {
@@ -1248,6 +1303,7 @@ async function maybeHandleModerationWatch(message, {
 } = {}) {
   if (!message?.inGuild?.() || message.author?.bot) return false;
   if (hasBypassPermission(message)) return false;
+  if (await hasManualWhitelistBypass(message)) return false;
 
   try {
     const recentMessages = rememberRecentUserMessage(message, now);
@@ -1262,9 +1318,10 @@ async function maybeHandleModerationWatch(message, {
         recordRuntimeEvent("warn", "trusted-link-list", err?.message || err);
         return [];
       });
-      const blockedLinkSignal = detectBlockedLinkSignal(message.content, {
+      const blockedLinkSignal = await detectBlockedLinkSignalAsync(message.content, {
         kb: resolvedKb,
-        trustedLinks
+        trustedLinks,
+        posterContext: getPosterLinkContext(message, now)
       });
       if (blockedLinkSignal) {
         const linkHandled = await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });

@@ -13,6 +13,9 @@ const {
   listTrustedLinks,
   addTrustedLink,
   removeTrustedLinkByKey,
+  listModerationWhitelistedUsers,
+  addModerationWhitelistedUser,
+  removeModerationWhitelistedUser,
   getRestrictedEmojiDatabaseSnapshot
 } = require("../restricted-emoji-db");
 const { normalizeUrlCandidate } = require("../link-policy");
@@ -84,6 +87,50 @@ function parseTrustedLinkMessage(content) {
   return null;
 }
 
+function parseUserIdInput(input) {
+  const trimmed = String(input || "").trim();
+  const mentionMatch = trimmed.match(/^<@!?(\d{16,22})>$/);
+  if (mentionMatch) return mentionMatch[1];
+  if (/^\d{16,22}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+function parseWhitelistMessage(content) {
+  const trimmed = String(content || "").trim();
+  if (!/^\$(?:whitelist|unwhitelist)(?:\s|$)/i.test(trimmed)) return null;
+
+  const unwhitelistMatch = trimmed.match(/^\$unwhitelist\s+(.+)$/i);
+  if (unwhitelistMatch) {
+    return {
+      action: "remove",
+      value: unwhitelistMatch[1].trim()
+    };
+  }
+
+  if (/^\$whitelist$/i.test(trimmed) || /^\$whitelist\s+list$/i.test(trimmed)) {
+    return {
+      action: "list",
+      value: ""
+    };
+  }
+
+  const removeMatch = trimmed.match(/^\$whitelist\s+(?:remove|delete|del)\s+(.+)$/i);
+  if (removeMatch) {
+    return {
+      action: "remove",
+      value: removeMatch[1].trim()
+    };
+  }
+
+  const addMatch = trimmed.match(/^\$whitelist\s+(.+)$/i);
+  return addMatch
+    ? {
+        action: "add",
+        value: addMatch[1].trim()
+      }
+    : null;
+}
+
 function formatEmojiList(emojis) {
   if (!Array.isArray(emojis) || !emojis.length) return "none yet";
   return emojis.map((emoji) => emoji.display).join(" ");
@@ -92,6 +139,17 @@ function formatEmojiList(emojis) {
 function formatTrustedLinkList(links) {
   if (!Array.isArray(links) || !links.length) return "none yet";
   return links.map((link) => `- ${link.url}`).join("\n");
+}
+
+function formatWhitelistList(users) {
+  if (!Array.isArray(users) || !users.length) return "none yet";
+  return users
+    .slice(0, 25)
+    .map((entry) => {
+      const createdBy = entry.createdBy ? ` by <@${entry.createdBy}>` : "";
+      return `- <@${entry.userId}> (${entry.userId})${createdBy}`;
+    })
+    .join("\n");
 }
 
 function buildCommandsBody() {
@@ -107,6 +165,9 @@ function buildCommandsBody() {
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, log, false-info, suspicious-alert, and security diagnostics",
     "`$db` / `$database` inspect the SQLite moderation database",
+    "`$whitelist` list manual moderation whitelist users",
+    "`$whitelist <user>` exempt a user from message moderation tracking",
+    "`$whitelist remove <user>` remove a manual moderation whitelist user",
     "`$lock` lock the configured chat channels",
     "`$unlock` unlock the configured chat channels",
     "",
@@ -149,13 +210,15 @@ async function handleDatabaseCommand(message, {
       `**Config Rows:** ${snapshot.tableCounts.appConfig}`,
       `**Restricted Emoji Rows:** ${snapshot.tableCounts.restrictedEmojis}`,
       `**Trusted Link Rows:** ${snapshot.tableCounts.trustedLinks || 0}`,
+      `**Manual Whitelist Rows:** ${snapshot.tableCounts.moderationWhitelist || 0}`,
       `**Daily User Rows:** ${snapshot.tableCounts.dailyUsers}`,
       `**Daily Channel Rows:** ${snapshot.tableCounts.dailyChannels}`,
       `**Daily Staff Rows:** ${snapshot.tableCounts.dailyStaff}`,
       `**Daily Moderation Rows:** ${snapshot.tableCounts.dailyModeration || 0}`,
       "**Restricted Reaction Action:** remove reaction + DM warning",
       `**Window Start:** ${snapshot.dailyStats.windowStartedAt ? `<t:${Math.floor(snapshot.dailyStats.windowStartedAt / 1000)}:f>` : "unset"}`,
-      `**Restricted Emojis:** ${formatEmojiList(snapshot.emojis)}`
+      `**Restricted Emojis:** ${formatEmojiList(snapshot.emojis)}`,
+      `**Manual Whitelist:** ${snapshot.moderationWhitelist?.length || 0}`
     ].join("\n"),
     color: INFO
   });
@@ -218,6 +281,72 @@ async function handleEmojiCommand(message, command, {
         : `that emoji is already restricted: **${parsedEmoji.display}**`,
       `**Count:** ${emojis.length}`,
       `**List:** ${formatEmojiList(emojis)}`
+    ].join("\n"),
+    color: result.added ? SUCCESS : WARN
+  });
+  return true;
+}
+
+async function handleWhitelistCommand(message, command, {
+  listWhitelist = listModerationWhitelistedUsers,
+  addWhitelistUser = addModerationWhitelistedUser,
+  removeWhitelistUser = removeModerationWhitelistedUser
+} = {}) {
+  if (command.action === "list") {
+    const users = await listWhitelist();
+    await replyWithCommandPanel(message, {
+      header: "Moderation Whitelist",
+      body: [
+        "Manual whitelist users are skipped by message moderation guards.",
+        "Channel lockdown permissions are unchanged.",
+        `**Count:** ${users.length}`,
+        formatWhitelistList(users)
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  const userId = parseUserIdInput(command.value);
+  if (!userId) {
+    await replyWithCommandPanel(message, {
+      header: "Moderation Whitelist",
+      body: "send a user ping or raw user id\nusage: `$whitelist @user`, `$whitelist 123456789012345678`, or `$whitelist remove @user`",
+      color: DANGER
+    });
+    return true;
+  }
+
+  if (command.action === "remove") {
+    const result = await removeWhitelistUser(userId);
+    const users = await listWhitelist();
+    await replyWithCommandPanel(message, {
+      header: "Moderation Whitelist",
+      body: [
+        result.removed
+          ? `removed <@${userId}> from the manual moderation whitelist`
+          : `<@${userId}> was not on the manual moderation whitelist`,
+        "Channel lockdown permissions are unchanged.",
+        `**Count:** ${users.length}`
+      ].join("\n"),
+      color: result.removed ? SUCCESS : WARN
+    });
+    return true;
+  }
+
+  const result = await addWhitelistUser(userId, {
+    createdBy: message.author?.id || null
+  });
+  const users = await listWhitelist();
+  await replyWithCommandPanel(message, {
+    header: "Moderation Whitelist",
+    body: [
+      result.added
+        ? `added <@${userId}> to the manual moderation whitelist`
+        : `<@${userId}> is already on the manual moderation whitelist`,
+      "They will be skipped for links, suspicious-message checks, selling checks, fake-info checks, and raid tracking.",
+      "Channel lockdown permissions are unchanged.",
+      `**Count:** ${users.length}`
     ].join("\n"),
     color: result.added ? SUCCESS : WARN
   });
@@ -289,6 +418,12 @@ async function handleTrustedLinkCommand(message, command, {
 }
 
 async function maybeHandleControlCommand(message, deps = {}) {
+  const whitelistCommand = parseWhitelistMessage(message.content);
+  if (whitelistCommand) {
+    if (!canUseOwnerCommands(message)) return true;
+    return handleWhitelistCommand(message, whitelistCommand, deps);
+  }
+
   const trustedLinkCommand = parseTrustedLinkMessage(message.content);
   if (trustedLinkCommand) {
     if (!canUseTrustedLinkCommands(message)) return true;
@@ -319,5 +454,7 @@ module.exports = {
   isDatabaseMessage,
   parseEmojiMessage,
   parseTrustedLinkMessage,
+  parseWhitelistMessage,
+  parseUserIdInput,
   maybeHandleControlCommand
 };

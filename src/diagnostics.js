@@ -154,7 +154,7 @@ function buildModerationGuardLines() {
       `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`,
       `or confidence > ${SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD}% timeout ${formatDuration(SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS)}`
     ].join(" "),
-    "**Suspicious Rules:** private DM steering, credential asks, cracked/leaked/free premium, paste/run/download prompts",
+    "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, disable-security prompts, paste/run/download prompts",
     [
       "**Selling Guard:**",
       `timeout when confidence > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`,
@@ -250,6 +250,9 @@ async function buildSecuritySection(message, channelLockRoleId) {
     const emojiDb = await getRestrictedEmojiDatabaseSnapshot();
     securityLines.push(
       `**Emoji DB:** ok | ${emojiDb.tableCounts.restrictedEmojis} restricted | timeout ${formatDuration(emojiDb.emojiTimeoutMs)}`
+    );
+    securityLines.push(
+      `**Manual Moderation Whitelist:** ${emojiDb.tableCounts.moderationWhitelist || 0} users | lockdown unaffected`
     );
     securityLines.push(
       `**Daily Tracking DB:** users ${emojiDb.tableCounts.dailyUsers} | channels ${emojiDb.tableCounts.dailyChannels} | staff ${emojiDb.tableCounts.dailyStaff}`

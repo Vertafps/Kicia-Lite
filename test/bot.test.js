@@ -1113,6 +1113,79 @@ test("staff allowlink command adds and removes trusted links", async () => {
   assert.match(replyPayload.embeds[0].data.description, /removed trusted link/i);
 });
 
+test("owner whitelist command adds, lists, and removes users", async () => {
+  let replyPayload = null;
+  const users = [];
+  const message = {
+    content: "$whitelist <@123456789012345678>",
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  };
+  const deps = {
+    listWhitelist: async () => [...users],
+    addWhitelistUser: async (userId, { createdBy }) => {
+      const existing = users.find((user) => user.userId === userId);
+      if (existing) return { added: false, user: existing };
+      const user = { userId, createdAt: 1, createdBy };
+      users.push(user);
+      return { added: true, user };
+    },
+    removeWhitelistUser: async (userId) => {
+      const index = users.findIndex((user) => user.userId === userId);
+      const [removed] = index >= 0 ? users.splice(index, 1) : [null];
+      return { removed: Boolean(removed), user: removed };
+    }
+  };
+
+  let handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(users[0].userId, "123456789012345678");
+  assert.equal(users[0].createdBy, "847703912932311091");
+  assert.match(replyPayload.embeds[0].data.description, /added/i);
+  assert.match(replyPayload.embeds[0].data.description, /lockdown permissions are unchanged/i);
+
+  message.content = "$whitelist";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /123456789012345678/);
+
+  message.content = "$whitelist remove 123456789012345678";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(users.length, 0);
+  assert.match(replyPayload.embeds[0].data.description, /removed/i);
+});
+
+test("whitelist command ignores non-owners", async () => {
+  let replyPayload = null;
+  let addCalls = 0;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$whitelist 123456789012345678",
+    author: { id: "regular-user" },
+    member: {
+      roles: {
+        cache: {
+          has: () => false
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    addWhitelistUser: async () => {
+      addCalls += 1;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(addCalls, 0);
+  assert.equal(replyPayload, null);
+});
+
 test("allowlink command ignores non-staff users", async () => {
   let replyPayload = null;
   let addCalls = 0;

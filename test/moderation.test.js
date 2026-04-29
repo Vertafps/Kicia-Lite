@@ -10,12 +10,16 @@ const path = require("path");
 const { normalizeKb } = require("../src/kb");
 const {
   addRestrictedEmoji,
+  addModerationWhitelistedUser,
   addTrustedLink,
   clearDailyStatsTracking,
   getDailyStatsSnapshot,
   getRestrictedEmojiDatabaseSnapshot,
+  isModerationWhitelistedUser,
+  listModerationWhitelistedUsers,
   listTrustedLinks,
   parseEmojiInput,
+  removeModerationWhitelistedUser,
   removeRestrictedEmojiByKey,
   removeTrustedLinkByKey,
   resetRestrictedEmojiDatabaseForTests
@@ -86,7 +90,9 @@ function buildModerationMessage(content, {
   roleIds = [],
   permissions = [],
   moderatable = true,
-  channelId = "channel-1"
+  channelId = "channel-1",
+  createdTimestamp = 0,
+  joinedTimestamp = 0
 } = {}) {
   const deleted = [];
   const timeouts = [];
@@ -103,6 +109,7 @@ function buildModerationMessage(content, {
       }
     },
     permissions: new PermissionsBitField(permissions),
+    joinedTimestamp,
     moderatable,
     timeout: async (durationMs, reason) => {
       timeouts.push({ durationMs, reason });
@@ -126,6 +133,7 @@ function buildModerationMessage(content, {
     id: userId,
     bot: false,
     username: "regularuser",
+    createdTimestamp,
     send: async (payload) => {
       dms.push(payload);
     }
@@ -329,8 +337,9 @@ test("suspicious detection catches private DM steering while skipping reminders"
 
   assert.equal(detectSuspiciousSignal("dm me"), null);
   assert.equal(detectSuspiciousSignal("dont dm me"), null);
-  assert.equal(detectSuspiciousSignal("disable antivirus before injecting"), null);
-  assert.equal(detectSuspiciousSignal("turn off windows defender then open kicia"), null);
+  assert.match(detectSuspiciousSignal("I accidentally reported your account, contact me to appeal").reason, /account scam/i);
+  assert.match(detectSuspiciousSignal("disable windows defender before opening it").reason, /device security/i);
+  assert.equal(detectSuspiciousSignal("avoid the accidental report scam"), null);
 });
 
 test("link detection allows docs/common links while escalating risky links", () => {
@@ -474,6 +483,44 @@ test("blocked links are deleted, logged, and timed out", async () => {
   const snapshot = await getDailyStatsSnapshot();
   const blockedLinkTimeout = snapshot.moderation.find((entry) => entry.eventKey === "blocked_link_timeout");
   assert.equal(blockedLinkTimeout?.eventCount, 1);
+});
+
+test("new account link scrutiny warns without escalating to timeout by itself", async () => {
+  await clearDailyStatsTracking(1);
+  const now = 2_000_000_000_000;
+  const safeFixture = buildModerationMessage("check https://github.com/user/repo", {
+    createdTimestamp: now - 24 * 60 * 60 * 1000,
+    joinedTimestamp: now - 60 * 60 * 1000
+  });
+
+  const safeHandled = await maybeHandleModerationWatch(safeFixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: safeFixture.sendLog,
+    now
+  });
+  assert.equal(safeHandled, false);
+  assert.equal(safeFixture.deleted.length, 0);
+  assert.equal(safeFixture.logs.length, 0);
+
+  const suspiciousFixture = buildModerationMessage("verify your account here https://unknown-verify.example/login", {
+    createdTimestamp: now - 24 * 60 * 60 * 1000,
+    joinedTimestamp: now - 60 * 60 * 1000
+  });
+
+  const suspiciousHandled = await maybeHandleModerationWatch(suspiciousFixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: suspiciousFixture.sendLog,
+    now
+  });
+
+  assert.equal(suspiciousHandled, true);
+  assert.equal(suspiciousFixture.deleted.length, 1);
+  assert.equal(suspiciousFixture.timeouts.length, 0);
+  assert.equal(suspiciousFixture.dms.length, 1);
+  assert.match(suspiciousFixture.logs[0].header, /Blocked Link Warning/i);
+  assert.match(suspiciousFixture.logs[0].body, /new account|recent server join/i);
 });
 
 test("high-confidence selling mutes and shows confidence in logs", async () => {
@@ -710,6 +757,38 @@ test("trusted link database adds and removes links", async () => {
 
   const linksAfterRemove = await listTrustedLinks();
   assert.equal(linksAfterRemove.length, 0);
+});
+
+test("manual moderation whitelist persists and skips message guards", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+
+  const added = await addModerationWhitelistedUser("123456789012345678", {
+    createdBy: "847703912932311091"
+  });
+  assert.equal(added.added, true);
+  assert.equal(await isModerationWhitelistedUser("123456789012345678"), true);
+
+  const usersAfterAdd = await listModerationWhitelistedUsers();
+  assert.equal(usersAfterAdd.length, 1);
+  assert.equal(usersAfterAdd[0].createdBy, "847703912932311091");
+
+  const fixture = buildModerationMessage("dm me for the script https://mega.nz/file/abc123", {
+    userId: "123456789012345678"
+  });
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.logs.length, 0);
+
+  const removed = await removeModerationWhitelistedUser("123456789012345678");
+  assert.equal(removed.removed, true);
+  assert.equal(await isModerationWhitelistedUser("123456789012345678"), false);
 });
 
 test("restricted reactions on staff messages remove the reaction and DM warn the user", async () => {

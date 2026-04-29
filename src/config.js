@@ -6,6 +6,11 @@ function required(name) {
   return v.trim();
 }
 
+function optional(name) {
+  const v = process.env[name];
+  return v && v.trim() ? v.trim() : "";
+}
+
 function normalizeKbUrl(input) {
   const raw = input.trim();
   if (/^https?:\/\/raw\.githubusercontent\.com\//i.test(raw)) return raw;
@@ -32,7 +37,7 @@ function requiredUrl(name) {
 }
 
 const BRAND = {
-  NAME: "KiciaHook Director",
+  NAME: "Wizard of Kicia",
   DOCS_JUMP_URL: "https://discord.com/channels/1279483425002361003/1484218540499140891",
   TICKET_JUMP_URL: "https://discord.com/channels/1279483425002361003/1484218571478532147",
   STATUS_JUMP_URL: "https://discord.com/channels/1279483425002361003/1497703492012347412"
@@ -87,11 +92,18 @@ module.exports = {
   MODERATION_BYPASS_ROLE_IDS,
   RESTRICTED_REACTION_TARGET_ROLE_IDS,
   TRUSTED_LINK_URLS,
+  GOOGLE_SAFE_BROWSING_API_KEY: optional("GOOGLE_SAFE_BROWSING_API_KEY"),
+  GOOGLE_WEB_RISK_API_KEY: optional("GOOGLE_WEB_RISK_API_KEY"),
+  VIRUSTOTAL_API_KEY: optional("VIRUSTOTAL_API_KEY"),
   DAILY_STATS_UTC_OFFSET_MINUTES: 5.5 * 60,
   DAILY_STATS_REPORT_HOUR_LOCAL: 21,
   DAILY_STATS_REPORT_MINUTE_LOCAL: 0,
   DEFAULT_EMOJI_TIMEOUT_MS: 10 * 60 * 1000,
   LINK_MODERATION_TIMEOUT_MS: 60 * 1000,
+  LINK_EXPANSION_TIMEOUT_MS: 3 * 1000,
+  LINK_THREAT_INTEL_TIMEOUT_MS: 3 * 1000,
+  NEW_ACCOUNT_LINK_SCRUTINY_MS: 30 * 24 * 60 * 60 * 1000,
+  NEW_MEMBER_LINK_SCRUTINY_MS: 7 * 24 * 60 * 60 * 1000,
   SUSPICIOUS_ALERT_WINDOW_MS: 60 * 60 * 1000,
   SUSPICIOUS_WARNING_THRESHOLD: 2,
   SUSPICIOUS_TIMEOUT_THRESHOLD: 2,

@@ -204,6 +204,12 @@ function createSchema(db) {
       url TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS moderation_whitelist (
+      user_id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      created_by TEXT
+    );
   `);
 }
 
@@ -316,6 +322,14 @@ function mapTrustedLinkRow(row) {
     key: String(row.key || ""),
     url: String(row.url || ""),
     createdAt: Number(row.created_at || 0)
+  };
+}
+
+function mapModerationWhitelistRow(row) {
+  return {
+    userId: String(row.user_id || ""),
+    createdAt: Number(row.created_at || 0),
+    createdBy: row.created_by ? String(row.created_by) : null
   };
 }
 
@@ -610,6 +624,117 @@ async function removeTrustedLinkByKey(key) {
   };
 }
 
+async function listModerationWhitelistedUsers() {
+  const db = await getDatabase();
+  return getRows(
+    db,
+    `
+      SELECT user_id, created_at, created_by
+      FROM moderation_whitelist
+      ORDER BY created_at ASC, user_id ASC
+    `
+  ).map(mapModerationWhitelistRow);
+}
+
+async function isModerationWhitelistedUser(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return false;
+
+  const db = await getDatabase();
+  return Boolean(getScalarValue(
+    db,
+    "SELECT 1 FROM moderation_whitelist WHERE user_id = ? LIMIT 1",
+    [id]
+  ));
+}
+
+async function addModerationWhitelistedUser(userId, { createdBy = null } = {}) {
+  const id = String(userId || "").trim();
+  if (!/^\d{16,22}$/.test(id)) {
+    throw new Error("Missing moderation whitelist user id");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT user_id, created_at, created_by
+      FROM moderation_whitelist
+      WHERE user_id = ?
+      LIMIT 1
+    `,
+    [id]
+  )[0];
+
+  if (existing) {
+    return {
+      added: false,
+      user: mapModerationWhitelistRow(existing)
+    };
+  }
+
+  const row = {
+    userId: id,
+    createdAt: Date.now(),
+    createdBy: createdBy ? String(createdBy) : null
+  };
+
+  db.run(
+    `
+      INSERT INTO moderation_whitelist (
+        user_id,
+        created_at,
+        created_by
+      ) VALUES (?, ?, ?)
+    `,
+    [
+      row.userId,
+      row.createdAt,
+      row.createdBy
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+
+  return {
+    added: true,
+    user: row
+  };
+}
+
+async function removeModerationWhitelistedUser(userId) {
+  const id = String(userId || "").trim();
+  if (!id) {
+    throw new Error("Missing moderation whitelist user id");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT user_id, created_at, created_by
+      FROM moderation_whitelist
+      WHERE user_id = ?
+      LIMIT 1
+    `,
+    [id]
+  )[0];
+
+  if (!existing) {
+    return {
+      removed: false,
+      user: null
+    };
+  }
+
+  db.run("DELETE FROM moderation_whitelist WHERE user_id = ?", [id]);
+  schedulePersist(db, { immediate: true });
+
+  return {
+    removed: true,
+    user: mapModerationWhitelistRow(existing)
+  };
+}
+
 async function recordDailyTrackedMessage({
   userId,
   username,
@@ -832,6 +957,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
   const db = await getDatabase();
   const emojis = await listRestrictedEmojis();
   const trustedLinks = await listTrustedLinks();
+  const moderationWhitelist = await listModerationWhitelistedUsers();
   const emojiTimeoutMs = await getEmojiTimeoutMs();
   const dailyStats = await getDailyStatsSnapshot();
 
@@ -840,11 +966,13 @@ async function getRestrictedEmojiDatabaseSnapshot() {
     emojiTimeoutMs,
     emojis,
     trustedLinks,
+    moderationWhitelist,
     dailyStats,
     tableCounts: {
       appConfig: Number(getScalarValue(db, "SELECT COUNT(*) FROM app_config") || 0),
       restrictedEmojis: Number(getScalarValue(db, "SELECT COUNT(*) FROM restricted_emojis") || 0),
       trustedLinks: Number(getScalarValue(db, "SELECT COUNT(*) FROM trusted_links") || 0),
+      moderationWhitelist: Number(getScalarValue(db, "SELECT COUNT(*) FROM moderation_whitelist") || 0),
       dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
@@ -891,6 +1019,10 @@ module.exports = {
   listTrustedLinks,
   addTrustedLink,
   removeTrustedLinkByKey,
+  listModerationWhitelistedUsers,
+  isModerationWhitelistedUser,
+  addModerationWhitelistedUser,
+  removeModerationWhitelistedUser,
   recordDailyTrackedMessage,
   recordDailyModerationEvent,
   getDailyStatsSnapshot,

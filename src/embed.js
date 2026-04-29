@@ -51,6 +51,7 @@ function buildPanel({
   const e = new EmbedBuilder().setColor(color);
   if (parts.length) e.setDescription(truncate(parts.join("\n\n")));
   e.setFooter({ text: footer && String(footer).trim() ? footer : BRAND.NAME });
+  e.setTimestamp();
   return e;
 }
 

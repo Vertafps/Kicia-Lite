@@ -1,6 +1,15 @@
 const { domainToASCII, domainToUnicode } = require("node:url");
-const { BRAND, TRUSTED_LINK_URLS } = require("./config");
+const {
+  BRAND,
+  GOOGLE_SAFE_BROWSING_API_KEY,
+  GOOGLE_WEB_RISK_API_KEY,
+  LINK_EXPANSION_TIMEOUT_MS,
+  LINK_THREAT_INTEL_TIMEOUT_MS,
+  TRUSTED_LINK_URLS,
+  VIRUSTOTAL_API_KEY
+} = require("./config");
 const { isEditDistanceAtMost, normalizeText } = require("./text");
+const { fetchWithTimeout } = require("./utils/fetch");
 
 const STATIC_ALLOWED_URLS = [
   BRAND.DOCS_JUMP_URL,
@@ -59,7 +68,16 @@ const PROTECTED_DOMAINS = [
   "google.com",
   "youtube.com",
   "roblox.com",
-  "kiciahook.gitbook.io"
+  "kiciahook.gitbook.io",
+  "steamcommunity.com",
+  "steampowered.com",
+  "microsoft.com",
+  "paypal.com",
+  "twitch.tv",
+  "x.com",
+  "twitter.com",
+  "instagram.com",
+  "facebook.com"
 ];
 const DANGEROUS_EXTENSIONS = new Set([
   ".exe",
@@ -94,6 +112,9 @@ const SAFE_SEARCH_HOSTS = [
   "startpage.com"
 ];
 const RULE_CACHE = new WeakMap();
+const THREAT_INTEL_CACHE = new Map();
+const THREAT_INTEL_CACHE_MS = 10 * 60 * 1000;
+const SHORTENER_MAX_REDIRECTS = 4;
 
 function stripInvisibleUrlText(value) {
   return String(value || "")
@@ -230,6 +251,23 @@ function getRegistrableDomain(hostname) {
 
 function isKnownHighRiskHost(hostname) {
   return matchesAnyHost(hostname, FILE_SHARING_HOSTS) || matchesAnyHost(hostname, URL_SHORTENER_HOSTS);
+}
+
+function isUrlShortenerHost(hostname) {
+  return matchesAnyHost(hostname, URL_SHORTENER_HOSTS);
+}
+
+function hasNewPosterContext(posterContext) {
+  return Boolean(posterContext?.isNewAccount || posterContext?.isNewMember);
+}
+
+function getPosterContextReason(posterContext) {
+  if (posterContext?.isNewAccount && posterContext?.isNewMember) {
+    return "link came from a new account that also joined recently";
+  }
+  if (posterContext?.isNewAccount) return "link came from a newer Discord account";
+  if (posterContext?.isNewMember) return "link came from a recent server join";
+  return null;
 }
 
 function shouldKeepObfuscatedUrl(url) {
@@ -573,7 +611,13 @@ function hasScamLinkContext(text) {
   if (!normalized) return false;
   return (
     /\b(?:free premium|free nitro|nitro gift|steam gift|robux generator|free robux)\b/.test(normalized) ||
+    /\b(?:claim|redeem|gift|giveaway|airdrop)\b.*\b(?:nitro|robux|premium|steam|crypto|reward|prize)\b/.test(normalized) ||
     /\b(?:cracked|leaked|crack|stealer|token grabber|cookie logger)\b/.test(normalized) ||
+    /\b(?:accidentally|mistakenly)\s+reported\b/.test(normalized) ||
+    /\b(?:account|profile|server)\s+(?:will\s+be\s+)?(?:deleted|disabled|suspended|terminated|banned|locked)\b/.test(normalized) ||
+    /\b(?:appeal|verify|verification|validate|unlock)\s+(?:your\s+)?(?:account|profile|login|discord|roblox|steam)\b/.test(normalized) ||
+    /\b(?:scan|use)\s+(?:this\s+)?qr\b/.test(normalized) ||
+    /\b(?:oauth|authorize|authorization)\b.*\b(?:discord|bot|app|application)\b/.test(normalized) ||
     /\b(?:paste|run|download|open)\s+this\b/.test(normalized) ||
     /\b(?:disable|turn off)\s+(?:antivirus|defender|windows defender)\b/.test(normalized) ||
     /\b(?:login|verify|verification)\s+(?:here|now|account)\b/.test(normalized)
@@ -599,7 +643,7 @@ function getThreatLevelForAction(action) {
   return "none";
 }
 
-function assessUrlRisk(url, rules, contextText) {
+function assessUrlRisk(url, rules, contextText, { posterContext = null } = {}) {
   if (!url) return null;
   if (isRuleAllowedLink(url, rules) || isGifLikeUrl(url)) return null;
 
@@ -621,7 +665,8 @@ function assessUrlRisk(url, rules, contextText) {
   const structuralScore = risks.reduce((max, risk) => Math.max(max, risk.score), 0);
   if (!structuralScore && isGenericSafeLink(url)) return null;
 
-  addRisk(risks, 80, hasScamLinkContext(contextText) ? "scam-like wording appears with a link" : null);
+  const scamContext = hasScamLinkContext(contextText);
+  addRisk(risks, 65, scamContext ? "scam-like wording appears with a link" : null);
   addRisk(risks, 70, isDiscordInviteUrl(url) ? "unapproved Discord invite" : null);
   addRisk(risks, 68, matchesAnyHost(url.hostname, URL_SHORTENER_HOSTS) ? "URL shortener hides the destination" : null);
   addRisk(risks, 60, url.source === "obfuscated" ? "URL was written in an obfuscated form" : null);
@@ -630,7 +675,16 @@ function assessUrlRisk(url, rules, contextText) {
 
   if (!risks.length) return null;
 
-  const score = risks.reduce((max, risk) => Math.max(max, risk.score), 0);
+  let score = risks.reduce((max, risk) => Math.max(max, risk.score), 0);
+  const posterContextReason = getPosterContextReason(posterContext);
+  if (
+    posterContextReason &&
+    hasNewPosterContext(posterContext) &&
+    (score >= 55 || scamContext || isDiscordInviteUrl(url) || isUrlShortenerHost(url.hostname))
+  ) {
+    addRisk(risks, Math.min(84, score + 10), posterContextReason);
+    score = Math.min(84, score + 10);
+  }
   const action = getActionForScore(score);
   if (!action) return null;
 
@@ -640,6 +694,243 @@ function assessUrlRisk(url, rules, contextText) {
     threatLevel: getThreatLevelForAction(action),
     confidence: score,
     reasons: [...new Set(risks.sort((a, b) => b.score - a.score).map((risk) => risk.reason))]
+  };
+}
+
+function normalizeRedirectLocation(location, baseUrl) {
+  if (!location) return null;
+  try {
+    return normalizeUrlCandidate(new URL(location, baseUrl).toString(), { source: "expanded" });
+  } catch {
+    return null;
+  }
+}
+
+async function fetchRedirectLocation(url, method = "HEAD") {
+  const response = await fetchWithTimeout(
+    url.url,
+    {
+      method,
+      redirect: "manual",
+      headers: {
+        "user-agent": "WizardOfKicia-LinkGuard/1.0"
+      }
+    },
+    LINK_EXPANSION_TIMEOUT_MS
+  );
+
+  const location = response.headers?.get?.("location");
+  if (!location || response.status < 300 || response.status > 399) return null;
+  return normalizeRedirectLocation(location, url.url);
+}
+
+async function expandShortenedUrl(url) {
+  if (!url || !isUrlShortenerHost(url.hostname)) return null;
+
+  let current = url;
+  const seen = new Set([current.key]);
+
+  for (let i = 0; i < SHORTENER_MAX_REDIRECTS; i += 1) {
+    let next = null;
+    try {
+      next = await fetchRedirectLocation(current, "HEAD");
+    } catch {
+      try {
+        next = await fetchRedirectLocation(current, "GET");
+      } catch {
+        return null;
+      }
+    }
+
+    if (!next || seen.has(next.key)) return null;
+    seen.add(next.key);
+
+    if (!isUrlShortenerHost(next.hostname)) {
+      return next;
+    }
+
+    current = next;
+  }
+
+  return null;
+}
+
+function buildThreatIntelCacheKey(service, url) {
+  return `${service}:${url.key}`;
+}
+
+function getCachedThreatIntel(service, url) {
+  const key = buildThreatIntelCacheKey(service, url);
+  const cached = THREAT_INTEL_CACHE.get(key);
+  if (!cached) return undefined;
+  if (Date.now() - cached.at > THREAT_INTEL_CACHE_MS) {
+    THREAT_INTEL_CACHE.delete(key);
+    return undefined;
+  }
+  return cached.value;
+}
+
+function setCachedThreatIntel(service, url, value) {
+  THREAT_INTEL_CACHE.set(buildThreatIntelCacheKey(service, url), {
+    at: Date.now(),
+    value
+  });
+  return value;
+}
+
+async function checkGoogleWebRisk(url) {
+  if (!GOOGLE_WEB_RISK_API_KEY) return null;
+  const cached = getCachedThreatIntel("webrisk", url);
+  if (cached !== undefined) return cached;
+
+  const endpoint = new URL("https://webrisk.googleapis.com/v1/uris:search");
+  endpoint.searchParams.append("threatTypes", "MALWARE");
+  endpoint.searchParams.append("threatTypes", "SOCIAL_ENGINEERING");
+  endpoint.searchParams.append("threatTypes", "UNWANTED_SOFTWARE");
+  endpoint.searchParams.set("uri", url.url);
+  endpoint.searchParams.set("key", GOOGLE_WEB_RISK_API_KEY);
+
+  try {
+    const response = await fetchWithTimeout(endpoint.toString(), {}, LINK_THREAT_INTEL_TIMEOUT_MS);
+    if (!response.ok) return setCachedThreatIntel("webrisk", url, null);
+    const payload = await response.json().catch(() => ({}));
+    const threatTypes = payload?.threat?.threatTypes || [];
+    if (!Array.isArray(threatTypes) || !threatTypes.length) {
+      return setCachedThreatIntel("webrisk", url, null);
+    }
+    return setCachedThreatIntel("webrisk", url, {
+      service: "Google Web Risk",
+      action: "timeout",
+      confidence: 96,
+      reason: `Google Web Risk matched ${threatTypes.join(", ")}`
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function checkGoogleSafeBrowsing(url) {
+  if (!GOOGLE_SAFE_BROWSING_API_KEY) return null;
+  const cached = getCachedThreatIntel("safebrowsing", url);
+  if (cached !== undefined) return cached;
+
+  const endpoint = `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${encodeURIComponent(GOOGLE_SAFE_BROWSING_API_KEY)}`;
+  const body = {
+    client: {
+      clientId: "wizard-of-kicia",
+      clientVersion: "1.0.0"
+    },
+    threatInfo: {
+      threatTypes: [
+        "MALWARE",
+        "SOCIAL_ENGINEERING",
+        "UNWANTED_SOFTWARE",
+        "POTENTIALLY_HARMFUL_APPLICATION"
+      ],
+      platformTypes: ["ANY_PLATFORM"],
+      threatEntryTypes: ["URL"],
+      threatEntries: [{ url: url.url }]
+    }
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      endpoint,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      },
+      LINK_THREAT_INTEL_TIMEOUT_MS
+    );
+    if (!response.ok) return setCachedThreatIntel("safebrowsing", url, null);
+    const payload = await response.json().catch(() => ({}));
+    const matches = payload?.matches || [];
+    if (!Array.isArray(matches) || !matches.length) {
+      return setCachedThreatIntel("safebrowsing", url, null);
+    }
+    const threatTypes = [...new Set(matches.map((match) => match.threatType).filter(Boolean))];
+    return setCachedThreatIntel("safebrowsing", url, {
+      service: "Google Safe Browsing",
+      action: "timeout",
+      confidence: 96,
+      reason: `Google Safe Browsing matched ${threatTypes.join(", ") || "unsafe URL"}`
+    });
+  } catch {
+    return null;
+  }
+}
+
+function getVirusTotalUrlId(url) {
+  return Buffer.from(url.url, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+async function checkVirusTotalUrlReport(url) {
+  if (!VIRUSTOTAL_API_KEY) return null;
+  const cached = getCachedThreatIntel("virustotal", url);
+  if (cached !== undefined) return cached;
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://www.virustotal.com/api/v3/urls/${getVirusTotalUrlId(url)}`,
+      {
+        headers: {
+          "x-apikey": VIRUSTOTAL_API_KEY
+        }
+      },
+      LINK_THREAT_INTEL_TIMEOUT_MS
+    );
+    if (!response.ok) return setCachedThreatIntel("virustotal", url, null);
+    const payload = await response.json().catch(() => ({}));
+    const stats = payload?.data?.attributes?.last_analysis_stats || {};
+    const malicious = Number(stats.malicious || 0);
+    const suspicious = Number(stats.suspicious || 0);
+
+    if (malicious >= 3) {
+      return setCachedThreatIntel("virustotal", url, {
+        service: "VirusTotal",
+        action: "timeout",
+        confidence: 92,
+        reason: `VirusTotal report has ${malicious} malicious detections`
+      });
+    }
+
+    if (malicious >= 1 || suspicious >= 3) {
+      return setCachedThreatIntel("virustotal", url, {
+        service: "VirusTotal",
+        action: "warn",
+        confidence: 72,
+        reason: `VirusTotal report has ${malicious} malicious and ${suspicious} suspicious detections`
+      });
+    }
+
+    return setCachedThreatIntel("virustotal", url, null);
+  } catch {
+    return null;
+  }
+}
+
+async function checkThreatIntel(url) {
+  if (!url) return null;
+  return (
+    await checkGoogleWebRisk(url) ||
+    await checkGoogleSafeBrowsing(url) ||
+    await checkVirusTotalUrlReport(url)
+  );
+}
+
+function buildThreatIntelRisk(url, verdict) {
+  if (!verdict) return null;
+  return {
+    ...url,
+    action: verdict.action || "warn",
+    threatLevel: getThreatLevelForAction(verdict.action || "warn"),
+    confidence: verdict.confidence || 80,
+    reasons: [verdict.reason || `${verdict.service || "threat-intel"} flagged this URL`]
   };
 }
 
@@ -677,10 +968,79 @@ function detectBlockedLinkSignal(text, { kb, trustedLinks = [] } = {}) {
   };
 }
 
+async function assessUrlRiskWithExpansion(url, rules, text, options = {}) {
+  if (!url) return null;
+  if (isRuleAllowedLink(url, rules) || isGifLikeUrl(url)) return null;
+
+  if (isUrlShortenerHost(url.hostname)) {
+    const expandedUrl = await expandShortenedUrl(url);
+    if (expandedUrl) {
+      const expandedAllowed = isAllowedLink(expandedUrl, rules);
+      if (expandedAllowed && !hasScamLinkContext(text)) {
+        return null;
+      }
+
+      const expandedRisk =
+        assessUrlRisk(expandedUrl, rules, text, options) ||
+        (
+          isGenericSafeLink(expandedUrl)
+            ? null
+            : buildThreatIntelRisk(expandedUrl, await checkThreatIntel(expandedUrl))
+        );
+      if (expandedRisk) {
+        return {
+          ...expandedRisk,
+          raw: `${url.raw} -> ${expandedUrl.url}`,
+          reasons: [
+            `URL shortener redirects to ${expandedUrl.hostname}`,
+            ...(expandedRisk.reasons || [])
+          ]
+        };
+      }
+    }
+  }
+
+  const heuristicRisk = assessUrlRisk(url, rules, text, options);
+  if (heuristicRisk) return heuristicRisk;
+  if (isGenericSafeLink(url)) return null;
+  return buildThreatIntelRisk(url, await checkThreatIntel(url));
+}
+
+async function detectBlockedLinkSignalAsync(text, { kb, trustedLinks = [], posterContext = null } = {}) {
+  if (!kb) return null;
+
+  const urls = extractUrlsFromText(text);
+  if (!urls.length) return null;
+
+  const rules = buildAllowedLinkRules(kb, { trustedLinks });
+  const blockedLinks = [];
+  for (const url of urls.slice(0, 5)) {
+    const risk = await assessUrlRiskWithExpansion(url, rules, text, { posterContext });
+    if (risk) blockedLinks.push(risk);
+  }
+  if (!blockedLinks.length) return null;
+
+  const action = pickStrongestAction(blockedLinks);
+  const confidence = blockedLinks.reduce((max, url) => Math.max(max, url.confidence || 0), 0);
+  const reasons = [...new Set(blockedLinks.flatMap((url) => url.reasons || []))];
+
+  return {
+    type: "blocked_link",
+    action,
+    threatLevel: getThreatLevelForAction(action),
+    confidence,
+    reason: reasons[0] || "risky link detected",
+    reasons,
+    blockedLinks,
+    blockedCount: blockedLinks.length
+  };
+}
+
 module.exports = {
   extractUrlsFromText,
   normalizeUrlCandidate,
   buildAllowedLinkRules,
   isAllowedLink,
-  detectBlockedLinkSignal
+  detectBlockedLinkSignal,
+  detectBlockedLinkSignalAsync
 };

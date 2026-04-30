@@ -60,7 +60,9 @@ const SELL_ANTI_PATTERNS = [
   /\bselling\s+is\s+against\s+rules?\b/,
   /\bsell(?:ing)?\s+is\s+not\s+allowed\b/,
   /\b(?:cant|can't|cannot)\s+sell\b/,
-  /\bnot\s+allowed\s+to\s+sell\b/
+  /\bnot\s+allowed\s+to\s+sell\b/,
+  /\b(?:is\s+this|is\s+that|are\s+these)\s+allowed\b/,
+  /\b(?:someone|somebody|user|person|people|they|he|she)\b.{0,60}\b(?:said|says|asked|told|selling|trading|scamming)\b.{0,60}\b(?:allowed|rules?|report)\b/
 ];
 const SELL_NEUTRAL_WORD_RE = /\bresellers?\b/g;
 const SELL_BROAD_INTENT_RE = /\b(?:sell|selling|seller|sold|buy|buying|buyer|trade|trading|trader|swap|swapping|exchange|scam|scamming)\b/;
@@ -470,9 +472,22 @@ function getScamTradeTextFeatures(text) {
   const spaced = buildSellingSpacedText(text);
   const condensed = buildSellingCondensedText(text);
   const tokens = spaced.split(/\s+/).filter(Boolean);
-  const intentTokens = new Set(["sell", "selling", "seller", "sold", "buy", "buying", "buyer", "trade", "trading", "trader", "swap", "swapping", "exchange", "wts", "wtb", "for", "sale"]);
+  const intentTokens = new Set(["sell", "selling", "seller", "sold", "buy", "buying", "buyer", "trade", "trading", "trader", "swap", "swapping", "exchange", "exchanging", "give", "giving", "offer", "offering", "wts", "wtb", "for", "sale"]);
   const objectishTokens = tokens.filter((token) => !intentTokens.has(token) && token.length > 1);
   const hasPriceSignal = /\$\s*\d/.test(text) || SELL_PRICE_RE.test(rawLower);
+  const hasDeicticDealSignal = /\b(?:this|that|it|one|thing|stuff|something)\b/.test(spaced);
+  const hasBarterSignal =
+    /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offer|offering)\b.{0,80}\bfor\b/.test(spaced);
+  const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(spaced);
+  const hasOfferTone = /\b(?:you|u)\s+want\b/.test(spaced) || /\b(?:want|need)\s+(?:it|this|one)\b/.test(spaced);
+  const hasPrivatePurchaseSignal =
+    hasPrivateHandoff &&
+    /\b(?:buy|buying|purchase|price|prices|pay|payment|get|sell|selling|offer|offers)\b/.test(spaced) &&
+    (SELL_ITEM_RE.test(spaced) || hasDeicticDealSignal);
+  const hasPrivateOfferSignal =
+    hasPrivateHandoff &&
+    hasOfferTone &&
+    (SELL_ITEM_RE.test(spaced) || hasDeicticDealSignal);
   return {
     rawLower,
     spaced,
@@ -485,9 +500,13 @@ function getScamTradeTextFeatures(text) {
     hasItemSignal: SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed),
     hasMarketSignal: SELL_MARKET_RE.test(rawLower) || hasPriceSignal,
     hasPriceSignal,
-    hasPrivateHandoff: PRIVATE_HANDOFF_RE.test(spaced),
+    hasPrivateHandoff,
+    hasPrivatePurchaseSignal,
+    hasPrivateOfferSignal,
+    hasBarterSignal,
+    hasDeicticDealSignal,
     hasQuestionTone: String(text || "").includes("?") || MARKET_QUESTION_RE.test(spaced),
-    hasOfferTone: /\b(?:you|u)\s+want\b/.test(spaced) || /\b(?:want|need)\s+(?:it|this|one)\b/.test(spaced),
+    hasOfferTone,
     hasObjectishSignal: objectishTokens.length > 0
   };
 }
@@ -511,7 +530,10 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     latestFeatures.hasItemSignal ||
     latestFeatures.hasPriceSignal ||
     latestFeatures.hasPrivateHandoff ||
-    latestFeatures.hasOfferTone;
+    latestFeatures.hasOfferTone ||
+    latestFeatures.hasPrivatePurchaseSignal ||
+    latestFeatures.hasPrivateOfferSignal ||
+    latestFeatures.hasBarterSignal;
   const referenceText = repliedToMessage?.content || "";
   const referenceFeatures = getScamTradeTextFeatures(referenceText);
   const referenceAsksForLink =
@@ -528,6 +550,36 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
       requiresAi: true,
       confidence: 72,
       reason: "private DM handoff in reply to a link/trade/support request"
+    };
+  }
+
+  if (combinedFeatures.hasPrivatePurchaseSignal) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: combinedFeatures.hasItemSignal ? 86 : 74,
+      reason: "private buy/sell handoff detected in recent message context"
+    };
+  }
+
+  if (combinedFeatures.hasPrivateOfferSignal) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: combinedFeatures.hasItemSignal ? 82 : 72,
+      reason: "private item/trade offer detected in recent message context"
+    };
+  }
+
+  if (combinedFeatures.hasBarterSignal && (combinedFeatures.hasItemSignal || combinedFeatures.hasDeicticDealSignal)) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: combinedFeatures.hasItemSignal ? 82 : 64,
+      reason: "possible barter/trade intent in recent message context"
     };
   }
 
@@ -1124,7 +1176,8 @@ function formatAiVerdictLines(signals) {
     .filter(Boolean)
     .map((ai) => {
       const detail = ai.skipped ? ` (${ai.skipped})` : "";
-      return `- ${ai.model || "Gemini"}: ${ai.answer || "NO_ANSWER"}${detail}`;
+      const reason = ai.reason ? ` - ${ai.reason}` : "";
+      return `- ${ai.model || "Gemini"}: ${ai.answer || "NO_ANSWER"}${detail}${reason}`;
     });
   return lines.length ? lines.join("\n") : "";
 }

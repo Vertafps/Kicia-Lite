@@ -3,6 +3,8 @@
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?/gi;
 const MONEY_RE = /(?:[$€£]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|dollars?|bucks?|rs|lkr|robux|rbx)\b)/gi;
 
+const MODEL_NAME = "local-kicia-intent-v2";
+
 const SCAM_SAMPLES = [
   "selling configs cheap dm me",
   "selling kicia config cheap dm me",
@@ -32,8 +34,19 @@ const SCAM_SAMPLES = [
   "i can sell kicia premium cheaper in dms",
   "private kicia reseller dm cashapp",
   "buy kicia from me cheaper",
+  "dms to buy kicia",
+  "dm me to buy this",
+  "dms to buy this",
+  "message me for price on this",
+  "private deal for kicia premium",
+  "unofficial kicia cheaper dm",
   "selling kicia license dm me",
   "trading kicia key for account",
+  "giving kicia key for account",
+  "giving config for robux",
+  "trading config for robux",
+  "swap kicia key for account",
+  "exchange executor script for nitro",
   "want to buy your account dm price",
   "i sell executor links",
   "need middleman for kicia key trade",
@@ -80,7 +93,19 @@ const SAFE_SAMPLES = [
   "is kicia currently available",
   "how to upgrade to kicia premium",
   "kicia premium support",
-  "official kicia purchase question"
+  "official kicia purchase question",
+  "how do i disable windows defender for executor",
+  "disable windows defender for executor",
+  "turn off antivirus so executor can inject",
+  "add executor to antivirus exclusions",
+  "how to whitelist kicia in defender",
+  "disable antivirus only if docs say it",
+  "can i turn off real time protection for executor",
+  "where to buy",
+  "how to buy",
+  "is trading allowed here",
+  "can i trade this for that here",
+  "someone said dms to buy kicia is that allowed"
 ];
 
 const KICIA_BRAND_RE = /\b(?:kicia|kiciahook)\b/i;
@@ -88,6 +113,22 @@ const KICIA_PURCHASE_RE =
   /\b(?:buy|buying|bought|purchase|purchasing|pay|paid|payment|price|prices|cost|costs|shop|store|premium|license|licence|key|subscription|sub|upgrade|get|getting)\b/i;
 const KICIA_DEAL_RISK_RE =
   /\b(?:sell|selling|sold|wts|wtb|trade|trading|swap|middleman|mm|dm|dms|message\s+me|from\s+me|account|accounts|acc|alts?|config|configs|cfg|script|executor|cheap|cheaper|robux|rbx|nitro|paypal|cashapp|crypto|btc|eth)\b/i;
+const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/i;
+const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|owner|admin|mod|moderator|store|shop|site|website|server|docs?|support)\b/i;
+const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why)\b/i;
+const PROTECTED_ITEM_RE =
+  /\b(?:kicia|kiciahook|account|accounts|acc|alts?|config|configs|cfg|script|scripts|executor|executors|key|keys|license|licence|premium|robux|rbx|nitro|token|cookie|cookies)\b/i;
+const DEICTIC_ITEM_RE = /\b(?:this|that|it|one|thing|stuff|something)\b/i;
+const DIRECT_OFFER_RE =
+  /\b(?:selling|sell|sold|wts|wtb|buying|buy my|buy from me|taking offers|for sale|offer|offers|reseller|middleman|mm)\b/i;
+const BARTER_RE =
+  /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offering)\b.{0,80}\bfor\b/i;
+const SECURITY_DISABLE_RE =
+  /\b(?:disable|turn off|shut off|deactivate|whitelist|allowlist|exclude|exclusion|allow)\b.{0,60}\b(?:antivirus|anti virus|windows defender|defender|windows security|real time protection|realtime protection|av)\b|\b(?:antivirus|anti virus|windows defender|defender|windows security|real time protection|realtime protection|av)\b.{0,60}\b(?:disable|turn off|shut off|deactivate|whitelist|allowlist|exclude|exclusion|allow)\b/i;
+const SECURITY_RISK_RE =
+  /\b(?:dm|dms|message me|msg me|pm|private|click|link|download from me|sell|selling|trade|trading|buy from me|token|password|cookie|account|paypal|cashapp|crypto)\b/i;
+const META_DISCUSSION_RE =
+  /\b(?:someone|somebody|someone's|somebody's|user|person|people|he|she|they|staff)\b.{0,30}\b(?:said|says|asked|told|is saying|was saying|selling|trading|scamming)\b|\b(?:is this|is that|are these|allowed|against rules|report|reported|warning|warn|quoting|quote)\b/i;
 
 function normalizeClassifierText(value) {
   return String(value || "")
@@ -111,6 +152,134 @@ function isKiciaLegitPurchaseIntent(input) {
   }
 
   return true;
+}
+
+function isSafeSecurityDisableSupport(input) {
+  const parts = Array.isArray(input) ? input : [input];
+  const text = normalizeClassifierText(parts.filter(Boolean).join(" "));
+  return SECURITY_DISABLE_RE.test(text) && !SECURITY_RISK_RE.test(text);
+}
+
+function localVerdict({ verdict, confidence, score, reason, stage = "policy" }) {
+  return {
+    verdict,
+    confidence,
+    score,
+    reason,
+    stage,
+    model: MODEL_NAME
+  };
+}
+
+function extractPolicyIntent(context = {}, options = {}) {
+  const userMessages = Array.isArray(context.userMessages) ? context.userMessages : [];
+  const userText = normalizeClassifierText(userMessages.join(" "));
+  const fullText = normalizeClassifierText(buildContextText(context));
+  const signalConfidence = Number(options.strongestSignal?.confidence || 0);
+  if (!userText && !fullText) return null;
+
+  if (isKiciaLegitPurchaseIntent(userMessages || userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 98,
+      score: 0.01,
+      reason: "Legitimate official Kicia purchase/support intent."
+    });
+  }
+
+  if (isSafeSecurityDisableSupport(userMessages.length ? userMessages : userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 96,
+      score: 0.02,
+      reason: "Antivirus/Defender support wording without deal or credential intent."
+    });
+  }
+
+  const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(userText);
+  const hasOfficialRoute = OFFICIAL_ROUTE_RE.test(userText);
+  const hasQuestionTone = QUESTION_START_RE.test(userText) || /\?$/.test(userText);
+  const hasProtectedItem = PROTECTED_ITEM_RE.test(userText);
+  const hasDeicticItem = DEICTIC_ITEM_RE.test(userText);
+  const hasKicia = KICIA_BRAND_RE.test(userText);
+  const hasOfferTone = /\b(?:you|u)\s+want\b/i.test(userText) || /\b(?:want|need)\s+(?:it|this|one)\b/i.test(userText);
+  const hasPurchaseOrPrice = /\b(?:buy|buying|purchase|price|prices|pay|payment|get|sell|selling|offer|offers)\b/i.test(userText);
+  const hasDirectOffer = DIRECT_OFFER_RE.test(userText);
+  const hasBarter = BARTER_RE.test(userText);
+  const hasMetaDiscussion = META_DISCUSSION_RE.test(userText);
+  const hasPrivatePurchaseHandoff =
+    hasPrivateHandoff &&
+    hasPurchaseOrPrice &&
+    (hasProtectedItem || hasDeicticItem || hasKicia);
+  const hasPrivateOfferHandoff = hasPrivateHandoff && hasOfferTone && (hasProtectedItem || hasDeicticItem);
+  const hasTradeOffer = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i.test(userText) && hasOfferTone;
+
+  if (hasMetaDiscussion && (hasQuestionTone || !/\b(?:i|im|i m|my|me)\b/i.test(userText))) {
+    return localVerdict({
+      verdict: false,
+      confidence: 93,
+      score: 0.07,
+      reason: "Meta-discussion, report, or policy question rather than target-user deal intent."
+    });
+  }
+
+  if (hasPrivatePurchaseHandoff && !(hasQuestionTone && hasOfficialRoute)) {
+    return localVerdict({
+      verdict: true,
+      confidence: hasKicia || hasProtectedItem ? 96 : 93,
+      score: 0.97,
+      reason: hasKicia
+        ? "Private Kicia purchase/resale handoff is not an official Kicia use case."
+        : "Private buy/sell handoff matched scam/trade policy."
+    });
+  }
+
+  if (hasPrivateOfferHandoff || hasTradeOffer) {
+    return localVerdict({
+      verdict: true,
+      confidence: 93,
+      score: 0.94,
+      reason: "Target user is steering an item/trade offer toward a private or direct deal."
+    });
+  }
+
+  if (hasBarter && hasProtectedItem && !(hasQuestionTone && !hasDirectOffer && signalConfidence < 80)) {
+    return localVerdict({
+      verdict: true,
+      confidence: 95,
+      score: 0.96,
+      reason: "Concrete protected-item barter matched scam/trade policy."
+    });
+  }
+
+  if (hasDirectOffer && hasProtectedItem && !(hasQuestionTone && !hasPrivateHandoff)) {
+    return localVerdict({
+      verdict: true,
+      confidence: 94,
+      score: 0.95,
+      reason: "Direct protected-item market offer matched scam/trade policy."
+    });
+  }
+
+  if (hasBarter && (hasDeicticItem || /\b(?:for|this|that)\b/i.test(userText))) {
+    return localVerdict({
+      verdict: null,
+      confidence: 84,
+      score: 0.5,
+      reason: "Ambiguous barter-style wording needs remote AI before action."
+    });
+  }
+
+  if (hasQuestionTone && !hasPrivateHandoff && !hasDirectOffer) {
+    return localVerdict({
+      verdict: null,
+      confidence: 76,
+      score: 0.5,
+      reason: "Question-style wording needs remote context before action."
+    });
+  }
+
+  return null;
 }
 
 function tokenize(value) {
@@ -199,19 +368,13 @@ function classifyScamContextLocally(context = {}, options = {}) {
       confidence: 0,
       score: 0.5,
       reason: "No text was available for the local classifier.",
-      model: "local-naive-bayes-v1"
+      stage: "empty",
+      model: MODEL_NAME
     };
   }
 
-  if (isKiciaLegitPurchaseIntent(context.userMessages || text)) {
-    return {
-      verdict: false,
-      confidence: 97,
-      score: 0.01,
-      reason: "Legitimate Kicia purchase intent.",
-      model: "local-naive-bayes-v1"
-    };
-  }
+  const policyResult = extractPolicyIntent(context, options);
+  if (policyResult) return policyResult;
 
   const score = probabilityForScam(text);
   const signalConfidence = Number(options.strongestSignal?.confidence || 0);
@@ -229,7 +392,8 @@ function classifyScamContextLocally(context = {}, options = {}) {
       confidence: Math.round(Math.max(score, 1 - score) * 100),
       score,
       reason: "Question-style market wording needs remote context before action.",
-      model: "local-naive-bayes-v1"
+      stage: "naive_bayes",
+      model: MODEL_NAME
     };
   }
 
@@ -241,7 +405,8 @@ function classifyScamContextLocally(context = {}, options = {}) {
       reason: highRiskSignal
         ? "High-risk trade/private-sale language matched local scam patterns."
         : "Local classifier matched scam/trade intent.",
-      model: "local-naive-bayes-v1"
+      stage: "naive_bayes",
+      model: MODEL_NAME
     };
   }
 
@@ -251,7 +416,8 @@ function classifyScamContextLocally(context = {}, options = {}) {
       confidence: Math.max(92, Math.round((1 - score) * 100)),
       score,
       reason: "Local classifier matched safe/support intent.",
-      model: "local-naive-bayes-v1"
+      stage: "naive_bayes",
+      model: MODEL_NAME
     };
   }
 
@@ -260,12 +426,15 @@ function classifyScamContextLocally(context = {}, options = {}) {
     confidence: Math.round(Math.max(score, 1 - score) * 100),
     score,
     reason: "Borderline local classifier result; remote AI may be useful.",
-    model: "local-naive-bayes-v1"
+    stage: "naive_bayes",
+    model: MODEL_NAME
   };
 }
 
 module.exports = {
   classifyScamContextLocally,
+  extractPolicyIntent,
+  isSafeSecurityDisableSupport,
   isKiciaLegitPurchaseIntent,
   normalizeClassifierText,
   probabilityForScam

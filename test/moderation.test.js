@@ -38,7 +38,11 @@ const {
   resetModerationState
 } = require("../src/handlers/moderation");
 const { maybeHandleRestrictedReactionAdd } = require("../src/handlers/restricted-reactions");
-const { classifyScamContextLocally, isKiciaLegitPurchaseIntent } = require("../src/scam-local-classifier");
+const {
+  classifyScamContextLocally,
+  isKiciaLegitPurchaseIntent,
+  isSafeSecurityDisableSupport
+} = require("../src/scam-local-classifier");
 
 const kb = normalizeKb({
   issues: [],
@@ -345,6 +349,33 @@ test("local scam classifier protects official Kicia purchase questions", () => {
   assert.equal(resellerVerdict.verdict, true);
 });
 
+test("local scam classifier follows KiciaHook safe and unsafe standards", () => {
+  assert.equal(isSafeSecurityDisableSupport(["disable windows defender for executor"]), true);
+  assert.equal(detectScamTradeCandidateContext(["disable antivirus for executor"]), null);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["disable antivirus for executor"]
+  }).verdict, false);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["dms to buy kicia"]
+  }).verdict, true);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["dms to buy this"]
+  }).verdict, true);
+
+  const ambiguousBarter = classifyScamContextLocally({
+    userMessages: ["trading this for that"]
+  });
+  assert.equal(ambiguousBarter.verdict, null);
+  assert.match(ambiguousBarter.reason, /remote AI/i);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["someone said dms to buy kicia is that allowed"]
+  }).verdict, false);
+});
+
 test("contextual selling detection catches split sell and price messages", () => {
   const signal = detectContextualSellingSignal([
     "selling ue",
@@ -637,13 +668,102 @@ test("official Kicia purchase questions do not call scam AI", async () => {
   assert.equal(fixture.timeouts.length, 0);
 });
 
-test("AI scam classifier confirms split selling context before action", async () => {
+test("antivirus support wording does not call scam AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("disable windows defender for executor");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
+test("private Kicia buying handoff is caught without remote AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("dms to buy kicia");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.equal(fixture.replies.length, 1);
+});
+
+test("generic barter wording becomes AI-borderline instead of automatic action", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("trading this for that");
+  let capturedContext = null;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async (context) => {
+      capturedContext = context;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.deepEqual(capturedContext.userMessages, ["trading this for that"]);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Scam AI Cleared/i);
+});
+
+test("concrete barter with protected items is caught locally", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("giving kicia key for account");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].body, /Concrete protected-item barter/i);
+  assert.equal(fixture.replies.length, 1);
+});
+
+test("local classifier confirms obvious split selling context before remote AI", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("selling");
-  const contexts = [];
-  const classifyScam = async (context) => {
-    contexts.push(context);
-    return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+  let aiCalls = 0;
+  const classifyScam = async () => {
+    aiCalls += 1;
+    return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
   };
 
   const firstHandled = await maybeHandleModerationWatch(fixture.message, {
@@ -666,11 +786,10 @@ test("AI scam classifier confirms split selling context before action", async ()
   });
 
   assert.equal(secondHandled, true);
-  assert.equal(contexts.length, 1);
-  assert.deepEqual(contexts[0].userMessages, ["selling", "configs"]);
+  assert.equal(aiCalls, 0);
   assert.equal(fixture.replies.length, 1);
   assert.match(fixture.logs[0].body, /AI Scam Verdict/i);
-  assert.match(fixture.logs[0].body, /test-gemini: TRUE/i);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
 });
 
 test("AI scam classifier uses replied-to message context", async () => {

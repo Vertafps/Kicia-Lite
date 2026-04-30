@@ -170,7 +170,7 @@ function buildModerationGuardLines() {
     [
       "**Scam/Trade Guard:**",
       "context-first prefilter checks the target user's last 3 messages plus replied-to message;",
-      "local Naive Bayes classifier handles confident cases before remote AI;",
+      "local Kicia policy + Naive Bayes classifier handles confident cases before remote AI;",
       `Gemini model ${GEMINI_SCAM_MODEL} for borderline cases;`,
       `AI cache ${formatDuration(GEMINI_SCAM_CACHE_MS)};`,
       `local AI gap ${formatDuration(GEMINI_SCAM_MIN_INTERVAL_MS)};`,

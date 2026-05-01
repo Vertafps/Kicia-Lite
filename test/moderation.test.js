@@ -934,6 +934,56 @@ test("local classifier confirms obvious split selling context before remote AI",
   assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
 });
 
+test("scam action clears recent user context before a safe follow-up", async () => {
+  await clearDailyStatsTracking(1);
+  const userId = "cleared-user";
+  const first = buildModerationMessage("selling", { userId });
+  const second = buildModerationMessage("configs", { userId });
+  const followUp = buildModerationMessage("where can i buy kicia premium?", { userId });
+  let aiCalls = 0;
+
+  const firstHandled = await maybeHandleModerationWatch(first.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: first.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    },
+    now: 1_000
+  });
+
+  const secondHandled = await maybeHandleModerationWatch(second.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: second.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    },
+    now: 2_000
+  });
+
+  const followUpHandled = await maybeHandleModerationWatch(followUp.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: followUp.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("safe follow-up should not re-use old scam context");
+    },
+    now: 3_000
+  });
+
+  assert.equal(firstHandled, false);
+  assert.equal(secondHandled, true);
+  assert.equal(followUpHandled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(followUp.logs.length, 0);
+  assert.equal(followUp.replies.length, 0);
+  assert.equal(followUp.timeouts.length, 0);
+});
+
 test("AI scam classifier uses replied-to message context", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("dms", {
@@ -955,6 +1005,53 @@ test("AI scam classifier uses replied-to message context", async () => {
   assert.equal(capturedContext.repliedToMessage.content, "where is executor link");
   assert.match(fixture.logs[0].body, /private DM handoff/i);
   assert.match(fixture.logs[0].body, /test-gemini: TRUE/i);
+});
+
+test("AI scam context keeps the last five user messages with their reply context", async () => {
+  await clearDailyStatsTracking(1);
+  const userId = "context-user";
+  const seedMessages = [
+    { content: "zero" },
+    { content: "one" },
+    { content: "two", referencedContent: "what config are you talking about?" },
+    { content: "three" },
+    { content: "four" }
+  ];
+
+  for (let index = 0; index < seedMessages.length; index += 1) {
+    const seed = buildModerationMessage(seedMessages[index].content, {
+      userId,
+      referencedContent: seedMessages[index].referencedContent || null
+    });
+    seed.message.id = `seed-${index}`;
+    await maybeHandleModerationWatch(seed.message, {
+      kb,
+      runtimeStatus: "UP",
+      sendLog: seed.sendLog,
+      classifyScam: async () => {
+        throw new Error("seed messages should not call scam AI");
+      },
+      now: 1_000 + index
+    });
+  }
+
+  const fixture = buildModerationMessage("trading this for that", { userId });
+  let capturedContext = null;
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async (context) => {
+      capturedContext = context;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    },
+    now: 2_000
+  });
+
+  assert.equal(handled, false);
+  assert.deepEqual(capturedContext.userMessages, ["one", "two", "three", "four", "trading this for that"]);
+  assert.equal(capturedContext.messageContexts.length, 5);
+  assert.equal(capturedContext.messageContexts[1].repliedToMessage.content, "what config are you talking about?");
 });
 
 test("AI scam classifier can clear ambiguous market questions", async () => {

@@ -16,18 +16,32 @@ const {
 
 test("Gemini scam prompt keeps only target-user context and reply context", () => {
   const prompt = buildGeminiPrompt({
-    userMessages: ["older", "selling", "configs", "dm me"],
+    messageContexts: [
+      { content: "oldest" },
+      { content: "older" },
+      { content: "selling" },
+      {
+        content: "configs",
+        repliedToMessage: {
+          authorLabel: "Buyer",
+          content: "do you have configs"
+        }
+      },
+      { content: "dm me" },
+      { content: "price" }
+    ],
     repliedToMessage: {
       authorLabel: "Other User",
       content: "where is executor link"
     }
   });
 
-  assert.doesNotMatch(prompt, /\bolder\b/);
+  assert.doesNotMatch(prompt, /1\. oldest/i);
   assert.match(prompt, /Other User: where is executor link/i);
-  assert.match(prompt, /1\. selling/i);
-  assert.match(prompt, /2\. configs/i);
-  assert.match(prompt, /3\. dm me/i);
+  assert.match(prompt, /1\. older/i);
+  assert.match(prompt, /3\. configs \| replied to Buyer: do you have configs/i);
+  assert.match(prompt, /4\. dm me/i);
+  assert.match(prompt, /5\. price/i);
   assert.match(prompt, /Return exactly TRUE or FALSE/i);
 });
 

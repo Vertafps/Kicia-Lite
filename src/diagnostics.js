@@ -169,7 +169,7 @@ function buildModerationGuardLines() {
     "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, paste/run/download prompts",
     [
       "**Scam/Trade Guard:**",
-      "context-first prefilter checks the target user's last 3 messages plus replied-to message;",
+      "context-first prefilter checks the target user's last 5 messages plus per-message reply context;",
       "local Kicia policy + Naive Bayes classifier handles confident cases before remote AI;",
       `Gemini model ${GEMINI_SCAM_MODEL} for borderline cases;`,
       `AI cache ${formatDuration(GEMINI_SCAM_CACHE_MS)};`,

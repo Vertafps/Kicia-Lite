@@ -47,7 +47,7 @@ const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|configuration|config|c
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|buyer|buying|bucks?|dollars?|trade|trades|trading|swap|swapping|exchange|middleman|mm)\b/;
 const SELL_PRICE_RE = /(?:^|\s)(?:for\s+)?(?:[$\u20ac\u00a3]\s*)?\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd)?(?:\s|$)/;
 const SELL_CONTEXT_WINDOW_MS = 2 * 60 * 1000;
-const SELL_CONTEXT_MAX_MESSAGES = 3;
+const SELL_CONTEXT_MAX_MESSAGES = 5;
 const SELL_OFFER_PATTERNS = [
   /\b(?:i am|im|i m)\s+selling\b/,
   /\b(?:i am|im|i m)\s+trading\b/,
@@ -147,21 +147,30 @@ const SUSPICIOUS_PUBLIC_REPLIES_BY_HIT = [
     "ok vro...",
     "curious little sentence...",
     "ah yes, extremely normal behavior...",
-    "that wording is doing gymnastics..."
+    "that wording is doing gymnastics...",
+    "the sus meter coughed once...",
+    "that sentence wore sunglasses indoors...",
+    "tiny red flag doing pushups..."
   ],
   [
     "ahh totally not sus...",
     "ok now you're collecting suspicion points...",
     "that is two eyebrow raises now...",
     "the plot is getting suspicious...",
-    "second verse, same strange chorus..."
+    "second verse, same strange chorus...",
+    "the sus meter is now standing up...",
+    "that sequel did not help your case...",
+    "chat, the vibes filed a complaint..."
   ],
   [
     "okay that is getting very sus...",
     "and that's the hat trick...",
     "three suspicious laps around the track...",
     "ok vro, timeout weather...",
-    "that one completed the sus trilogy..."
+    "that one completed the sus trilogy...",
+    "the sus meter has left the building...",
+    "that was the final boss of strange wording...",
+    "case file says: please take a walk..."
   ]
 ];
 const SELLING_PUBLIC_REPLIES = [
@@ -174,7 +183,13 @@ const SELLING_PUBLIC_REPLIES = [
   "unsafe deal aura detected...",
   "checkout lane closed...",
   "that sounded like scam/trade bait...",
-  "not the trading floor..."
+  "not the trading floor...",
+  "deal greeter denied that one at the door...",
+  "the trade cart failed inspection...",
+  "private-sale alarm made a funny noise...",
+  "this deal tried to sneak in wearing a fake mustache...",
+  "marketplace cosplay detected...",
+  "the scam/trade scanner did a backflip..."
 ];
 const ROASTING_PATTERNS = [
   /\b(?:bro|blud|vro|lil bro)\s+(?:got\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
@@ -203,7 +218,11 @@ const ROASTING_PUBLIC_REPLIES = [
   "ok vro, that one had heat...",
   "the roast meter just blinked...",
   "small flame detected...",
-  "this chat got a little crispy..."
+  "this chat got a little crispy...",
+  "that one came with roast marks...",
+  "the heat in here gained two levels...",
+  "lightly cooked conversation detected...",
+  "that reply brought its own kitchen pan..."
 ];
 
 const ASSERTION_EXCLUDE_PATTERNS = [
@@ -1060,21 +1079,66 @@ function rememberSellingMessage(message, signals, now = Date.now()) {
   };
 }
 
-function rememberRecentUserMessage(message, now = Date.now()) {
+function cloneReplyContext(repliedToMessage) {
+  if (!repliedToMessage?.content) return null;
+  return {
+    content: cleanText(repliedToMessage.content),
+    authorId: repliedToMessage.authorId || null,
+    authorLabel: repliedToMessage.authorLabel || "other user"
+  };
+}
+
+function normalizeRecentMessageEntry(entry) {
+  if (typeof entry === "string") {
+    return {
+      at: Date.now(),
+      content: String(entry || ""),
+      repliedToMessage: null
+    };
+  }
+
+  return {
+    at: Number(entry?.at || Date.now()),
+    content: String(entry?.content || ""),
+    repliedToMessage: cloneReplyContext(entry?.repliedToMessage)
+  };
+}
+
+function getRecentMessageTexts(recentMessages) {
+  return (recentMessages || [])
+    .map((entry) => cleanText(typeof entry === "string" ? entry : entry?.content))
+    .filter(Boolean)
+    .slice(-SELL_CONTEXT_MAX_MESSAGES);
+}
+
+function clearRecentUserMessagesFor(message) {
   const key = buildRecentUserMessageKey(message);
-  if (!key) return [String(message?.content || "")];
+  if (!key) return false;
+  return recentUserMessages.delete(key);
+}
+
+function rememberRecentUserMessage(message, repliedToMessage = null, now = Date.now()) {
+  const key = buildRecentUserMessageKey(message);
+  if (!key) {
+    return [{
+      at: now,
+      content: String(message?.content || ""),
+      repliedToMessage: cloneReplyContext(repliedToMessage)
+    }];
+  }
 
   pruneRecentUserMessages(now);
   const entry = recentUserMessages.get(key) || { messages: [] };
   entry.messages.push({
     at: now,
-    content: String(message.content || "")
+    content: String(message.content || ""),
+    repliedToMessage: cloneReplyContext(repliedToMessage)
   });
   if (entry.messages.length > SELL_CONTEXT_MAX_MESSAGES) {
     entry.messages = entry.messages.slice(-SELL_CONTEXT_MAX_MESSAGES);
   }
   recentUserMessages.set(key, entry);
-  return entry.messages.map((item) => item.content);
+  return entry.messages.map(normalizeRecentMessageEntry);
 }
 
 async function resolveReferencedMessageContext(message) {
@@ -1099,15 +1163,21 @@ async function resolveReferencedMessageContext(message) {
 }
 
 function buildScamAiContext({ message, recentMessages, repliedToMessage }) {
-  const userMessages = (recentMessages || [])
-    .map((text) => cleanText(text))
-    .filter(Boolean)
+  const messageContexts = (recentMessages || [])
+    .map(normalizeRecentMessageEntry)
+    .map((entry) => ({
+      content: cleanText(entry.content),
+      repliedToMessage: cloneReplyContext(entry.repliedToMessage)
+    }))
+    .filter((entry) => entry.content)
     .slice(-SELL_CONTEXT_MAX_MESSAGES);
+  const userMessages = getRecentMessageTexts(messageContexts);
 
   return {
     userId: message.author?.id || null,
     channelId: message.channelId || null,
     userMessages,
+    messageContexts,
     repliedToMessage: repliedToMessage || null,
     currentMessageUrl: buildMessageUrl(message)
   };
@@ -1764,9 +1834,10 @@ async function maybeHandleModerationWatch(message, {
   if (await hasManualWhitelistBypass(message)) return false;
 
   try {
-    const recentMessages = rememberRecentUserMessage(message, now);
     const repliedToMessage = await resolveReferencedMessageContext(message);
-    const scamContext = buildScamAiContext({ message, recentMessages, repliedToMessage });
+    const recentMessageEntries = rememberRecentUserMessage(message, repliedToMessage, now);
+    const recentMessages = getRecentMessageTexts(recentMessageEntries);
+    const scamContext = buildScamAiContext({ message, recentMessages: recentMessageEntries, repliedToMessage });
     let resolvedKb = kb || null;
     const hasLink = mightContainLink(message.content);
     if (!resolvedKb && (hasLink || mightContainFakeInfo(message.content))) {
@@ -1785,7 +1856,10 @@ async function maybeHandleModerationWatch(message, {
       });
       if (blockedLinkSignal) {
         const linkHandled = await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });
-        if (linkHandled) return true;
+        if (linkHandled) {
+          clearRecentUserMessagesFor(message);
+          return true;
+        }
       }
     }
 
@@ -1821,6 +1895,7 @@ async function maybeHandleModerationWatch(message, {
         now,
         replyPublic: !suspiciousSignals.length
       });
+      clearRecentUserMessagesFor(message);
       publicReplySent = publicReplySent || state.publicReplySent;
     }
 
@@ -1840,6 +1915,7 @@ async function maybeHandleModerationWatch(message, {
 
     if (suspiciousSignals.length) {
       const state = await handleSuspiciousMessage(message, suspiciousSignals, { sendLog, now });
+      clearRecentUserMessagesFor(message);
       publicReplySent = publicReplySent || state.publicReplySent;
     }
 

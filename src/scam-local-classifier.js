@@ -431,6 +431,16 @@ function probabilityForScam(text) {
 }
 
 function buildContextText(context = {}) {
+  if (Array.isArray(context.messageContexts) && context.messageContexts.length) {
+    return context.messageContexts
+      .map((entry) => {
+        const replyText = entry?.repliedToMessage?.content ? `reply context: ${entry.repliedToMessage.content}` : "";
+        return [entry?.content, replyText].filter(Boolean).join("\n");
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
   const userMessages = Array.isArray(context.userMessages) ? context.userMessages : [];
   const replyText = context.repliedToMessage?.content ? `reply context: ${context.repliedToMessage.content}` : "";
   return [...userMessages, replyText].filter(Boolean).join("\n");

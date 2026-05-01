@@ -22,7 +22,10 @@ function clip(value, max = 420) {
 function buildCacheKey(context) {
   const userLines = (context.userMessages || []).map((line) => normalizeText(line)).join("|");
   const reply = normalizeText(context.repliedToMessage?.content || "");
-  return `${userLines}::${reply}`;
+  const messageReplies = (context.messageContexts || [])
+    .map((entry) => `${normalizeText(entry?.content || "")}>${normalizeText(entry?.repliedToMessage?.content || "")}`)
+    .join("|");
+  return `${userLines}::${reply}::${messageReplies}`;
 }
 
 function getCachedVerdict(cacheKey, now = Date.now()) {
@@ -55,9 +58,17 @@ function enterGeminiCooldown(now, reason) {
 }
 
 function buildGeminiPrompt(context) {
-  const userMessages = (context.userMessages || [])
-    .slice(-3)
-    .map((line, index) => `${index + 1}. ${clip(line)}`)
+  const messageContexts = Array.isArray(context.messageContexts) && context.messageContexts.length
+    ? context.messageContexts
+    : (context.userMessages || []).map((line) => ({ content: line, repliedToMessage: null }));
+  const userMessages = messageContexts
+    .slice(-5)
+    .map((entry, index) => {
+      const reply = entry?.repliedToMessage?.content
+        ? ` | replied to ${entry.repliedToMessage.authorLabel || "other user"}: ${clip(entry.repliedToMessage.content, 220)}`
+        : "";
+      return `${index + 1}. ${clip(entry?.content)}${reply}`;
+    })
     .join("\n") || "none";
   const repliedTo = context.repliedToMessage?.content
     ? `${context.repliedToMessage.authorLabel || "other user"}: ${clip(context.repliedToMessage.content)}`
@@ -65,7 +76,7 @@ function buildGeminiPrompt(context) {
 
   return [
     "You are a Discord moderation classifier for scam, selling, buying, trading, phishing, and private-deal behavior.",
-    "Classify ONLY the TARGET USER, using the last target-user messages and any message they replied to.",
+    "Classify ONLY the TARGET USER, using the last five target-user messages and any messages they replied to.",
     "Return exactly TRUE or FALSE.",
     "TRUE means the target user likely has disallowed intent: scamming, selling/trading/buying accounts/configs/scripts/keys/executors, moving a trade/download/link/account deal to DMs, phishing, or asking someone to bypass safety.",
     "FALSE means harmless context: asking a support question, warning others, quoting or joking without offering a deal, asking whether something is allowed, or directing users to official docs/support.",
@@ -80,7 +91,7 @@ function buildGeminiPrompt(context) {
     "Message replied to by target user:",
     repliedTo,
     "",
-    "Target user's last messages:",
+    "Target user's last messages, oldest to newest:",
     userMessages
   ].join("\n");
 }

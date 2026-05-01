@@ -9,6 +9,8 @@ const { formatDuration } = require("./duration");
 const { buildPanel, INFO, SUCCESS, WARN } = require("./embed");
 const { isStaffOnlyTrackedMember } = require("./permissions");
 const {
+  cleanupRestrictedEmojiDatabaseTempFiles,
+  clearScamDecisionAudit,
   clearDailyStatsTracking,
   ensureDailyStatsWindowStartedAt,
   getDailyStatsWindowStartedAt,
@@ -369,6 +371,28 @@ async function trackDailyStatsMessage(message, { now = Date.now() } = {}) {
   return true;
 }
 
+async function runPostDailyReportCleanup() {
+  const result = {
+    scamAuditCleared: false,
+    tempFiles: null
+  };
+
+  try {
+    await clearScamDecisionAudit();
+    result.scamAuditCleared = true;
+  } catch (err) {
+    recordRuntimeEvent("warn", "daily-scam-audit-clear", err?.message || err);
+  }
+
+  try {
+    result.tempFiles = await cleanupRestrictedEmojiDatabaseTempFiles();
+  } catch (err) {
+    recordRuntimeEvent("warn", "daily-temp-cleanup", err?.message || err);
+  }
+
+  return result;
+}
+
 async function runDailyStatsReport(client, { now = Date.now() } = {}) {
   const guilds = [...(client?.guilds?.cache?.values?.() || [])];
   if (!guilds.length) return false;
@@ -386,6 +410,7 @@ async function runDailyStatsReport(client, { now = Date.now() } = {}) {
     });
 
     await clearDailyStatsTracking(nextWindowStartedAt);
+    await runPostDailyReportCleanup();
     return true;
   }
 
@@ -440,6 +465,7 @@ module.exports = {
   buildDailyModerationStatsBody,
   buildDailyStatsEmbeds,
   trackDailyStatsMessage,
+  runPostDailyReportCleanup,
   runDailyStatsReport,
   scheduleNextDailyStatsReport,
   startDailyStatsScheduler,

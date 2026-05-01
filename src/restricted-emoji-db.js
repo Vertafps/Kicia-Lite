@@ -476,6 +476,31 @@ function flushRestrictedEmojiDatabaseNow(db = currentDb) {
   return true;
 }
 
+async function cleanupRestrictedEmojiDatabaseTempFiles() {
+  try {
+    flushRestrictedEmojiDatabaseNow();
+  } catch (err) {
+    recordRuntimeEvent("warn", "emoji-db-cleanup-flush", err?.message || err);
+  }
+
+  const tempPath = `${databasePath}.tmp`;
+  const removed = [];
+
+  if (fs.existsSync(tempPath)) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+      removed.push(tempPath);
+    } catch (err) {
+      recordRuntimeEvent("warn", "emoji-db-temp-cleanup", err?.message || err);
+    }
+  }
+
+  return {
+    removed,
+    checked: [tempPath]
+  };
+}
+
 async function getEmojiTimeoutMs() {
   const db = await getDatabase();
   const stored = getAppConfigValue(db, "emoji_timeout_ms");
@@ -951,11 +976,15 @@ async function listScamDecisionAudit({ limit = 10 } = {}) {
   ).map(mapScamDecisionAuditRow);
 }
 
-async function clearScamDecisionAuditForTests() {
+async function clearScamDecisionAudit() {
   const db = await getDatabase();
   db.run("DELETE FROM scam_decision_audit");
   schedulePersist(db, { immediate: true });
   return true;
+}
+
+async function clearScamDecisionAuditForTests() {
+  return clearScamDecisionAudit();
 }
 
 async function recordDailyTrackedMessage({
@@ -1249,11 +1278,13 @@ module.exports = {
   removeModerationWhitelistedUser,
   recordScamDecisionAudit,
   listScamDecisionAudit,
+  clearScamDecisionAudit,
   clearScamDecisionAuditForTests,
   recordDailyTrackedMessage,
   recordDailyModerationEvent,
   getDailyStatsSnapshot,
   clearDailyStatsTracking,
+  cleanupRestrictedEmojiDatabaseTempFiles,
   getRestrictedEmojiDatabaseSnapshot,
   flushRestrictedEmojiDatabaseNow,
   resetRestrictedEmojiDatabaseForTests

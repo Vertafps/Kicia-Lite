@@ -3,6 +3,7 @@ process.env.KB_URL = process.env.KB_URL || "https://example.com/kb.json";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
@@ -12,16 +13,19 @@ const {
   getDailyStatsBoundaryAtOrBefore,
   getNextDailyStatsBoundary,
   getDailyStatsLocalHour,
+  runDailyStatsReport,
   startDailyStatsScheduler
 } = require("../src/daily-stats");
 const {
   addRestrictedEmoji,
+  cleanupRestrictedEmojiDatabaseTempFiles,
   clearDailyStatsTracking,
   ensureDailyStatsWindowStartedAt,
   getDailyStatsSnapshot,
   getRestrictedEmojiDatabaseSnapshot,
   parseEmojiInput,
   recordDailyModerationEvent,
+  recordScamDecisionAudit,
   recordDailyTrackedMessage,
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
@@ -129,6 +133,75 @@ test("clearing daily stats tracking preserves restricted emojis", async () => {
   assert.equal(snapshot.tableCounts.dailyChannels, 0);
   assert.equal(snapshot.tableCounts.dailyStaff, 0);
   assert.equal(snapshot.tableCounts.dailyModeration, 0);
+});
+
+test("daily stats report clears the scam audit only after a successful upload", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+  const windowStartedAt = Date.parse("2026-04-26T15:30:00.000Z");
+  const reportTime = Date.parse("2026-04-27T15:30:00.000Z");
+  const sentPayloads = [];
+
+  await ensureDailyStatsWindowStartedAt(windowStartedAt);
+  await recordDailyTrackedMessage({
+    userId: "user-1",
+    username: "alpha",
+    displayName: "Alpha",
+    channelId: "channel-1",
+    channelName: "general",
+    at: windowStartedAt + 60_000,
+    localHour: 21,
+    trackStaffOnly: false
+  });
+  await recordScamDecisionAudit({
+    createdAt: windowStartedAt + 90_000,
+    guildId: "guild-1",
+    channelId: "channel-1",
+    messageId: "message-1",
+    userId: "user-1",
+    action: "local_true",
+    handled: true,
+    messageContent: "dm me to trade kicia premium"
+  });
+
+  const guild = buildGuildForDailyStats();
+  guild.channels = {
+    cache: new Map([[
+      "1484218637060407418",
+      {
+        id: "1484218637060407418",
+        send: async (payload) => {
+          sentPayloads.push(payload);
+        }
+      }
+    ]]),
+    fetch: async (channelId) => guild.channels.cache.get(channelId) || null
+  };
+
+  const handled = await runDailyStatsReport({
+    guilds: {
+      cache: new Map([[guild.id, guild]])
+    }
+  }, { now: reportTime });
+
+  assert.equal(handled, true);
+  assert.equal(sentPayloads.length, 1);
+
+  const snapshot = await getRestrictedEmojiDatabaseSnapshot();
+  assert.equal(snapshot.tableCounts.scamDecisionAudit, 0);
+  assert.equal(snapshot.tableCounts.dailyUsers, 0);
+  assert.equal(snapshot.dailyStats.windowStartedAt, reportTime);
+});
+
+test("database cleanup removes stale app-owned temp files", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+  const tempPath = `${testDbPath}.tmp`;
+  fs.writeFileSync(tempPath, "stale temp db write");
+
+  const result = await cleanupRestrictedEmojiDatabaseTempFiles();
+
+  assert.deepEqual(result.checked, [tempPath]);
+  assert.deepEqual(result.removed, [tempPath]);
+  assert.equal(fs.existsSync(tempPath), false);
 });
 
 test("daily stats embeds show top users and silent staff without counting mods", async () => {

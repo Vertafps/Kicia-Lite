@@ -121,8 +121,10 @@ const PROTECTED_ITEM_RE =
 const DEICTIC_ITEM_RE = /\b(?:this|that|it|one|thing|stuff|something)\b/i;
 const DIRECT_OFFER_RE =
   /\b(?:selling|sell|sold|wts|wtb|buying|buy my|buy from me|taking offers|for sale|offer|offers|reseller|middleman|mm)\b/i;
+const TRADE_WORD_RE = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i;
 const BARTER_RE =
   /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offering)\b.{0,80}\bfor\b/i;
+const KICIA_TRADE_ASSET_RE = /\b(?:kicia|kiciahook|premium|license|licence|key|keys)\b/i;
 const SECURITY_DISABLE_RE =
   /\b(?:disable|turn off|shut off|deactivate|whitelist|allowlist|exclude|exclusion|allow)\b.{0,60}\b(?:antivirus|anti virus|windows defender|defender|windows security|real time protection|realtime protection|av)\b|\b(?:antivirus|anti virus|windows defender|defender|windows security|real time protection|realtime protection|av)\b.{0,60}\b(?:disable|turn off|shut off|deactivate|whitelist|allowlist|exclude|exclusion|allow)\b/i;
 const SECURITY_RISK_RE =
@@ -252,6 +254,7 @@ function extractPolicyIntent(context = {}, options = {}) {
   const hasOfficialRoute = OFFICIAL_ROUTE_RE.test(userText);
   const hasQuestionTone = QUESTION_START_RE.test(userText) || /\?$/.test(userText);
   const hasProtectedItem = PROTECTED_ITEM_RE.test(userText);
+  const hasKiciaTradeAsset = TRADE_WORD_RE.test(userText) && KICIA_TRADE_ASSET_RE.test(userText);
   const hasDeicticItem = DEICTIC_ITEM_RE.test(userText);
   const hasKicia = KICIA_BRAND_RE.test(userText);
   const hasOfferTone = /\b(?:you|u)\s+want\b/i.test(userText) || /\b(?:want|need)\s+(?:it|this|one)\b/i.test(userText);
@@ -272,6 +275,24 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 93,
       score: 0.07,
       reason: "Meta-discussion, report, or policy question rather than target-user deal intent."
+    });
+  }
+
+  if (hasKiciaTradeAsset) {
+    if (hasPrivateHandoff || hasDirectOffer || hasOfferTone || hasBarter) {
+      return localVerdict({
+        verdict: true,
+        confidence: 94,
+        score: 0.95,
+        reason: "Kicia premium/key trade wording matched unauthorized deal policy."
+      });
+    }
+
+    return localVerdict({
+      verdict: null,
+      confidence: 86,
+      score: 0.5,
+      reason: "Kicia premium/key trade wording needs remote AI before clearing."
     });
   }
 

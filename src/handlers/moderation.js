@@ -33,7 +33,12 @@ const {
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { classifyScamContextWithGemini } = require("../scam-ai");
-const { classifyScamContextLocally, isExplanationResponseIntent, isKiciaLegitPurchaseIntent } = require("../scam-local-classifier");
+const {
+  classifyScamContextLocally,
+  isExplanationResponseIntent,
+  isKiciaLegitPurchaseIntent,
+  isSafePurchaseMethodQuestion
+} = require("../scam-local-classifier");
 const { cleanText, normalizeText } = require("../text");
 const { safeReply, safeSend } = require("../utils/respond");
 
@@ -481,6 +486,7 @@ function detectSellingSignal(content) {
   if (!spaced || !condensed) return null;
   if (SELL_ANTI_PATTERNS.some((pattern) => pattern.test(rawLower) || pattern.test(spaced))) return null;
   if (isKiciaLegitPurchaseIntent([content])) return null;
+  if (isSafePurchaseMethodQuestion([content])) return null;
 
   const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced));
   const hasBroadSellIntent =
@@ -587,6 +593,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     .slice(-SELL_CONTEXT_MAX_MESSAGES);
   if (!texts.length) return null;
   if (isKiciaLegitPurchaseIntent(texts)) return null;
+  if (isSafePurchaseMethodQuestion(texts, repliedToMessage)) return null;
   if (isExplanationResponseIntent(texts, repliedToMessage)) return null;
 
   const combined = texts.join("\n");

@@ -112,13 +112,15 @@ const KICIA_BRAND_RE = /\b(?:kicia|kiciahook)\b/i;
 const KICIA_PURCHASE_RE =
   /\b(?:buy|buying|bought|purchase|purchasing|pay|paid|payment|price|prices|cost|costs|shop|store|premium|license|licence|key|subscription|sub|upgrade|get|getting)\b/i;
 const KICIA_DEAL_RISK_RE =
-  /\b(?:sell|selling|sold|wts|wtb|trade|trading|swap|middleman|mm|dm|dms|message\s+me|from\s+me|account|accounts|acc|alts?|config|configs|cfg|script|executor|cheap|cheaper|robux|rbx|nitro|paypal|cashapp|crypto|btc|eth)\b/i;
+  /\b(?:sell|selling|sold|wts|wtb|trade|trading|swap|middleman|mm|dm|dms|message\s+me|from\s+me|my\s+(?:shop|server|reseller)|private|unofficial|account|accounts|acc|alts?|config|configs|cfg|script|executor|cheap|cheaper|nitro)\b/i;
+const PAYMENT_METHOD_RE =
+  /\b(?:roblox|robux|rbx|paypal|cashapp|cash\s+app|crypto|btc|eth|card|credit|debit|gift\s*card|usd|eur|gbp|dollars?|bucks?|rs|lkr)\b/i;
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/i;
 const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|tickets|owner|admin|mod|moderator|store|shop|site|website|server|docs?|support|reseller|resellers|channel|channels)\b/i;
 const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why)\b/i;
 const PROTECTED_ITEM_RE =
   /\b(?:kicia|kiciahook|account|accounts|acc|alts?|config|configs|cfg|script|scripts|executor|executors|key|keys|license|licence|premium|robux|rbx|nitro|token|cookie|cookies)\b/i;
-const DEICTIC_ITEM_RE = /\b(?:this|that|it|one|thing|stuff|something)\b/i;
+const DEICTIC_ITEM_RE = /\b(?:this|ts|that|it|one|thing|stuff|something)\b/i;
 const DIRECT_OFFER_RE =
   /\b(?:selling|sell|sold|wts|wtb|buying|buy my|buy from me|taking offers|for sale|offer|offers|reseller|middleman|mm)\b/i;
 const TRADE_WORD_RE = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i;
@@ -164,6 +166,40 @@ function isKiciaLegitPurchaseIntent(input) {
   }
 
   return true;
+}
+
+function isSafePurchaseMethodQuestion(input, repliedToMessage = null) {
+  const parts = Array.isArray(input) ? input : [input];
+  const text = normalizeClassifierText(parts.filter(Boolean).join(" "));
+  const replyText = normalizeClassifierText(repliedToMessage?.content || "");
+  if (!text) return false;
+
+  const hasQuestionTone = QUESTION_START_RE.test(text) || /\?$/.test(text);
+  const asksToBuyOrPay =
+    /\b(?:buy|buying|purchase|purchasing|pay|payment|get)\b/.test(text) &&
+    (
+      /\b(?:with|using|via|through|by)\b/.test(text) ||
+      /\b(?:can|could|do|does|what|where|how)\b.{0,80}\b(?:buy|purchase|pay|payment|get)\b/.test(text)
+    );
+  const referencesServerProduct =
+    KICIA_BRAND_RE.test(text) ||
+    KICIA_BRAND_RE.test(replyText) ||
+    /\b(?:premium|license|licence|key)\b/.test(text) ||
+    DEICTIC_ITEM_RE.test(text);
+  const hasUnsafeDealLanguage =
+    KICIA_DEAL_RISK_RE.test(text) ||
+    PRIVATE_HANDOFF_RE.test(text) ||
+    SELF_PRIVATE_DEAL_RE.test(text) ||
+    TRADE_WORD_RE.test(text) ||
+    /\b(?:buy\s+(?:my|from\s+me)|from\s+me|i\s+(?:sell|sold|got|have)|selling|seller|wts|wtb|middleman|mm|account|accounts|acc|alts?|config|configs|cfg|script|scripts|executor|executors|cheap|cheaper)\b/.test(text);
+
+  return Boolean(
+    hasQuestionTone &&
+    asksToBuyOrPay &&
+    referencesServerProduct &&
+    PAYMENT_METHOD_RE.test(text) &&
+    !hasUnsafeDealLanguage
+  );
 }
 
 function isSafeSecurityDisableSupport(input) {
@@ -228,6 +264,15 @@ function extractPolicyIntent(context = {}, options = {}) {
   const fullText = normalizeClassifierText(buildContextText(context));
   const signalConfidence = Number(options.strongestSignal?.confidence || 0);
   if (!userText && !fullText) return null;
+
+  if (isSafePurchaseMethodQuestion(userMessages.length ? userMessages : userText, context.repliedToMessage)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 98,
+      score: 0.01,
+      reason: "Safe Kicia payment-method purchase question, not a private deal."
+    });
+  }
 
   if (isKiciaLegitPurchaseIntent(userMessages || userText)) {
     return localVerdict({
@@ -522,6 +567,7 @@ module.exports = {
   extractPolicyIntent,
   getExplanationResponseIntent,
   isExplanationResponseIntent,
+  isSafePurchaseMethodQuestion,
   isSafeSecurityDisableSupport,
   isKiciaLegitPurchaseIntent,
   normalizeClassifierText,

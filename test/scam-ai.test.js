@@ -43,6 +43,7 @@ test("Gemini scam prompt keeps only target-user context and reply context", () =
   assert.match(prompt, /4\. dm me/i);
   assert.match(prompt, /5\. price/i);
   assert.match(prompt, /Return exactly TRUE or FALSE/i);
+  assert.match(prompt, /can I buy this\/ts with roblox/i);
 });
 
 test("Gemini scam parser accepts strict boolean answers only", () => {

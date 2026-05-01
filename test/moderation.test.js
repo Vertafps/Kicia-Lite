@@ -44,6 +44,7 @@ const {
   classifyScamContextLocally,
   getExplanationResponseIntent,
   isKiciaLegitPurchaseIntent,
+  isSafePurchaseMethodQuestion,
   isSafeSecurityDisableSupport
 } = require("../src/scam-local-classifier");
 
@@ -335,14 +336,27 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
 test("local scam classifier protects official Kicia purchase questions", () => {
   assert.equal(isKiciaLegitPurchaseIntent(["buying kicia"]), true);
   assert.equal(isKiciaLegitPurchaseIntent(["where can i buy kicia premium"]), true);
+  assert.equal(isKiciaLegitPurchaseIntent(["can i buy kicia with robux"]), true);
+  assert.equal(isKiciaLegitPurchaseIntent(["can i buy kicia with roblox"]), true);
+  assert.equal(isSafePurchaseMethodQuestion(["can i buy ts with roblox"]), true);
+  assert.equal(isSafePurchaseMethodQuestion(["can i buy this with robux"]), true);
+  assert.equal(isSafePurchaseMethodQuestion(["dm me to buy this with robux"]), false);
   assert.equal(isKiciaLegitPurchaseIntent(["buy kicia from me cheaper"]), false);
+  assert.equal(isKiciaLegitPurchaseIntent(["trade kicia for robux"]), false);
   assert.equal(detectScamTradeCandidateContext(["where can i buy kicia premium"]), null);
+  assert.equal(detectScamTradeCandidateContext(["can i buy this with robux"]), null);
 
   const legitVerdict = classifyScamContextLocally({
     userMessages: ["where can i buy kicia premium"]
   });
   assert.equal(legitVerdict.verdict, false);
   assert.ok(legitVerdict.confidence >= 90);
+
+  const robloxPaymentVerdict = classifyScamContextLocally({
+    userMessages: ["can i buy ts with roblox"]
+  });
+  assert.equal(robloxPaymentVerdict.verdict, false);
+  assert.ok(robloxPaymentVerdict.confidence >= 90);
 
   const resellerVerdict = classifyScamContextLocally({
     userMessages: ["buy kicia from me cheaper dm"]
@@ -700,6 +714,30 @@ test("official Kicia purchase questions do not call scam AI", async () => {
     classifyScam: async () => {
       aiCalls += 1;
       return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
+test("Kicia payment method questions do not call scam AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("can i buy ts with robux", {
+    referencedContent: "where can i buy kicia premium?"
+  });
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("safe payment-method question should not call scam AI");
     }
   });
 

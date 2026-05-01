@@ -28,7 +28,7 @@ const { isModerationWhitelistedUser, listTrustedLinks, recordDailyModerationEven
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { classifyScamContextWithGemini } = require("../scam-ai");
-const { classifyScamContextLocally, isKiciaLegitPurchaseIntent } = require("../scam-local-classifier");
+const { classifyScamContextLocally, isExplanationResponseIntent, isKiciaLegitPurchaseIntent } = require("../scam-local-classifier");
 const { cleanText, normalizeText } = require("../text");
 const { safeReply, safeSend } = require("../utils/respond");
 
@@ -518,6 +518,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     .slice(-SELL_CONTEXT_MAX_MESSAGES);
   if (!texts.length) return null;
   if (isKiciaLegitPurchaseIntent(texts)) return null;
+  if (isExplanationResponseIntent(texts, repliedToMessage)) return null;
 
   const combined = texts.join("\n");
   const combinedFeatures = getScamTradeTextFeatures(combined);

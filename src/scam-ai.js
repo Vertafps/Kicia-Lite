@@ -74,6 +74,7 @@ function buildGeminiPrompt(context) {
     "- FALSE: executor support wording about disabling/whitelisting antivirus or Windows Defender, unless paired with phishing, credentials, private sales, or unofficial downloads.",
     "- TRUE: private or unofficial Kicia deals such as 'dms to buy kicia', 'buy kicia from me', cheaper reseller offers, or moving Kicia purchase/payment to private DMs.",
     "- TRUE: offers or requests to buy/sell/trade/give/swap accounts, configs, scripts, executors, keys, licenses, robux, nitro, or similar items.",
+    "- FALSE: explanation answers to a purchase question, e.g. if someone asks 'how to buy?' and the target replies 'buy in the resellers', 'open a ticket', 'use the official shop', or 'ask staff'.",
     "- TRUE only when the TARGET USER is showing deal/scam intent. If they are asking if something is allowed, reporting someone, or quoting a bad phrase, return FALSE.",
     "",
     "Message replied to by target user:",

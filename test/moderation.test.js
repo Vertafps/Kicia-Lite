@@ -40,6 +40,7 @@ const {
 const { maybeHandleRestrictedReactionAdd } = require("../src/handlers/restricted-reactions");
 const {
   classifyScamContextLocally,
+  getExplanationResponseIntent,
   isKiciaLegitPurchaseIntent,
   isSafeSecurityDisableSupport
 } = require("../src/scam-local-classifier");
@@ -376,6 +377,29 @@ test("local scam classifier follows KiciaHook safe and unsafe standards", () => 
   }).verdict, false);
 });
 
+test("local scam classifier separates explanations from private purchase handoffs", () => {
+  const purchaseQuestion = { content: "how to buy?" };
+  const kiciaPurchaseQuestion = { content: "where can i buy kicia premium?" };
+
+  const routeAnswer = getExplanationResponseIntent(["oh buy in the resellers"], purchaseQuestion);
+  assert.equal(routeAnswer.verdict, false);
+  assert.match(routeAnswer.reason, /official purchase/i);
+  assert.equal(detectScamTradeCandidateContext(["oh buy in the resellers"], purchaseQuestion), null);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["open a ticket"],
+    repliedToMessage: kiciaPurchaseQuestion
+  }).verdict, false);
+
+  const privateAnswer = getExplanationResponseIntent(["dms"], kiciaPurchaseQuestion);
+  assert.equal(privateAnswer.verdict, true);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["dm me"],
+    repliedToMessage: kiciaPurchaseQuestion
+  }).verdict, true);
+});
+
 test("contextual selling detection catches split sell and price messages", () => {
   const signal = detectContextualSellingSignal([
     "selling ue",
@@ -688,6 +712,54 @@ test("antivirus support wording does not call scam AI", async () => {
   assert.equal(fixture.logs.length, 0);
   assert.equal(fixture.replies.length, 0);
   assert.equal(fixture.timeouts.length, 0);
+});
+
+test("purchase-route explanation replies do not create scam alerts", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("oh buy in the resellers", {
+    referencedContent: "how to buy?"
+  });
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
+test("private DM answer to purchase question is caught locally", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("dms", {
+    referencedContent: "where can i buy kicia premium?"
+  });
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].body, /Private handoff answer to a purchase question/i);
+  assert.equal(fixture.replies.length, 1);
 });
 
 test("private Kicia buying handoff is caught without remote AI", async () => {

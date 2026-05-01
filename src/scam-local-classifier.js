@@ -114,7 +114,7 @@ const KICIA_PURCHASE_RE =
 const KICIA_DEAL_RISK_RE =
   /\b(?:sell|selling|sold|wts|wtb|trade|trading|swap|middleman|mm|dm|dms|message\s+me|from\s+me|account|accounts|acc|alts?|config|configs|cfg|script|executor|cheap|cheaper|robux|rbx|nitro|paypal|cashapp|crypto|btc|eth)\b/i;
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/i;
-const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|owner|admin|mod|moderator|store|shop|site|website|server|docs?|support)\b/i;
+const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|tickets|owner|admin|mod|moderator|store|shop|site|website|server|docs?|support|reseller|resellers|channel|channels)\b/i;
 const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why)\b/i;
 const PROTECTED_ITEM_RE =
   /\b(?:kicia|kiciahook|account|accounts|acc|alts?|config|configs|cfg|script|scripts|executor|executors|key|keys|license|licence|premium|robux|rbx|nitro|token|cookie|cookies)\b/i;
@@ -129,6 +129,14 @@ const SECURITY_RISK_RE =
   /\b(?:dm|dms|message me|msg me|pm|private|click|link|download from me|sell|selling|trade|trading|buy from me|token|password|cookie|account|paypal|cashapp|crypto)\b/i;
 const META_DISCUSSION_RE =
   /\b(?:someone|somebody|someone's|somebody's|user|person|people|he|she|they|staff)\b.{0,30}\b(?:said|says|asked|told|is saying|was saying|selling|trading|scamming)\b|\b(?:is this|is that|are these|allowed|against rules|report|reported|warning|warn|quoting|quote)\b/i;
+const PURCHASE_QUESTION_RE =
+  /\b(?:how|where|can|do|does|what)\b.{0,60}\b(?:buy|purchase|pay|price|prices|cost|get|reseller|premium|license|key)\b|\b(?:buy|purchase|pay|price|prices|cost|get|reseller|premium|license|key)\b.{0,60}\b(?:where|how|can|do|does|what)\b/i;
+const EXPLANATION_ROUTE_RE =
+  /\b(?:reseller|resellers|official|ticket|tickets|shop|store|site|website|server|channel|channels|docs?|support|staff|owner|admin|mod|moderator)\b/i;
+const EXPLANATION_VERB_RE =
+  /\b(?:buy|go|check|open|use|ask|look|find|purchase|pay|get|through|from|in|inside|under)\b/i;
+const SELF_PRIVATE_DEAL_RE =
+  /\b(?:dm me|dms me|message me|msg me|pm me|inbox me|add me|from me|my shop|my server|my reseller|i sell|i can sell|i got|i have)\b/i;
 
 function normalizeClassifierText(value) {
   return String(value || "")
@@ -158,6 +166,45 @@ function isSafeSecurityDisableSupport(input) {
   const parts = Array.isArray(input) ? input : [input];
   const text = normalizeClassifierText(parts.filter(Boolean).join(" "));
   return SECURITY_DISABLE_RE.test(text) && !SECURITY_RISK_RE.test(text);
+}
+
+function getExplanationResponseIntent(input, repliedToMessage = null) {
+  const parts = Array.isArray(input) ? input : [input];
+  const answerText = normalizeClassifierText(parts.filter(Boolean).join(" "));
+  const questionText = normalizeClassifierText(repliedToMessage?.content || "");
+  if (!answerText || !questionText || !PURCHASE_QUESTION_RE.test(questionText)) {
+    return null;
+  }
+
+  const hasExplanationRoute = EXPLANATION_ROUTE_RE.test(answerText);
+  const hasExplanationVerb = EXPLANATION_VERB_RE.test(answerText);
+  const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(answerText);
+  const hasSelfPrivateDeal = SELF_PRIVATE_DEAL_RE.test(answerText);
+  const answerMentionsKicia = KICIA_BRAND_RE.test(answerText) || /\b(?:premium|license|key)\b/i.test(answerText);
+
+  if (hasSelfPrivateDeal || (hasPrivateHandoff && !hasExplanationRoute)) {
+    return {
+      verdict: true,
+      confidence: answerMentionsKicia ? 96 : 92,
+      score: 0.95,
+      reason: "Private handoff answer to a purchase question matched scam/trade policy."
+    };
+  }
+
+  if (hasExplanationRoute && hasExplanationVerb) {
+    return {
+      verdict: false,
+      confidence: 97,
+      score: 0.02,
+      reason: "Answer explains the official purchase/support route."
+    };
+  }
+
+  return null;
+}
+
+function isExplanationResponseIntent(input, repliedToMessage = null) {
+  return getExplanationResponseIntent(input, repliedToMessage)?.verdict === false;
 }
 
 function localVerdict({ verdict, confidence, score, reason, stage = "policy" }) {
@@ -194,6 +241,11 @@ function extractPolicyIntent(context = {}, options = {}) {
       score: 0.02,
       reason: "Antivirus/Defender support wording without deal or credential intent."
     });
+  }
+
+  const explanationResult = getExplanationResponseIntent(userMessages, context.repliedToMessage);
+  if (explanationResult) {
+    return localVerdict(explanationResult);
   }
 
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(userText);
@@ -434,6 +486,8 @@ function classifyScamContextLocally(context = {}, options = {}) {
 module.exports = {
   classifyScamContextLocally,
   extractPolicyIntent,
+  getExplanationResponseIntent,
+  isExplanationResponseIntent,
   isSafeSecurityDisableSupport,
   isKiciaLegitPurchaseIntent,
   normalizeClassifierText,

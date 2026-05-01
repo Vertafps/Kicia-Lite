@@ -1266,7 +1266,7 @@ function buildSellingDmPayload({ message, signals, state, durationMs }) {
   };
 }
 
-function buildSellingLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs }) {
+function buildSellingLogPanel({ message, signals, state, deleteResult, timeoutResult, dmSent, durationMs }) {
   const link = buildMessageUrl(message);
   const confidenceLines = signals
     .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
@@ -1274,8 +1274,8 @@ function buildSellingLogPanel({ message, signals, state, timeoutResult, dmSent, 
   const aiLines = formatAiVerdictLines(signals);
   const action =
     state.action === "timeout"
-      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
-      : "log only";
+      ? `delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
+      : `delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | log only`;
 
   return {
     header: state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
@@ -1595,11 +1595,16 @@ async function handleSellingMessage(message, signals, {
   const publicReplySent = replyPublic
     ? await replyToSellingMessage(message)
     : false;
+  const deleteResult = await tryDeleteMessage(message);
   let timeoutResult = {
     applied: false,
     reason: "not needed"
   };
   let dmSent = false;
+
+  if (!deleteResult.deleted) {
+    recordRuntimeEvent("warn", "selling-delete", deleteResult.reason);
+  }
 
   if (state.action === "timeout") {
     timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "scam/trade behavior in chat");
@@ -1619,6 +1624,7 @@ async function handleSellingMessage(message, signals, {
     message,
     signals,
     state,
+    deleteResult,
     timeoutResult,
     dmSent,
     durationMs: timeoutMs
@@ -1626,6 +1632,7 @@ async function handleSellingMessage(message, signals, {
 
   return {
     ...state,
+    deleteResult,
     publicReplySent
   };
 }

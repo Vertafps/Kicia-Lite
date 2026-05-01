@@ -834,6 +834,7 @@ test("private Kicia buying handoff is caught without remote AI", async () => {
   });
 
   assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
@@ -931,6 +932,7 @@ test("concrete barter with protected items is caught locally", async () => {
   });
 
   assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].body, /Concrete protected-item barter/i);
@@ -1124,12 +1126,14 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   });
 
   assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
   assert.equal(fixture.replies.length, 1);
   assert.match(fixture.replies[0].content, /(scam|trade|trading|deal|risk|checkout|pitch|slick|unsafe|private|floor)/i);
   assert.doesNotMatch(fixture.replies[0].content, /staff|ping|log/i);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
+  assert.match(fixture.logs[0].body, /delete ok/i);
   assert.match(fixture.logs[0].body, /confidence \d+% > 70%/i);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);

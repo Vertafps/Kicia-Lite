@@ -376,13 +376,19 @@ test("local scam classifier follows KiciaHook safe and unsafe standards", () => 
 
   assert.equal(classifyScamContextLocally({
     userMessages: ["trade with kiciahook pre"]
-  }).verdict, null);
+  }).verdict, true);
   assert.equal(classifyScamContextLocally({
     userMessages: ["i want a script to see a win rate trade with kicia premium"]
-  }).verdict, null);
+  }).verdict, true);
   assert.equal(classifyScamContextLocally({
     userMessages: ["trading kicia premium for account"]
   }).verdict, true);
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["can i trade kicia config here?"]
+  }).verdict, null);
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["do not trade kicia premium"]
+  }).verdict, false);
 
   assert.equal(classifyScamContextLocally({
     userMessages: ["someone said dms to buy kicia is that allowed"]
@@ -849,26 +855,26 @@ test("generic barter wording becomes AI-borderline instead of automatic action",
   assert.match(fixture.logs[0].header, /Scam AI Cleared/i);
 });
 
-test("Kicia premium trade wording does not get locally cleared before AI", async () => {
+test("Kicia premium trade wording is caught locally without remote AI", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("trade with kiciahook pre");
-  let capturedContext = null;
+  let aiCalls = 0;
 
   const handled = await maybeHandleModerationWatch(fixture.message, {
     kb,
     runtimeStatus: "UP",
     sendLog: fixture.sendLog,
-    classifyScam: async (context) => {
-      capturedContext = context;
-      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
     }
   });
 
   assert.equal(handled, true);
-  assert.deepEqual(capturedContext.userMessages, ["trade with kiciahook pre"]);
+  assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /test-gemini: TRUE/i);
-  assert.doesNotMatch(fixture.logs[0].body, /local-kicia-intent-v2: FALSE/i);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.match(fixture.logs[0].body, /Kicia premium\/key trade wording/i);
 });
 
 test("concrete barter with protected items is caught locally", async () => {

@@ -125,6 +125,8 @@ const TRADE_WORD_RE = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i
 const BARTER_RE =
   /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offering)\b.{0,80}\bfor\b/i;
 const KICIA_TRADE_ASSET_RE = /\b(?:kicia|kiciahook|premium|license|licence|key|keys)\b/i;
+const TRADE_WARNING_RE =
+  /\b(?:do not|don't|dont|never|stop|avoid|against rules?|not allowed|is not allowed|isn't allowed|no|report|reported|warning|warn)\b.{0,80}\b(?:trade|trading|swap|swapping|exchange|exchanging)\b|\b(?:trade|trading|swap|swapping|exchange|exchanging)\b.{0,80}\b(?:against rules?|not allowed|is not allowed|isn't allowed|report|reported|warning|warn)\b/i;
 const SECURITY_DISABLE_RE =
   /\b(?:disable|turn off|shut off|deactivate|whitelist|allowlist|exclude|exclusion|allow)\b.{0,60}\b(?:antivirus|anti virus|windows defender|defender|windows security|real time protection|realtime protection|av)\b|\b(?:antivirus|anti virus|windows defender|defender|windows security|real time protection|realtime protection|av)\b.{0,60}\b(?:disable|turn off|shut off|deactivate|whitelist|allowlist|exclude|exclusion|allow)\b/i;
 const SECURITY_RISK_RE =
@@ -262,6 +264,7 @@ function extractPolicyIntent(context = {}, options = {}) {
   const hasDirectOffer = DIRECT_OFFER_RE.test(userText);
   const hasBarter = BARTER_RE.test(userText);
   const hasMetaDiscussion = META_DISCUSSION_RE.test(userText);
+  const hasTradeWarning = TRADE_WARNING_RE.test(userText);
   const hasPrivatePurchaseHandoff =
     hasPrivateHandoff &&
     hasPurchaseOrPrice &&
@@ -269,7 +272,7 @@ function extractPolicyIntent(context = {}, options = {}) {
   const hasPrivateOfferHandoff = hasPrivateHandoff && hasOfferTone && (hasProtectedItem || hasDeicticItem);
   const hasTradeOffer = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i.test(userText) && hasOfferTone;
 
-  if (hasMetaDiscussion && (hasQuestionTone || !/\b(?:i|im|i m|my|me)\b/i.test(userText))) {
+  if ((hasMetaDiscussion || hasTradeWarning) && (hasQuestionTone || hasTradeWarning || !/\b(?:i|im|i m|my|me)\b/i.test(userText))) {
     return localVerdict({
       verdict: false,
       confidence: 93,
@@ -279,20 +282,20 @@ function extractPolicyIntent(context = {}, options = {}) {
   }
 
   if (hasKiciaTradeAsset) {
-    if (hasPrivateHandoff || hasDirectOffer || hasOfferTone || hasBarter) {
+    if (hasQuestionTone && !hasPrivateHandoff && !hasDirectOffer && !hasOfferTone && !hasBarter) {
       return localVerdict({
-        verdict: true,
-        confidence: 94,
-        score: 0.95,
-        reason: "Kicia premium/key trade wording matched unauthorized deal policy."
+        verdict: null,
+        confidence: 86,
+        score: 0.5,
+        reason: "Question about Kicia trade wording needs remote AI before action."
       });
     }
 
     return localVerdict({
-      verdict: null,
-      confidence: 86,
-      score: 0.5,
-      reason: "Kicia premium/key trade wording needs remote AI before clearing."
+      verdict: true,
+      confidence: 95,
+      score: 0.96,
+      reason: "Kicia premium/key trade wording matched unauthorized deal policy."
     });
   }
 

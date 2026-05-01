@@ -12,10 +12,12 @@ const {
   addRestrictedEmoji,
   addModerationWhitelistedUser,
   addTrustedLink,
+  clearScamDecisionAuditForTests,
   clearDailyStatsTracking,
   getDailyStatsSnapshot,
   getRestrictedEmojiDatabaseSnapshot,
   isModerationWhitelistedUser,
+  listScamDecisionAudit,
   listModerationWhitelistedUsers,
   listTrustedLinks,
   parseEmojiInput,
@@ -782,6 +784,36 @@ test("private Kicia buying handoff is caught without remote AI", async () => {
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
   assert.equal(fixture.replies.length, 1);
+});
+
+test("scam classifier decisions are written to the audit table", async () => {
+  await clearDailyStatsTracking(1);
+  await clearScamDecisionAuditForTests();
+  const fixture = buildModerationMessage("dms to buy kicia");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      throw new Error("remote AI should not be called");
+    },
+    now: 1_700_000_000_000
+  });
+
+  assert.equal(handled, true);
+  const audit = await listScamDecisionAudit({ limit: 5 });
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].action, "local_true");
+  assert.equal(audit[0].handled, true);
+  assert.equal(audit[0].userId, fixture.message.author.id);
+  assert.equal(audit[0].local.verdict, true);
+  assert.equal(audit[0].local.model, "local-kicia-intent-v2");
+  assert.match(audit[0].candidate.reason, /sale context|private buy\/sell handoff/i);
+  assert.equal(audit[0].messageContent, "dms to buy kicia");
+
+  const snapshot = await getRestrictedEmojiDatabaseSnapshot();
+  assert.equal(snapshot.tableCounts.scamDecisionAudit, 1);
 });
 
 test("generic barter wording becomes AI-borderline instead of automatic action", async () => {

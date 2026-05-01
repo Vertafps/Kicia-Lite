@@ -16,7 +16,8 @@ const {
   listModerationWhitelistedUsers,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
-  getRestrictedEmojiDatabaseSnapshot
+  getRestrictedEmojiDatabaseSnapshot,
+  listScamDecisionAudit
 } = require("../restricted-emoji-db");
 const { normalizeUrlCandidate } = require("../link-policy");
 const { safeReply } = require("../utils/respond");
@@ -29,6 +30,14 @@ function isCommandsListMessage(content) {
 function isDatabaseMessage(content) {
   const normalized = String(content || "").trim().toLowerCase();
   return normalized === "$db" || normalized === "$database";
+}
+
+function parseScamAuditMessage(content) {
+  const trimmed = String(content || "").trim();
+  const match = trimmed.match(/^\$(?:scamaudit|audit)(?:\s+(\d{1,2}))?$/i);
+  if (!match) return null;
+  const limit = Math.min(25, Math.max(1, Math.round(Number(match[1]) || 10)));
+  return { limit };
 }
 
 function parseEmojiMessage(content) {
@@ -152,6 +161,42 @@ function formatWhitelistList(users) {
     .join("\n");
 }
 
+function trimCommandExcerpt(text, max = 120) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return "(no text)";
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function formatAuditVerdict(label, result) {
+  if (!result?.model && !result?.answer && typeof result?.verdict === "undefined") return null;
+  const answer = result.answer || (result.verdict === true ? "TRUE" : result.verdict === false ? "FALSE" : "BORDERLINE");
+  const model = result.model ? ` ${result.model}` : "";
+  const suffix = result.skipped ? ` (${result.skipped})` : "";
+  return `${label}${model}: ${answer}${suffix}`;
+}
+
+function formatScamAuditList(records) {
+  if (!Array.isArray(records) || !records.length) return "none yet";
+  return records
+    .slice(0, 25)
+    .map((entry) => {
+      const when = entry.createdAt ? `<t:${Math.floor(entry.createdAt / 1000)}:R>` : "unknown time";
+      const user = entry.userId ? `<@${entry.userId}>` : "unknown user";
+      const channel = entry.channelId ? ` <#${entry.channelId}>` : "";
+      const local = formatAuditVerdict("local", entry.local);
+      const ai = formatAuditVerdict("ai", entry.ai);
+      const verdicts = [local, ai].filter(Boolean).join(" | ") || "no classifier verdict";
+      const result = entry.handled ? "acted" : "cleared";
+      return [
+        `- ${when} **${result}** \`${entry.action}\` ${user}${channel}`,
+        `  ${verdicts}`,
+        `  ${trimCommandExcerpt(entry.messageContent)}`
+      ].join("\n");
+    })
+    .join("\n");
+}
+
 function buildCommandsBody() {
   return [
     "## Everyone",
@@ -165,6 +210,7 @@ function buildCommandsBody() {
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
     "`$db` / `$database` inspect the SQLite moderation database",
+    "`$scamaudit` inspect recent scam/trade classifier decisions",
     "`$whitelist` list manual moderation whitelist users",
     "`$whitelist <user>` exempt a user from message moderation tracking",
     "`$whitelist remove <user>` remove a manual moderation whitelist user",
@@ -215,11 +261,27 @@ async function handleDatabaseCommand(message, {
       `**Daily Channel Rows:** ${snapshot.tableCounts.dailyChannels}`,
       `**Daily Staff Rows:** ${snapshot.tableCounts.dailyStaff}`,
       `**Daily Moderation Rows:** ${snapshot.tableCounts.dailyModeration || 0}`,
+      `**Scam Audit Rows:** ${snapshot.tableCounts.scamDecisionAudit || 0}`,
       "**Restricted Reaction Action:** remove reaction + DM warning",
       `**Window Start:** ${snapshot.dailyStats.windowStartedAt ? `<t:${Math.floor(snapshot.dailyStats.windowStartedAt / 1000)}:f>` : "unset"}`,
       `**Restricted Emojis:** ${formatEmojiList(snapshot.emojis)}`,
       `**Manual Whitelist:** ${snapshot.moderationWhitelist?.length || 0}`
     ].join("\n"),
+    color: INFO
+  });
+  return true;
+}
+
+async function handleScamAuditCommand(message, command, {
+  listAudit = listScamDecisionAudit
+} = {}) {
+  const records = await listAudit({ limit: command.limit });
+  await replyWithCommandPanel(message, {
+    header: "Scam Audit",
+    body: [
+      `**Showing:** ${records.length}/${command.limit}`,
+      formatScamAuditList(records)
+    ].join("\n\n"),
     color: INFO
   });
   return true;
@@ -424,6 +486,12 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleWhitelistCommand(message, whitelistCommand, deps);
   }
 
+  const scamAuditCommand = parseScamAuditMessage(message.content);
+  if (scamAuditCommand) {
+    if (!canUseOwnerCommands(message)) return true;
+    return handleScamAuditCommand(message, scamAuditCommand, deps);
+  }
+
   const trustedLinkCommand = parseTrustedLinkMessage(message.content);
   if (trustedLinkCommand) {
     if (!canUseTrustedLinkCommands(message)) return true;
@@ -452,6 +520,7 @@ async function maybeHandleControlCommand(message, deps = {}) {
 module.exports = {
   isCommandsListMessage,
   isDatabaseMessage,
+  parseScamAuditMessage,
   parseEmojiMessage,
   parseTrustedLinkMessage,
   parseWhitelistMessage,

@@ -24,7 +24,12 @@ const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
-const { isModerationWhitelistedUser, listTrustedLinks, recordDailyModerationEvent } = require("../restricted-emoji-db");
+const {
+  isModerationWhitelistedUser,
+  listTrustedLinks,
+  recordDailyModerationEvent,
+  recordScamDecisionAudit
+} = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { classifyScamContextWithGemini } = require("../scam-ai");
@@ -322,6 +327,51 @@ async function recordModerationStat(eventKey, now = Date.now()) {
     await recordDailyModerationEvent(eventKey, { at: now });
   } catch (err) {
     recordRuntimeEvent("warn", "daily-moderation-track", err?.message || err);
+  }
+}
+
+function buildLocalAuditResult(localResult) {
+  if (!localResult) return null;
+  return {
+    verdict: localResult.verdict,
+    answer: localResult.verdict === true ? "TRUE" : localResult.verdict === false ? "FALSE" : "BORDERLINE",
+    model: localResult.model || "local classifier",
+    reason: localResult.reason || null,
+    confidence: localResult.confidence,
+    score: localResult.score
+  };
+}
+
+async function recordScamAudit(message, {
+  action,
+  handled,
+  signals,
+  strongest,
+  scamContext,
+  localResult,
+  aiResult,
+  now = Date.now()
+} = {}) {
+  const candidate = strongest || signals?.[0] || null;
+  try {
+    await recordScamDecisionAudit({
+      createdAt: now,
+      guildId: message.guildId || message.guild?.id || null,
+      channelId: message.channelId || null,
+      messageId: message.id || null,
+      userId: message.author?.id || null,
+      action,
+      handled,
+      candidateReason: candidate?.reason || null,
+      candidateConfidence: candidate?.confidence || null,
+      local: buildLocalAuditResult(localResult),
+      ai: aiResult || null,
+      messageContent: message.content || "",
+      replyContent: scamContext?.repliedToMessage?.content || "",
+      recentMessages: scamContext?.userMessages || []
+    });
+  } catch (err) {
+    recordRuntimeEvent("warn", "scam-audit", err?.message || err);
   }
 }
 
@@ -1520,12 +1570,22 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   const localResult = classifyScamContextLocally(scamContext, { strongestSignal: strongest });
   const localVerdict = buildClassifierVerdictResult(localResult);
   if (localResult?.verdict === true && (localResult.confidence || 0) >= 92) {
-    return signals.map((signal) => ({
+    const confirmedSignals = signals.map((signal) => ({
       ...signal,
       confidence: Math.max(signal.confidence || 0, 88),
       reason: `classifier-confirmed scam/trade intent: ${signal.reason}`,
       ai: localVerdict
     }));
+    await recordScamAudit(message, {
+      action: "local_true",
+      handled: true,
+      signals: confirmedSignals,
+      strongest,
+      scamContext,
+      localResult,
+      now
+    });
+    return confirmedSignals;
   }
 
   if (localResult?.verdict === false && (localResult.confidence || 0) >= 92) {
@@ -1534,17 +1594,37 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       candidateSignal: strongest,
       aiResult: localVerdict
     })).catch(() => null);
+    await recordScamAudit(message, {
+      action: "local_false_clear",
+      handled: false,
+      signals,
+      strongest,
+      scamContext,
+      localResult,
+      now
+    });
     return [];
   }
 
   const aiResult = await classifyScam(scamContext, { now });
   if (aiResult?.verdict === true) {
-    return signals.map((signal) => ({
+    const confirmedSignals = signals.map((signal) => ({
       ...signal,
       confidence: Math.max(signal.confidence || 0, 88),
       reason: `AI-confirmed scam/trade intent: ${signal.reason}`,
       ai: aiResult
     }));
+    await recordScamAudit(message, {
+      action: "ai_true",
+      handled: true,
+      signals: confirmedSignals,
+      strongest,
+      scamContext,
+      localResult,
+      aiResult,
+      now
+    });
+    return confirmedSignals;
   }
 
   if (aiResult?.verdict === false) {
@@ -1553,6 +1633,16 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       candidateSignal: strongest,
       aiResult
     })).catch(() => null);
+    await recordScamAudit(message, {
+      action: "ai_false_clear",
+      handled: false,
+      signals,
+      strongest,
+      scamContext,
+      localResult,
+      aiResult,
+      now
+    });
     return [];
   }
 
@@ -1562,12 +1652,34 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
 
   // Local development or missing AI key keeps the deterministic guard working.
   if (!aiResult?.attempted && aiResult?.skipped === "missing_key") {
-    return signals.filter((signal) => !signal.requiresAi || (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+    const fallbackSignals = signals.filter((signal) => !signal.requiresAi || (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+    await recordScamAudit(message, {
+      action: "missing_key_fallback",
+      handled: Boolean(fallbackSignals.length),
+      signals: fallbackSignals.length ? fallbackSignals : signals,
+      strongest,
+      scamContext,
+      localResult,
+      aiResult,
+      now
+    });
+    return fallbackSignals;
   }
 
   // If Gemini is configured but unavailable/rate-limited, only act on very
   // strong deterministic evidence. Ambiguous scam candidates wait for AI.
-  return signals.filter((signal) => !signal.requiresAi && (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+  const fallbackSignals = signals.filter((signal) => !signal.requiresAi && (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+  await recordScamAudit(message, {
+    action: aiResult?.skipped ? `ai_${aiResult.skipped}` : "ai_no_verdict",
+    handled: Boolean(fallbackSignals.length),
+    signals: fallbackSignals.length ? fallbackSignals : signals,
+    strongest,
+    scamContext,
+    localResult,
+    aiResult,
+    now
+  });
+  return fallbackSignals;
 }
 
 async function handleSuspiciousMessage(message, signals, {

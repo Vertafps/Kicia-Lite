@@ -210,6 +210,36 @@ function createSchema(db) {
       created_at INTEGER NOT NULL,
       created_by TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS scam_decision_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at INTEGER NOT NULL,
+      guild_id TEXT,
+      channel_id TEXT,
+      message_id TEXT,
+      user_id TEXT,
+      action TEXT NOT NULL,
+      handled INTEGER NOT NULL DEFAULT 0,
+      candidate_reason TEXT,
+      candidate_confidence INTEGER,
+      local_verdict TEXT,
+      local_answer TEXT,
+      local_model TEXT,
+      local_reason TEXT,
+      local_confidence INTEGER,
+      local_score REAL,
+      ai_verdict TEXT,
+      ai_answer TEXT,
+      ai_model TEXT,
+      ai_skipped TEXT,
+      ai_error TEXT,
+      message_content TEXT,
+      reply_content TEXT,
+      recent_messages_json TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS scam_decision_audit_created_idx
+      ON scam_decision_audit (created_at DESC, id DESC);
   `);
 }
 
@@ -330,6 +360,59 @@ function mapModerationWhitelistRow(row) {
     userId: String(row.user_id || ""),
     createdAt: Number(row.created_at || 0),
     createdBy: row.created_by ? String(row.created_by) : null
+  };
+}
+
+function mapAuditVerdict(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  if (normalized === "borderline") return null;
+  return undefined;
+}
+
+function mapScamDecisionAuditRow(row) {
+  let recentMessages = [];
+  try {
+    const parsed = JSON.parse(row.recent_messages_json || "[]");
+    recentMessages = Array.isArray(parsed) ? parsed.map((entry) => String(entry || "")) : [];
+  } catch {}
+
+  return {
+    id: Number(row.id || 0),
+    createdAt: Number(row.created_at || 0),
+    guildId: row.guild_id ? String(row.guild_id) : null,
+    channelId: row.channel_id ? String(row.channel_id) : null,
+    messageId: row.message_id ? String(row.message_id) : null,
+    userId: row.user_id ? String(row.user_id) : null,
+    action: String(row.action || "unknown"),
+    handled: Boolean(row.handled),
+    candidate: {
+      reason: row.candidate_reason ? String(row.candidate_reason) : null,
+      confidence: row.candidate_confidence === null || row.candidate_confidence === undefined
+        ? null
+        : Number(row.candidate_confidence)
+    },
+    local: {
+      verdict: mapAuditVerdict(row.local_verdict),
+      answer: row.local_answer ? String(row.local_answer) : null,
+      model: row.local_model ? String(row.local_model) : null,
+      reason: row.local_reason ? String(row.local_reason) : null,
+      confidence: row.local_confidence === null || row.local_confidence === undefined
+        ? null
+        : Number(row.local_confidence),
+      score: row.local_score === null || row.local_score === undefined ? null : Number(row.local_score)
+    },
+    ai: {
+      verdict: mapAuditVerdict(row.ai_verdict),
+      answer: row.ai_answer ? String(row.ai_answer) : null,
+      model: row.ai_model ? String(row.ai_model) : null,
+      skipped: row.ai_skipped ? String(row.ai_skipped) : null,
+      error: row.ai_error ? String(row.ai_error) : null
+    },
+    messageContent: row.message_content ? String(row.message_content) : "",
+    replyContent: row.reply_content ? String(row.reply_content) : "",
+    recentMessages
   };
 }
 
@@ -735,6 +818,146 @@ async function removeModerationWhitelistedUser(userId) {
   };
 }
 
+function trimAuditText(value, max = 900) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function normalizeAuditVerdict(result) {
+  if (!result || typeof result.verdict === "undefined") return null;
+  if (result.verdict === true) return "true";
+  if (result.verdict === false) return "false";
+  if (result.verdict === null) return "borderline";
+  return null;
+}
+
+function normalizeAuditAnswer(result) {
+  if (!result) return null;
+  if (result.answer) return trimAuditText(result.answer, 80);
+  if (result.verdict === true) return "TRUE";
+  if (result.verdict === false) return "FALSE";
+  if (result.verdict === null) return "BORDERLINE";
+  return null;
+}
+
+function normalizeAuditNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+async function recordScamDecisionAudit(record = {}) {
+  const db = await getDatabase();
+  const local = record.local || null;
+  const ai = record.ai || null;
+  const recentMessages = Array.isArray(record.recentMessages)
+    ? record.recentMessages.slice(-3).map((entry) => trimAuditText(entry, 240)).filter(Boolean)
+    : [];
+
+  db.run(
+    `
+      INSERT INTO scam_decision_audit (
+        created_at,
+        guild_id,
+        channel_id,
+        message_id,
+        user_id,
+        action,
+        handled,
+        candidate_reason,
+        candidate_confidence,
+        local_verdict,
+        local_answer,
+        local_model,
+        local_reason,
+        local_confidence,
+        local_score,
+        ai_verdict,
+        ai_answer,
+        ai_model,
+        ai_skipped,
+        ai_error,
+        message_content,
+        reply_content,
+        recent_messages_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      Math.max(1, Math.round(Number(record.createdAt) || Date.now())),
+      record.guildId ? String(record.guildId) : null,
+      record.channelId ? String(record.channelId) : null,
+      record.messageId ? String(record.messageId) : null,
+      record.userId ? String(record.userId) : null,
+      trimAuditText(record.action || "unknown", 80) || "unknown",
+      record.handled ? 1 : 0,
+      trimAuditText(record.candidateReason, 300) || null,
+      normalizeAuditNumber(record.candidateConfidence),
+      normalizeAuditVerdict(local),
+      normalizeAuditAnswer(local),
+      local?.model ? trimAuditText(local.model, 120) : null,
+      local?.reason ? trimAuditText(local.reason, 300) : null,
+      normalizeAuditNumber(local?.confidence),
+      normalizeAuditNumber(local?.score),
+      normalizeAuditVerdict(ai),
+      normalizeAuditAnswer(ai),
+      ai?.model ? trimAuditText(ai.model, 120) : null,
+      ai?.skipped ? trimAuditText(ai.skipped, 120) : null,
+      ai?.error ? trimAuditText(ai.error, 300) : null,
+      trimAuditText(record.messageContent, 900) || null,
+      trimAuditText(record.replyContent, 900) || null,
+      JSON.stringify(recentMessages)
+    ]
+  );
+  schedulePersist(db);
+  return true;
+}
+
+async function listScamDecisionAudit({ limit = 10 } = {}) {
+  const safeLimit = Math.min(25, Math.max(1, Math.round(Number(limit) || 10)));
+  const db = await getDatabase();
+  return getRows(
+    db,
+    `
+      SELECT
+        id,
+        created_at,
+        guild_id,
+        channel_id,
+        message_id,
+        user_id,
+        action,
+        handled,
+        candidate_reason,
+        candidate_confidence,
+        local_verdict,
+        local_answer,
+        local_model,
+        local_reason,
+        local_confidence,
+        local_score,
+        ai_verdict,
+        ai_answer,
+        ai_model,
+        ai_skipped,
+        ai_error,
+        message_content,
+        reply_content,
+        recent_messages_json
+      FROM scam_decision_audit
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `,
+    [safeLimit]
+  ).map(mapScamDecisionAuditRow);
+}
+
+async function clearScamDecisionAuditForTests() {
+  const db = await getDatabase();
+  db.run("DELETE FROM scam_decision_audit");
+  schedulePersist(db, { immediate: true });
+  return true;
+}
+
 async function recordDailyTrackedMessage({
   userId,
   username,
@@ -977,7 +1200,8 @@ async function getRestrictedEmojiDatabaseSnapshot() {
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
       dailyStaff: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_staff_message_stats") || 0),
-      dailyModeration: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_moderation_stats") || 0)
+      dailyModeration: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_moderation_stats") || 0),
+      scamDecisionAudit: Number(getScalarValue(db, "SELECT COUNT(*) FROM scam_decision_audit") || 0)
     }
   };
 }
@@ -1023,6 +1247,9 @@ module.exports = {
   isModerationWhitelistedUser,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
+  recordScamDecisionAudit,
+  listScamDecisionAudit,
+  clearScamDecisionAuditForTests,
   recordDailyTrackedMessage,
   recordDailyModerationEvent,
   getDailyStatsSnapshot,

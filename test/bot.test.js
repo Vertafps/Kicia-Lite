@@ -1186,6 +1186,41 @@ test("whitelist command ignores non-owners", async () => {
   assert.equal(replyPayload, null);
 });
 
+test("owner scam audit command shows recent classifier decisions", async () => {
+  let replyPayload = null;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$scamaudit 1",
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    listAudit: async ({ limit }) => {
+      assert.equal(limit, 1);
+      return [{
+        createdAt: 1_700_000_000_000,
+        userId: "123456789012345678",
+        channelId: "234567890123456789",
+        action: "local_true",
+        handled: true,
+        local: {
+          answer: "TRUE",
+          model: "local-kicia-intent-v2"
+        },
+        ai: {},
+        messageContent: "dms to buy kicia"
+      }];
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /Scam Audit/i);
+  assert.match(replyPayload.embeds[0].data.description, /local_true/i);
+  assert.match(replyPayload.embeds[0].data.description, /local-kicia-intent-v2: TRUE/i);
+  assert.match(replyPayload.embeds[0].data.description, /dms to buy kicia/i);
+});
+
 test("allowlink command ignores non-staff users", async () => {
   let replyPayload = null;
   let addCalls = 0;

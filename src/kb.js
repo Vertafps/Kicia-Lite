@@ -62,10 +62,202 @@ const LOW_SIGNAL_TOKENS = new Set([
   "pls",
   "rn"
 ]);
-const SHORT_SIGNAL_TOKENS = new Set(["ui", "tp"]);
+const SHORT_SIGNAL_TOKENS = new Set(["ui", "tp", "mb"]);
 
 function keepSignalToken(token) {
   return (token.length > 2 || SHORT_SIGNAL_TOKENS.has(token)) && !LOW_SIGNAL_TOKENS.has(token);
+}
+
+function addTerms(target, terms) {
+  for (const term of terms || []) {
+    const normalized = normalizeText(term);
+    if (normalized) target.push(term);
+  }
+}
+
+function titleIncludes(entry, pattern) {
+  return pattern.test(entry.title || "");
+}
+
+function extractGuiFeatureTerms(reply) {
+  const terms = [];
+  for (const line of String(reply || "").split(/\n+/)) {
+    if (!line.includes(":")) continue;
+    const [, featureList = ""] = line.split(/:(.+)/);
+    for (const chunk of featureList.split(/[,()&/]+/)) {
+      const cleaned = chunk
+        .replace(/\*\*/g, "")
+        .replace(/\bcontains\b/gi, " ")
+        .trim();
+      const tokens = tokenize(cleaned).filter(keepSignalToken);
+      if (!tokens.length || tokens.length > 4) continue;
+      terms.push(`where ${cleaned}`);
+      terms.push(`where is ${cleaned}`);
+      terms.push(`which tab has ${cleaned}`);
+    }
+  }
+  return terms;
+}
+
+function getDerivedIssueTerms(entry, { reply = "" } = {}) {
+  const phrases = [];
+  const keywords = [];
+
+  if (titleIncludes(entry, /Load a Config/i)) {
+    addTerms(phrases, [
+      "json",
+      "json config",
+      "json not showing",
+      "json wont show",
+      "json wont load",
+      "where do i put json",
+      "where to put json",
+      "how do i put my json",
+      "config json",
+      "cfg not showing",
+      "cfg wont show",
+      "cfg wont load",
+      "config wont load"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Create \/ Save a Config/i)) {
+    addTerms(phrases, ["save cfg", "make cfg", "create cfg", "save my cfg", "save my config"]);
+  }
+
+  if (titleIncludes(entry, /No HWID Found/i)) {
+    addTerms(phrases, [
+      "hardware id",
+      "hardware id error",
+      "no hardware id",
+      "hardware id not found",
+      "it says no hardware id"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Reset HWID/i)) {
+    addTerms(phrases, [
+      "new pc key not working",
+      "new pc key not work",
+      "new computer key not working",
+      "changed computer",
+      "changed pc",
+      "different computer",
+      "different pc"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Difference Between Free and Premium/i)) {
+    addTerms(phrases, [
+      "what is premium",
+      "what premium",
+      "what does premium do",
+      "premium worth",
+      "premium features",
+      "is premium good"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Lost a Fight While Using Premium/i)) {
+    addTerms(phrases, [
+      "losing with premium",
+      "why am i losing with premium",
+      "premium losing",
+      "premium not winning",
+      "premium still losing",
+      "premium weak"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Banned \/ Detected/i)) {
+    addTerms(phrases, ["is this detected", "am i detected", "can i get banned", "will this ban me"]);
+  }
+
+  if (titleIncludes(entry, /Account Transfers \/ Discord Server Ban/i)) {
+    addTerms(phrases, [
+      "discord banned",
+      "got discord banned",
+      "i got discord banned",
+      "banned from discord",
+      "discord server banned"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Features Not Visible/i)) {
+    addTerms(phrases, [
+      "orbit aura invisible",
+      "orbit aura not visible",
+      "aura invisible",
+      "aura not visible",
+      "cant see orbit aura",
+      "they cant see orbit aura",
+      "they cant see hide under floor"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Where to Buy \/ Pricing \/ Robux Payment/i)) {
+    addTerms(phrases, [
+      "can i buy with roblox",
+      "can i buy this with roblox",
+      "can i buy ts with roblox",
+      "pay with roblox",
+      "roblox payment",
+      "can i buy with rbx",
+      "can i buy with robux",
+      "where reseller"
+    ]);
+  }
+
+  if (entry.category === "gui") {
+    addTerms(phrases, extractGuiFeatureTerms(reply));
+    addTerms(phrases, [
+      "where auto queue",
+      "where is auto queue",
+      "where auto loadout",
+      "where is auto loadout",
+      "where device spoofer",
+      "where hitsounds"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Magic Bullet/i)) {
+    addTerms(phrases, ["mb gone", "mb not working", "mb patched", "magic bullet removed"]);
+  }
+
+  if (titleIncludes(entry, /KiciaHook Website \/ Official Site/i)) {
+    addTerms(phrases, [
+      "where site",
+      "where website",
+      "official link",
+      "kicia official link",
+      "kiciahook official link"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Get a Key and Get Whitelisted/i)) {
+    addTerms(phrases, [
+      "adslift stuck",
+      "lootlabs stuck",
+      "ads stuck",
+      "key ads stuck",
+      "checkpoint stuck",
+      "key system stuck"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Reset Settings \/ Keybinds/i)) {
+    addTerms(phrases, [
+      "reset binds",
+      "reset my binds",
+      "reset bind",
+      "reset keybind",
+      "reset my keybind",
+      "wrong binds",
+      "default config"
+    ]);
+  }
+
+  return { phrases, keywords };
 }
 
 function normalizeExecutorLinks(entry) {
@@ -117,6 +309,7 @@ function normalizeKb(data) {
     ];
     const cause = typeof entry.cause === "string" ? entry.cause : "";
     const reply = typeof entry.reply === "string" ? entry.reply : "";
+    const derivedTerms = getDerivedIssueTerms({ ...entry, title }, { reply });
 
     return {
       ...entry,
@@ -124,11 +317,11 @@ function normalizeKb(data) {
       reply,
       steps,
       category: entry.category || null,
-      match_phrases: matchPhrases,
-      strong_keywords: matchPhrases,
+      match_phrases: [...matchPhrases, ...derivedTerms.phrases],
+      strong_keywords: [...matchPhrases, ...derivedTerms.phrases],
       _normalizedTitle: normalizeText(title),
-      _matchPhrases: uniqueNormalized(matchPhrases),
-      _keywords: uniqueNormalized(keywords),
+      _matchPhrases: uniqueNormalized([...matchPhrases, ...derivedTerms.phrases]),
+      _keywords: uniqueNormalized([...keywords, ...derivedTerms.keywords]),
       _titleTokens: [...new Set(tokenize(title).filter(keepSignalToken))],
       _replyTokens: [
         ...new Set(

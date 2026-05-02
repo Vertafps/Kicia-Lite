@@ -12,6 +12,7 @@ const {
   SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD,
   SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SELLING_CONFIDENCE_TIMEOUT_TIERS,
   SELLING_LOW_CONFIDENCE_THRESHOLD,
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
@@ -366,12 +367,26 @@ function buildLocalAuditResult(localResult) {
   };
 }
 
-function getConfirmedSignalConfidence(signal, verdictResult, fallback = 88) {
-  return Math.max(
-    Number(signal?.confidence || 0),
-    Number(verdictResult?.confidence || 0),
-    fallback
-  );
+function getSellingConfidenceTimeoutTier(confidence) {
+  const numeric = Number(confidence || 0);
+  return (SELLING_CONFIDENCE_TIMEOUT_TIERS || [])
+    .filter((tier) => numeric > Number(tier?.threshold || 0) && Number(tier?.timeoutMs || 0) > 0)
+    .sort((a, b) => Number(b.threshold || 0) - Number(a.threshold || 0))[0] || null;
+}
+
+function getSellingConfidenceTimeoutMs(confidence) {
+  return Number(getSellingConfidenceTimeoutTier(confidence)?.timeoutMs || 0);
+}
+
+function getConfirmedSignalConfidence(signal, verdictResult, fallback = 0) {
+  const signalConfidence = Number(signal?.confidence || 0);
+  const verdictConfidence = Number(verdictResult?.confidence || 0);
+
+  if (Number.isFinite(verdictConfidence) && verdictConfidence > 0) {
+    return clampConfidence(Math.max(signalConfidence, verdictConfidence, fallback));
+  }
+
+  return clampConfidence(Math.max(signalConfidence, fallback));
 }
 
 async function recordScamAudit(message, {
@@ -1045,9 +1060,13 @@ function getSellingRepeatThreshold(confidence) {
 
 function rememberSellingMessage(message, signals, now = Date.now()) {
   const confidence = getMaxSignalConfidence(signals);
-  const highConfidence = confidence > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD;
+  const confidenceTier = getSellingConfidenceTimeoutTier(confidence);
+  const highConfidence = Boolean(confidenceTier);
   const repeatThreshold = getSellingRepeatThreshold(confidence);
   const key = buildSellingUserKey(message);
+  const confidenceTrigger = highConfidence
+    ? `confidence ${confidence}% > ${confidenceTier.threshold}% => timeout ${formatDuration(confidenceTier.timeoutMs)}`
+    : "below immediate-timeout confidence";
 
   if (!key) {
     return {
@@ -1055,10 +1074,9 @@ function rememberSellingMessage(message, signals, now = Date.now()) {
       confidence,
       highConfidence,
       repeatThreshold,
+      durationMs: highConfidence ? confidenceTier.timeoutMs : null,
       action: highConfidence ? "timeout" : "alert",
-      trigger: highConfidence
-        ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
-        : "below immediate-timeout confidence",
+      trigger: confidenceTrigger,
       events: []
     };
   }
@@ -1084,9 +1102,10 @@ function rememberSellingMessage(message, signals, now = Date.now()) {
     confidence,
     highConfidence,
     repeatThreshold,
+    durationMs: highConfidence ? confidenceTier.timeoutMs : null,
     action,
     trigger: highConfidence
-      ? `confidence ${confidence}% > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`
+      ? confidenceTrigger
       : repeated
         ? `${entry.events.length}/${repeatThreshold} scam/trade signals in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`
         : "below immediate-timeout confidence",
@@ -1604,6 +1623,7 @@ async function handleSellingMessage(message, signals, {
   replyPublic = true
 } = {}) {
   const state = rememberSellingMessage(message, signals, now);
+  const effectiveTimeoutMs = Number(state.durationMs || 0) > 0 ? Number(state.durationMs) : timeoutMs;
   const publicReplySent = replyPublic
     ? await replyToSellingMessage(message)
     : false;
@@ -1619,12 +1639,12 @@ async function handleSellingMessage(message, signals, {
   }
 
   if (state.action === "timeout") {
-    timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "scam/trade behavior in chat");
+    timeoutResult = await tryTimeoutMessageMember(message.member, effectiveTimeoutMs, "scam/trade behavior in chat");
     dmSent = await safeSend(message.author, buildSellingDmPayload({
       message,
       signals,
       state,
-      durationMs: timeoutMs
+      durationMs: effectiveTimeoutMs
     }));
     if (!timeoutResult.applied) {
       recordRuntimeEvent("warn", "selling-timeout", timeoutResult.reason);
@@ -1639,7 +1659,7 @@ async function handleSellingMessage(message, signals, {
     deleteResult,
     timeoutResult,
     dmSent,
-    durationMs: timeoutMs
+    durationMs: effectiveTimeoutMs
   })).catch(() => null);
 
   return {
@@ -1665,7 +1685,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
 
   const localResult = classifyScamContextLocally(scamContext, { strongestSignal: strongest });
   const localVerdict = buildClassifierVerdictResult(localResult);
-  if (localResult?.verdict === true && (localResult.confidence || 0) >= 92) {
+  if (localResult?.verdict === true && (localResult.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD) {
     const confirmedSignals = signals.map((signal) => ({
       ...signal,
       confidence: getConfirmedSignalConfidence(signal, localVerdict),
@@ -1748,7 +1768,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
 
   // Local development or missing AI key keeps the deterministic guard working.
   if (!aiResult?.attempted && aiResult?.skipped === "missing_key") {
-    const fallbackSignals = signals.filter((signal) => !signal.requiresAi || (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+    const fallbackSignals = signals.filter((signal) => !signal.requiresAi || (signal.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
     await recordScamAudit(message, {
       action: "missing_key_fallback",
       handled: Boolean(fallbackSignals.length),
@@ -1764,7 +1784,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
 
   // If Gemini is configured but unavailable/rate-limited, only act on very
   // strong deterministic evidence. Ambiguous scam candidates wait for AI.
-  const fallbackSignals = signals.filter((signal) => !signal.requiresAi && (signal.confidence || 0) >= SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
+  const fallbackSignals = signals.filter((signal) => !signal.requiresAi && (signal.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
   await recordScamAudit(message, {
     action: aiResult?.skipped ? `ai_${aiResult.skipped}` : "ai_no_verdict",
     handled: Boolean(fallbackSignals.length),
@@ -1985,6 +2005,8 @@ module.exports = {
   detectFakeInfoSignal,
   detectBlockedLinkSignal,
   collectContentSignals,
+  getSellingConfidenceTimeoutMs,
+  getSellingConfidenceTimeoutTier,
   hasBypassPermission,
   observeRaidMessage,
   resetModerationState,

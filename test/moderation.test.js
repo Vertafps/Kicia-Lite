@@ -39,6 +39,8 @@ const {
   detectSuspiciousSignal,
   detectRoastingSignal,
   detectFakeInfoSignal,
+  getSellingConfidenceTimeoutMs,
+  getSellingConfidenceTimeoutTier,
   hasBypassPermission,
   maybeHandleModerationWatch,
   observeRaidMessage,
@@ -1161,6 +1163,53 @@ test("AI scam classifier can clear ambiguous market questions", async () => {
   assert.match(fixture.logs[0].body, /AI Answer:\*\* FALSE/i);
 });
 
+test("scam confidence ladder maps confirmed intent to timeout durations", () => {
+  assert.equal(getSellingConfidenceTimeoutMs(91), 3 * 24 * 60 * 60 * 1000);
+  assert.equal(getSellingConfidenceTimeoutMs(86), 24 * 60 * 60 * 1000);
+  assert.equal(getSellingConfidenceTimeoutMs(76), 60 * 60 * 1000);
+  assert.equal(getSellingConfidenceTimeoutMs(71), 30 * 60 * 1000);
+  assert.equal(getSellingConfidenceTimeoutMs(70), 0);
+  assert.equal(getSellingConfidenceTimeoutMs(69), 0);
+  assert.equal(getSellingConfidenceTimeoutTier(88)?.threshold, 85);
+});
+
+test("AI-confirmed moderate-confidence scam/trade gets the 30 minute tier", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("dms", {
+    referencedContent: "where is executor link"
+  });
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => ({ attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" })
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 30 * 60 * 1000);
+  assert.match(fixture.logs[0].body, /confidence 72% > 70% => timeout 30m/i);
+});
+
+test("AI-confirmed low-confidence scam/trade keeps repeat fallback instead of instant mute", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("trading this for that");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => ({ attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" })
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.match(fixture.logs[0].header, /Scam\/Trade Alert/i);
+  assert.match(fixture.logs[0].body, /below immediate-timeout confidence/i);
+});
+
 test("high-confidence scam/trade mutes and shows confidence in logs", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("selling ue for 1 bucks", {
@@ -1183,9 +1232,9 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
   assert.doesNotMatch(fixture.logs[0].body, /Confidence:\*\* 88%/i);
   assert.match(fixture.logs[0].body, /delete ok/i);
-  assert.match(fixture.logs[0].body, /confidence \d+% > 70%/i);
+  assert.match(fixture.logs[0].body, /confidence \d+% > 90% => timeout 3d/i);
   assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.timeouts[0].durationMs, 15 * 60 * 1000);
+  assert.equal(fixture.timeouts[0].durationMs, 3 * 24 * 60 * 60 * 1000);
   assert.equal(fixture.dms.length, 1);
   assert.match(fixture.dms[0].embeds[0].data.description, /scam\/trade behavior/i);
 

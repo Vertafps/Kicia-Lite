@@ -12,6 +12,7 @@ const {
   SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD,
   SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
+  SELLING_CONFIDENCE_TIMEOUT_TIERS,
   SELLING_LOW_CONFIDENCE_THRESHOLD,
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
@@ -161,6 +162,9 @@ function buildRuntimeSection(message) {
 }
 
 function buildModerationGuardLines() {
+  const sellingTierText = (SELLING_CONFIDENCE_TIMEOUT_TIERS || [])
+    .map((tier) => `>${tier.threshold}% ${formatDuration(tier.timeoutMs)}`)
+    .join(", ");
   return [
     [
       "**Link Guard:**",
@@ -188,10 +192,10 @@ function buildModerationGuardLines() {
       `local AI gap ${formatDuration(GEMINI_SCAM_MIN_INTERVAL_MS)};`,
       `remote AI failure cooldown ${formatDuration(GEMINI_SCAM_FAILURE_COOLDOWN_MS)};`,
       `API timeout ${formatDuration(GEMINI_SCAM_TIMEOUT_MS)};`,
-      `local confidence timeout > ${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%;`,
+      `confirmed confidence ladder ${sellingTierText || `>${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`};`,
       `repeat fallback ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
-      `timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
+      `repeat timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
     ].join(" ")
   ];
 }

@@ -25,10 +25,14 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   assert.match(body, /timeout 10m/i);
   assert.match(body, /confidence > 90% timeout 1h/i);
   assert.match(body, /Scam\/Trade Guard/i);
-  assert.match(body, /confidence timeout > 70%/i);
+  assert.match(body, /confirmed confidence ladder/i);
+  assert.match(body, />90% 3d/i);
+  assert.match(body, />85% 1d/i);
+  assert.match(body, />75% 1h/i);
+  assert.match(body, />70% 30m/i);
   assert.match(body, /2 hits in 30m/i);
   assert.match(body, /3 hits if confidence < 50%/i);
-  assert.match(body, /timeout 15m/i);
+  assert.match(body, /repeat timeout 15m/i);
   assert.match(body, /last 5 messages plus per-message reply context/i);
   assert.match(body, /local Kicia policy \+ Naive Bayes classifier/i);
   assert.match(body, /Gemini fallback optional\/off|Gemini gemini-2\.5-flash-lite handles borderline cases/i);

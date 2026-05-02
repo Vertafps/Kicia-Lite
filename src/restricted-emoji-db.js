@@ -1068,6 +1068,10 @@ async function recordModerationAction(record = {}) {
   const recentMessages = Array.isArray(record.recentMessages)
     ? record.recentMessages.slice(-8).map((entry) => ({
         at: Math.max(0, Math.round(Number(entry?.at) || 0)),
+        messageId: entry?.messageId ? String(entry.messageId) : null,
+        channelId: entry?.channelId ? String(entry.channelId) : null,
+        guildId: entry?.guildId ? String(entry.guildId) : null,
+        url: entry?.url ? trimAuditText(entry.url, 300) : null,
         content: trimAuditText(entry?.content, 360),
         repliedToMessage: entry?.repliedToMessage
           ? {

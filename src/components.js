@@ -43,14 +43,14 @@ function buildModerationLogButtonRows(actionId, {
       new ButtonBuilder()
         .setCustomId(`${MODLOG_VIEW_PREFIX}${id}`)
         .setStyle(ButtonStyle.Secondary)
-        .setEmoji("\u{1F4DC}")
-        .setLabel("View User's Messages")
+        .setEmoji("\u{1F50E}")
+        .setLabel("View Context")
         .setDisabled(Boolean(disabled)),
       new ButtonBuilder()
         .setCustomId(`${MODLOG_REVERT_PREFIX}${id}`)
         .setStyle(ButtonStyle.Danger)
-        .setEmoji("\u26A0\uFE0F")
-        .setLabel("Revert Action")
+        .setEmoji("\u21A9\uFE0F")
+        .setLabel("Undo Timeout")
         .setDisabled(Boolean(disabled) || !canRevert)
     )
   ];

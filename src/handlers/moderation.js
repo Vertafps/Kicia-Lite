@@ -94,6 +94,7 @@ const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg 
 const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone)\b/;
 const MODERATION_ACTION_REVIEW_MAX_MS = 12 * 60 * 60 * 1000;
 const MODERATION_CONTEXT_VIEW_LIMIT = 8;
+const MODERATION_DELETE_CONTEXT_LIMIT = 3;
 
 const SUSPICIOUS_PATTERNS = [
   {
@@ -267,28 +268,6 @@ function buildMessageUrl(message) {
   if (message?.url) return message.url;
   if (!message?.guildId || !message?.channelId || !message?.id) return null;
   return `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`;
-}
-
-async function tryDeleteMessage(message) {
-  if (!message?.delete) {
-    return {
-      deleted: false,
-      reason: "message delete unavailable"
-    };
-  }
-
-  try {
-    await message.delete();
-    return {
-      deleted: true,
-      reason: "deleted"
-    };
-  } catch (err) {
-    return {
-      deleted: false,
-      reason: err?.message || "delete failed"
-    };
-  }
 }
 
 async function tryTimeoutMessageMember(member, durationMs, reason) {
@@ -1138,14 +1117,24 @@ function normalizeRecentMessageEntry(entry) {
     return {
       at: Date.now(),
       content: String(entry || ""),
-      repliedToMessage: null
+      repliedToMessage: null,
+      messageId: null,
+      channelId: null,
+      guildId: null,
+      url: null,
+      messageRef: null
     };
   }
 
   return {
     at: Number(entry?.at || Date.now()),
     content: String(entry?.content || ""),
-    repliedToMessage: cloneReplyContext(entry?.repliedToMessage)
+    repliedToMessage: cloneReplyContext(entry?.repliedToMessage),
+    messageId: entry?.messageId ? String(entry.messageId) : null,
+    channelId: entry?.channelId ? String(entry.channelId) : null,
+    guildId: entry?.guildId ? String(entry.guildId) : null,
+    url: entry?.url ? String(entry.url) : null,
+    messageRef: entry?.messageRef || null
   };
 }
 
@@ -1177,7 +1166,12 @@ function rememberRecentUserMessage(message, repliedToMessage = null, now = Date.
   entry.messages.push({
     at: now,
     content: String(message.content || ""),
-    repliedToMessage: cloneReplyContext(repliedToMessage)
+    repliedToMessage: cloneReplyContext(repliedToMessage),
+    messageId: message.id || null,
+    channelId: message.channelId || null,
+    guildId: message.guildId || message.guild?.id || null,
+    url: buildMessageUrl(message),
+    messageRef: message
   });
   if (entry.messages.length > SELL_CONTEXT_MAX_MESSAGES) {
     entry.messages = entry.messages.slice(-SELL_CONTEXT_MAX_MESSAGES);
@@ -1267,14 +1261,22 @@ function normalizeModerationActionContext(recentMessages, fallbackMessage, now =
     entries.push({
       at: now,
       content: String(fallbackMessage.content || ""),
-      repliedToMessage: null
+      repliedToMessage: null,
+      messageId: fallbackMessage.id || null,
+      channelId: fallbackMessage.channelId || null,
+      guildId: fallbackMessage.guildId || fallbackMessage.guild?.id || null,
+      url: buildMessageUrl(fallbackMessage)
     });
   }
 
   return entries.slice(-SELL_CONTEXT_MAX_MESSAGES).map((entry) => ({
     at: Number(entry.at || now),
     content: cleanText(entry.content),
-    repliedToMessage: cloneReplyContext(entry.repliedToMessage)
+    repliedToMessage: cloneReplyContext(entry.repliedToMessage),
+    messageId: entry.messageId || null,
+    channelId: entry.channelId || null,
+    guildId: entry.guildId || null,
+    url: entry.url || null
   }));
 }
 
@@ -1328,20 +1330,13 @@ function withModerationLogTools(panel, {
   canRevert = false
 } = {}) {
   if (!actionId) return panel;
-  const toolText = [
-    "## Staff Tools",
-    [
-      "Use the buttons below to view the captured context or revert the timeout while the review window is open.",
-      canRevert
-        ? `**Review Window:** closes ${formatModerationActionReviewWindow(expiresAt)}.`
-        : `**Review Window:** context stays available until ${formatModerationActionReviewWindow(expiresAt)}; no reversible timeout was stored.`,
-      "**Cleanup:** this short-lived review record is removed after revert, expiry, or daily cleanup."
-    ].join("\n")
-  ].join("\n");
+  const reviewNote = canRevert
+    ? `Context + undo controls expire ${formatModerationActionReviewWindow(expiresAt)}`
+    : `Context review expires ${formatModerationActionReviewWindow(expiresAt)}`;
 
   return {
     ...panel,
-    body: [panel.body, toolText].filter(Boolean).join("\n\n"),
+    extra: [panel.extra, reviewNote].filter(Boolean).join(" | "),
     components: buildModerationLogButtonRows(actionId, { canRevert })
   };
 }
@@ -1381,6 +1376,111 @@ async function sendModerationLogWithTools(sendLog, guild, message, panel, {
   }
 
   return sendLog(guild, logPanel).catch(() => null);
+}
+
+function getRecentDeleteTargets(recentMessages, fallbackMessage, limit = MODERATION_DELETE_CONTEXT_LIMIT) {
+  const entries = (recentMessages || [])
+    .map(normalizeRecentMessageEntry)
+    .filter((entry) => entry.messageRef?.delete || entry.messageId);
+
+  if (!entries.length && fallbackMessage) {
+    entries.push(normalizeRecentMessageEntry({
+      at: Date.now(),
+      content: fallbackMessage.content || "",
+      messageId: fallbackMessage.id || null,
+      channelId: fallbackMessage.channelId || null,
+      guildId: fallbackMessage.guildId || fallbackMessage.guild?.id || null,
+      url: buildMessageUrl(fallbackMessage),
+      messageRef: fallbackMessage
+    }));
+  }
+
+  const unique = new Map();
+  for (const entry of entries.slice(-limit)) {
+    const ref = entry.messageRef;
+    const key = entry.guildId && entry.channelId && entry.messageId
+      ? `${entry.guildId}:${entry.channelId}:${entry.messageId}`
+      : ref
+        ? `ref:${ref.id || unique.size}`
+        : `unknown:${unique.size}`;
+    unique.set(key, {
+      ...entry,
+      messageRef: ref
+    });
+  }
+
+  return [...unique.values()];
+}
+
+function buildDeletePlanSummary(recentMessages, fallbackMessage, shouldDelete) {
+  if (!shouldDelete) {
+    return {
+      queued: false,
+      count: 0,
+      text: "not needed"
+    };
+  }
+
+  const count = getRecentDeleteTargets(recentMessages, fallbackMessage).length || 1;
+  return {
+    queued: true,
+    count,
+    text: `queued ${count} msg${count === 1 ? "" : "s"}`
+  };
+}
+
+async function deleteRecentUserMessagesAfterLog(recentMessages, fallbackMessage, {
+  enabled = true,
+  scope = "moderation-delete"
+} = {}) {
+  if (!enabled) {
+    return {
+      queued: false,
+      total: 0,
+      deleted: 0,
+      failed: 0,
+      text: "not needed",
+      failures: []
+    };
+  }
+
+  const targets = getRecentDeleteTargets(recentMessages, fallbackMessage);
+  const failures = [];
+  let deleted = 0;
+
+  for (const target of targets) {
+    const message = target.messageRef;
+    if (!message?.delete) {
+      failures.push({
+        messageId: target.messageId || null,
+        reason: "message delete unavailable"
+      });
+      continue;
+    }
+
+    try {
+      await message.delete();
+      deleted += 1;
+    } catch (err) {
+      failures.push({
+        messageId: target.messageId || message.id || null,
+        reason: err?.message || "delete failed"
+      });
+    }
+  }
+
+  if (failures.length) {
+    recordRuntimeEvent("warn", scope, failures.map((failure) => failure.reason).join("; "));
+  }
+
+  return {
+    queued: true,
+    total: targets.length,
+    deleted,
+    failed: failures.length,
+    failures,
+    text: `deleted ${deleted}/${targets.length}`
+  };
 }
 
 function observeRaidMessage(message, now = Date.now()) {
@@ -1459,23 +1559,28 @@ function buildSellingDmPayload({ message, signals, state, durationMs }) {
   };
 }
 
+function formatDeleteSummary(deleteResult) {
+  if (!deleteResult) return "not needed";
+  if (deleteResult.text) return deleteResult.text;
+  if (deleteResult.deleted) return "ok";
+  return deleteResult.reason || "not needed";
+}
+
 function buildSellingLogPanel({ message, signals, state, deleteResult, timeoutResult, dmSent, durationMs }) {
-  const link = buildMessageUrl(message);
+  const link = deleteResult?.queued ? null : buildMessageUrl(message);
   const confidenceLines = signals
     .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
     .join("\n");
   const aiLines = formatAiVerdictLines(signals);
+  const deleteText = formatDeleteSummary(deleteResult);
   const action =
     state.action === "timeout"
-      ? `delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
-      : `delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | log only`;
+      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | delete ${deleteText} | dm ${dmSent ? "sent" : "not sent"}`
+      : `delete ${deleteText} | log only`;
 
   return {
     header: state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
     body: [
-      state.action === "timeout"
-        ? "scam/trade guard triggered and action was applied"
-        : "scam/trade guard saw a lower-confidence message",
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
       link ? `**Jump:** [Open message](${link})` : null,
@@ -1485,7 +1590,7 @@ function buildSellingLogPanel({ message, signals, state, deleteResult, timeoutRe
       `**Scam/Trade Hits:** ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `**Why:**\n${confidenceLines}`,
       aiLines ? `**AI Scam Verdict:**\n${aiLines}` : null,
-      `**Message:** ${trimExcerpt(message.content)}`
+      `**Evidence:** ${trimExcerpt(message.content)}`
     ].filter(Boolean).join("\n\n"),
     color: state.action === "timeout" ? DANGER : WARN
   };
@@ -1590,7 +1695,7 @@ function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
 }
 
 function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult, dmSent, durationMs }) {
-  const link = buildMessageUrl(message);
+  const link = deleteResult?.queued ? null : buildMessageUrl(message);
   const isScamPulse = (signal.reasons || []).some((reason) => /FishFish|PhishTank|Scam Pulse/i.test(reason));
   const shownLinks = signal.blockedLinks
     .slice(0, 5)
@@ -1607,27 +1712,20 @@ function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult
           ? "Blocked Link Warning"
           : "Link Review",
     body: [
-      timeoutResult.applied
-        ? "link guard triggered and action was applied"
-        : signal.action === "review"
-          ? "link guard logged a low-risk link for staff review"
-          : "link guard triggered, but the action did not fully apply",
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
-      `**Action:** ${signal.action} | delete ${deleteResult.deleted ? "ok" : deleteResult.reason} | timeout ${
+      link ? `**Jump:** [Open message](${link})` : null,
+      `**Action:** ${signal.action} | timeout ${
         timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason
-      } | dm ${dmSent ? "sent" : "not sent"}`,
+      } | delete ${formatDeleteSummary(deleteResult)} | dm ${dmSent ? "sent" : "not sent"}`,
       `**Threat:** ${signal.threatLevel} (${signal.confidence || 0}%)`,
       `**Policy:** docs/trusted/gif/common-safe links pass; risky links escalate by threat${isScamPulse ? "; Scam Pulse matches get the one-week timeout" : ""}`,
       `**Blocked Link Count:** ${signal.blockedCount}`,
       `**Why:**\n${formatBlockedLinkReasons(signal)}`,
       "**Blocked Link(s):**",
       shownLinks,
-      `**Message Excerpt:** ${trimExcerpt(message.content)}`
+      `**Evidence:** ${trimExcerpt(message.content)}`
     ].filter(Boolean).join("\n\n"),
-    tip: link ? `[Open message](${link})` : undefined,
-    tipStyle: "heading",
-    tipLevel: "##",
     color: timeoutResult.applied ? DANGER : WARN
   };
 }
@@ -1664,13 +1762,13 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
   };
 }
 
-function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs }) {
-  const link = buildMessageUrl(message);
+function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs, deleteResult = null }) {
+  const link = deleteResult?.queued ? null : buildMessageUrl(message);
   const action =
     state.action === "timeout"
-      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | dm ${dmSent ? "sent" : "not sent"}`
+      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | delete ${formatDeleteSummary(deleteResult)} | dm ${dmSent ? "sent" : "not sent"}`
       : state.action === "warn"
-        ? `dm warning ${dmSent ? "sent" : "not sent"}`
+        ? `delete ${formatDeleteSummary(deleteResult)} | dm warning ${dmSent ? "sent" : "not sent"}`
         : "log only";
 
   return {
@@ -1681,9 +1779,6 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
           ? "Suspicious Message Warning"
           : "Suspicious Message Alert",
     body: [
-      state.action === "alert"
-        ? "first suspicious message seen in the current watch window"
-        : "repeat suspicious messages seen in the current watch window",
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
       link ? `**Jump:** [Open message](${link})` : null,
@@ -1692,7 +1787,7 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
       `**Trigger:** ${state.trigger || "watch window"}`,
       `**Suspicious Hits:** ${state.count} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
       `**Why:**\n${formatSignalReasons(signals)}`,
-      `**Message:** ${trimExcerpt(message.content)}`
+      `**Evidence:** ${trimExcerpt(message.content)}`
     ].filter(Boolean).join("\n\n"),
     color: state.action === "timeout" ? DANGER : WARN
   };
@@ -1742,9 +1837,8 @@ async function handleBlockedLinkMessage(message, signal, {
 } = {}) {
   const action = signal.action || "timeout";
   const effectiveTimeoutMs = Number(signal.timeoutMs || 0) > 0 ? Number(signal.timeoutMs) : timeoutMs;
-  const deleteResult = action === "review"
-    ? { deleted: false, reason: "not needed" }
-    : await tryDeleteMessage(message);
+  const shouldDelete = action !== "review";
+  const deletePlan = buildDeletePlanSummary(recentMessages, message, shouldDelete);
   const timeoutResult = action === "timeout"
     ? await tryTimeoutMessageMember(message.member, effectiveTimeoutMs, "high-risk link")
     : { applied: false, reason: action === "warn" ? "warning only" : "not needed" };
@@ -1756,9 +1850,6 @@ async function handleBlockedLinkMessage(message, signal, {
       }))
     : false;
 
-  if (action !== "review" && !deleteResult.deleted) {
-    recordRuntimeEvent("warn", "blocked-link-delete", deleteResult.reason);
-  }
   if (action === "timeout" && !timeoutResult.applied) {
     recordRuntimeEvent("warn", "blocked-link-timeout", timeoutResult.reason);
   }
@@ -1774,7 +1865,7 @@ async function handleBlockedLinkMessage(message, signal, {
   const panel = buildBlockedLinkLogPanel({
     message,
     signal,
-    deleteResult,
+    deleteResult: deletePlan,
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs
@@ -1784,11 +1875,15 @@ async function handleBlockedLinkMessage(message, signal, {
     actionLabel: panel.header,
     timeoutMs: effectiveTimeoutMs,
     timeoutApplied: timeoutResult.applied,
-    deleteApplied: deleteResult.deleted,
+    deleteApplied: shouldDelete,
     dmSent,
     reasons: formatSignalReasonsForStorage(signal),
     recentMessages,
     now
+  });
+  await deleteRecentUserMessagesAfterLog(recentMessages, message, {
+    enabled: shouldDelete,
+    scope: "blocked-link-delete"
   });
 
   return action !== "review";
@@ -1806,16 +1901,12 @@ async function handleSellingMessage(message, signals, {
   const publicReplySent = replyPublic
     ? await replyToSellingMessage(message)
     : false;
-  const deleteResult = await tryDeleteMessage(message);
+  const deletePlan = buildDeletePlanSummary(recentMessages, message, true);
   let timeoutResult = {
     applied: false,
     reason: "not needed"
   };
   let dmSent = false;
-
-  if (!deleteResult.deleted) {
-    recordRuntimeEvent("warn", "selling-delete", deleteResult.reason);
-  }
 
   if (state.action === "timeout") {
     timeoutResult = await tryTimeoutMessageMember(message.member, effectiveTimeoutMs, "scam/trade behavior in chat");
@@ -1835,7 +1926,7 @@ async function handleSellingMessage(message, signals, {
     message,
     signals,
     state,
-    deleteResult,
+    deleteResult: deletePlan,
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs
@@ -1845,11 +1936,15 @@ async function handleSellingMessage(message, signals, {
     actionLabel: panel.header,
     timeoutMs: effectiveTimeoutMs,
     timeoutApplied: timeoutResult.applied,
-    deleteApplied: deleteResult.deleted,
+    deleteApplied: true,
     dmSent,
     reasons: formatSignalReasonsForStorage(signals),
     recentMessages,
     now
+  });
+  const deleteResult = await deleteRecentUserMessagesAfterLog(recentMessages, message, {
+    enabled: true,
+    scope: "selling-delete"
   });
 
   return {
@@ -2007,6 +2102,8 @@ async function handleSuspiciousMessage(message, signals, {
     applied: false,
     reason: "not needed"
   };
+  const shouldDelete = state.action === "timeout" || state.action === "warn";
+  const deletePlan = buildDeletePlanSummary(recentMessages, message, shouldDelete);
 
   if (state.action === "timeout") {
     timeoutResult = await tryTimeoutMessageMember(
@@ -2049,23 +2146,29 @@ async function handleSuspiciousMessage(message, signals, {
     state,
     timeoutResult,
     dmSent,
-    durationMs: effectiveTimeoutMs
+    durationMs: effectiveTimeoutMs,
+    deleteResult: deletePlan
   });
   await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
     actionType: "suspicious",
     actionLabel: panel.header,
     timeoutMs: effectiveTimeoutMs,
     timeoutApplied: timeoutResult.applied,
-    deleteApplied: false,
+    deleteApplied: shouldDelete,
     dmSent,
     reasons: formatSignalReasonsForStorage(signals),
     recentMessages,
     now
   });
+  const deleteResult = await deleteRecentUserMessagesAfterLog(recentMessages, message, {
+    enabled: shouldDelete,
+    scope: "suspicious-delete"
+  });
 
   return {
     ...state,
-    publicReplySent
+    publicReplySent,
+    deleteResult
   };
 }
 
@@ -2290,10 +2393,12 @@ function formatCapturedActionMessages(action) {
 
   return entries.map((entry, index) => {
     const when = entry.at ? formatDiscordTimestamp(entry.at, "R") : "captured";
+    const id = entry.messageId ? ` | id ${entry.messageId}` : "";
+    const jump = !action.deleteApplied && entry.url ? ` | [jump](${entry.url})` : "";
     const reply = entry.repliedToMessage?.content
-      ? `\n  reply context: ${entry.repliedToMessage.authorLabel || "other user"} said "${trimExcerpt(entry.repliedToMessage.content, 130)}"`
+      ? `\n  reply: ${entry.repliedToMessage.authorLabel || "other user"} - ${trimExcerpt(entry.repliedToMessage.content, 130)}`
       : "";
-    return `${index + 1}. ${when} - ${trimExcerpt(entry.content, 170)}${reply}`;
+    return `${index + 1}. ${when}${id}${jump}\n   ${trimExcerpt(entry.content, 170)}${reply}`;
   }).join("\n");
 }
 
@@ -2310,15 +2415,14 @@ function buildActionMessagesPanel(action, visibleMessages) {
   return {
     header: "User Message Context",
     body: [
-      "here is the captured moderation context plus any recent visible messages still fetchable from the channel",
       `**User:** ${action.userId ? `<@${action.userId}>` : action.username || "unknown"}`,
       action.channelId ? `**Channel:** <#${action.channelId}>` : null,
       `**Original Action:** ${action.actionLabel}`,
       `**Review Window:** closes ${formatModerationActionReviewWindow(action.expiresAt)}`,
-      action.messageUrl ? `**Original Jump:** [Open log trigger](${action.messageUrl})` : null,
+      action.messageUrl && !action.deleteApplied ? `**Original Jump:** [Open message](${action.messageUrl})` : null,
       `**Stored Trigger:** ${trimExcerpt(action.messageContent || "(no text)", 220)}`,
-      `**Captured Last ${SELL_CONTEXT_MAX_MESSAGES}:**\n${formatCapturedActionMessages(action)}`,
-      `**Visible Recent Messages:**\n${formatVisibleActionMessages(visibleMessages)}`
+      `**Saved Evidence:**\n${formatCapturedActionMessages(action)}`,
+      `**Still Visible:**\n${formatVisibleActionMessages(visibleMessages)}`
     ].filter(Boolean).join("\n\n"),
     color: INFO
   };

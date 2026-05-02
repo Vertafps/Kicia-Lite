@@ -112,6 +112,7 @@ function buildModerationMessage(content, {
   permissions = [],
   moderatable = true,
   channelId = "channel-1",
+  messageId = "message-1",
   createdTimestamp = 0,
   joinedTimestamp = 0,
   referencedContent = null
@@ -175,11 +176,11 @@ function buildModerationMessage(content, {
     : null;
 
   const message = {
-    id: "message-1",
+    id: messageId,
     content,
     guildId: "guild-1",
     channelId,
-    url: `https://discord.com/channels/guild-1/${channelId}/message-1`,
+    url: `https://discord.com/channels/guild-1/${channelId}/${messageId}`,
     guild,
     author,
     member,
@@ -1317,13 +1318,14 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
   assert.doesNotMatch(fixture.logs[0].body, /Confidence:\*\* 88%/i);
-  assert.match(fixture.logs[0].body, /delete ok/i);
+  assert.match(fixture.logs[0].body, /delete queued 1 msg/i);
   assert.match(fixture.logs[0].body, /confidence \d+% > 90% => timeout 1d/i);
-  assert.match(fixture.logs[0].body, /Staff Tools/i);
+  assert.doesNotMatch(fixture.logs[0].body, /Staff Tools/i);
+  assert.match(fixture.logs[0].extra, /Context \+ undo controls expire/i);
   const buttons = getPanelButtonJson(fixture.logs[0]);
   assert.equal(buttons.length, 2);
-  assert.equal(buttons[0].label, "View User's Messages");
-  assert.equal(buttons[1].label, "Revert Action");
+  assert.equal(buttons[0].label, "View Context");
+  assert.equal(buttons[1].label, "Undo Timeout");
   assert.equal(buttons[1].disabled, false);
   const actionId = getActionIdFromPanel(fixture.logs[0], MODLOG_REVERT_PREFIX);
   const action = await getModerationAction(actionId);
@@ -1331,6 +1333,8 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.equal(action.timeoutApplied, true);
   assert.equal(action.deleteApplied, true);
   assert.match(action.messageContent, /selling ue/i);
+  assert.equal(action.recentMessages.length, 1);
+  assert.equal(action.recentMessages[0].messageId, "message-1");
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.equal(fixture.dms.length, 1);
@@ -1339,6 +1343,65 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   const snapshot = await getDailyStatsSnapshot();
   const sellingTimeout = snapshot.moderation.find((entry) => entry.eventKey === "selling_timeout");
   assert.equal(sellingTimeout?.eventCount, 1);
+});
+
+test("moderation action logs evidence before deleting the user's last three messages", async () => {
+  await clearDailyStatsTracking(1);
+  const userId = "cleanup-user";
+  const channelId = "cleanup-channel";
+  const events = [];
+  const first = buildModerationMessage("normal chat one", { userId, channelId, messageId: "msg-1" });
+  const second = buildModerationMessage("normal chat two", { userId, channelId, messageId: "msg-2" });
+  const third = buildModerationMessage("selling ue for 1 bucks", { userId, channelId, messageId: "msg-3" });
+
+  first.message.delete = async () => {
+    events.push("delete-1");
+    first.deleted.push(true);
+  };
+  second.message.delete = async () => {
+    events.push("delete-2");
+    second.deleted.push(true);
+  };
+  third.message.delete = async () => {
+    events.push("delete-3");
+    third.deleted.push(true);
+  };
+
+  await maybeHandleModerationWatch(first.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: first.sendLog,
+    now: 1000
+  });
+  await maybeHandleModerationWatch(second.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: second.sendLog,
+    now: 2000
+  });
+
+  const handled = await maybeHandleModerationWatch(third.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: async (_guild, panel) => {
+      events.push("log");
+      assert.equal(first.deleted.length, 0);
+      assert.equal(second.deleted.length, 0);
+      assert.equal(third.deleted.length, 0);
+      third.logs.push(panel);
+      return true;
+    },
+    now: 3000
+  });
+
+  assert.equal(handled, true);
+  assert.deepEqual(events, ["log", "delete-1", "delete-2", "delete-3"]);
+  assert.equal(first.deleted.length, 1);
+  assert.equal(second.deleted.length, 1);
+  assert.equal(third.deleted.length, 1);
+  assert.match(third.logs[0].body, /delete queued 3 msgs/i);
+  const action = await getModerationAction(getActionIdFromPanel(third.logs[0], MODLOG_REVERT_PREFIX), { now: 3000 });
+  assert.deepEqual(action.recentMessages.map((entry) => entry.messageId), ["msg-1", "msg-2", "msg-3"]);
 });
 
 test("moderation log view button shows captured and visible user context", async () => {
@@ -1386,6 +1449,8 @@ test("moderation log view button shows captured and visible user context", async
   assert.match(description, /User Message Context/i);
   assert.match(description, /selling ue for 1 bucks/i);
   assert.match(description, /visible still here/i);
+  assert.doesNotMatch(description, /Original Jump/i);
+  assert.match(description, /Saved Evidence/i);
 });
 
 test("staff can revert a moderation timeout from the log button", async () => {

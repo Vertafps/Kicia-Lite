@@ -7,6 +7,7 @@ const { PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 const os = require("os");
 const path = require("path");
 
+const { MODLOG_REVERT_PREFIX, MODLOG_VIEW_PREFIX } = require("../src/components");
 const { normalizeKb } = require("../src/kb");
 const {
   addRestrictedEmoji,
@@ -15,6 +16,7 @@ const {
   clearScamDecisionAuditForTests,
   clearDailyStatsTracking,
   getDailyStatsSnapshot,
+  getModerationAction,
   getRestrictedEmojiDatabaseSnapshot,
   isModerationWhitelistedUser,
   listScamDecisionAudit,
@@ -24,6 +26,7 @@ const {
   removeModerationWhitelistedUser,
   removeRestrictedEmojiByKey,
   removeTrustedLinkByKey,
+  cleanupExpiredModerationActions,
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
 const {
@@ -42,6 +45,7 @@ const {
   getSellingConfidenceTimeoutMs,
   getSellingConfidenceTimeoutTier,
   hasBypassPermission,
+  maybeHandleModerationLogInteraction,
   maybeHandleModerationWatch,
   observeRaidMessage,
   resetModerationState
@@ -135,6 +139,7 @@ function buildModerationMessage(content, {
   };
 
   const guild = {
+    id: "guild-1",
     channels: {
       cache: new Map(),
       fetch: async () => null
@@ -198,6 +203,87 @@ function buildModerationMessage(content, {
     logs,
     sendLog: async (_guild, panel) => {
       logs.push(panel);
+      return true;
+    }
+  };
+}
+
+function getPanelButtonCustomIds(panel) {
+  return (panel.components || [])
+    .flatMap((row) => row.toJSON?.().components || row.components || [])
+    .map((button) => button.custom_id || button.data?.custom_id)
+    .filter(Boolean);
+}
+
+function getPanelButtonJson(panel) {
+  return (panel.components || [])
+    .flatMap((row) => row.toJSON?.().components || row.components || []);
+}
+
+function getActionIdFromPanel(panel, prefix) {
+  const customId = getPanelButtonCustomIds(panel).find((id) => id.startsWith(prefix));
+  assert.ok(customId, `missing button prefix ${prefix}`);
+  return customId.slice(prefix.length);
+}
+
+function buildModerationLogInteraction(customId, fixture, {
+  roleIds = ["1298767464678559794"],
+  userId = "staff-user"
+} = {}) {
+  const replies = [];
+  const edits = [];
+  const logPanels = [];
+  const interaction = {
+    customId,
+    deferred: false,
+    replied: false,
+    guild: fixture.message.guild,
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleIds.includes(roleId)
+        }
+      },
+      permissions: new PermissionsBitField([])
+    },
+    user: {
+      id: userId,
+      username: "staffuser",
+      tag: "staffuser#0001"
+    },
+    client: {
+      users: {
+        fetch: async (id) => (id === fixture.message.author.id ? fixture.message.author : null)
+      }
+    },
+    message: {
+      edit: async (payload) => {
+        edits.push(payload);
+      }
+    },
+    isButton: () => true,
+    inGuild: () => true,
+    reply: async (payload) => {
+      interaction.replied = true;
+      replies.push(payload);
+    },
+    deferReply: async (payload) => {
+      interaction.deferred = true;
+      replies.push({ deferred: payload });
+    },
+    editReply: async (payload) => {
+      interaction.replied = true;
+      replies.push(payload);
+    }
+  };
+
+  return {
+    interaction,
+    replies,
+    edits,
+    logPanels,
+    sendLog: async (_guild, panel) => {
+      logPanels.push(panel);
       return true;
     }
   };
@@ -1233,6 +1319,18 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.doesNotMatch(fixture.logs[0].body, /Confidence:\*\* 88%/i);
   assert.match(fixture.logs[0].body, /delete ok/i);
   assert.match(fixture.logs[0].body, /confidence \d+% > 90% => timeout 1d/i);
+  assert.match(fixture.logs[0].body, /Staff Tools/i);
+  const buttons = getPanelButtonJson(fixture.logs[0]);
+  assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].label, "View User's Messages");
+  assert.equal(buttons[1].label, "Revert Action");
+  assert.equal(buttons[1].disabled, false);
+  const actionId = getActionIdFromPanel(fixture.logs[0], MODLOG_REVERT_PREFIX);
+  const action = await getModerationAction(actionId);
+  assert.equal(action.actionType, "scam_trade");
+  assert.equal(action.timeoutApplied, true);
+  assert.equal(action.deleteApplied, true);
+  assert.match(action.messageContent, /selling ue/i);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.equal(fixture.dms.length, 1);
@@ -1241,6 +1339,141 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   const snapshot = await getDailyStatsSnapshot();
   const sellingTimeout = snapshot.moderation.find((entry) => entry.eventKey === "selling_timeout");
   assert.equal(sellingTimeout?.eventCount, 1);
+});
+
+test("moderation log view button shows captured and visible user context", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling ue for 1 bucks", {
+    channelId: "channel-context"
+  });
+  const now = 10_000_000;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now
+  });
+  assert.equal(handled, true);
+
+  fixture.message.guild.channels.cache.set("channel-context", {
+    messages: {
+      fetch: async () => new Map([
+        ["visible-1", {
+          id: "visible-1",
+          content: "visible still here",
+          author: fixture.message.author,
+          createdTimestamp: now + 1000,
+          url: "https://discord.com/channels/guild-1/channel-context/visible-1"
+        }],
+        ["other-user", {
+          id: "other-user",
+          content: "not this user",
+          author: { id: "someone-else" },
+          createdTimestamp: now + 2000
+        }]
+      ])
+    }
+  });
+
+  const viewId = getPanelButtonCustomIds(fixture.logs[0]).find((id) => id.startsWith(MODLOG_VIEW_PREFIX));
+  const ui = buildModerationLogInteraction(viewId, fixture);
+  const consumed = await maybeHandleModerationLogInteraction(ui.interaction, { now });
+
+  assert.equal(consumed, true);
+  assert.equal(ui.replies.length, 1);
+  const description = ui.replies[0].embeds[0].data.description;
+  assert.match(description, /User Message Context/i);
+  assert.match(description, /selling ue for 1 bucks/i);
+  assert.match(description, /visible still here/i);
+});
+
+test("staff can revert a moderation timeout from the log button", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling ue for 1 bucks");
+  const now = 20_000_000;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now
+  });
+  assert.equal(handled, true);
+
+  const actionId = getActionIdFromPanel(fixture.logs[0], MODLOG_REVERT_PREFIX);
+  const revertCustomId = `${MODLOG_REVERT_PREFIX}${actionId}`;
+  const ui = buildModerationLogInteraction(revertCustomId, fixture);
+  const consumed = await maybeHandleModerationLogInteraction(ui.interaction, {
+    sendLog: ui.sendLog,
+    now
+  });
+
+  assert.equal(consumed, true);
+  assert.equal(fixture.timeouts.length, 2);
+  assert.equal(fixture.timeouts[1].durationMs, null);
+  assert.equal(await getModerationAction(actionId, { now }), null);
+  assert.equal(ui.edits.length, 1);
+  const disabledButtons = ui.edits[0].components[0].toJSON().components;
+  assert.equal(disabledButtons[0].disabled, true);
+  assert.equal(disabledButtons[1].disabled, true);
+  assert.equal(ui.logPanels.length, 1);
+  assert.match(ui.logPanels[0].header, /Moderation Action Reverted/i);
+  assert.equal(fixture.dms.length, 2);
+  assert.match(fixture.dms[1].embeds[0].data.description, /reverted by staffuser/i);
+});
+
+test("non-staff cannot use moderation log controls", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling ue for 1 bucks");
+  const now = 25_000_000;
+
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now
+  });
+
+  const actionId = getActionIdFromPanel(fixture.logs[0], MODLOG_REVERT_PREFIX);
+  const ui = buildModerationLogInteraction(`${MODLOG_REVERT_PREFIX}${actionId}`, fixture, {
+    roleIds: [],
+    userId: "regular-clicker"
+  });
+  const consumed = await maybeHandleModerationLogInteraction(ui.interaction, { now });
+
+  assert.equal(consumed, true);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.ok(await getModerationAction(actionId, { now }));
+  assert.match(ui.replies[0].embeds[0].data.description, /only staff/i);
+  assert.equal(ui.logPanels.length, 0);
+});
+
+test("expired moderation action reviews are cleaned and buttons retire", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling ue for 1 bucks");
+  const now = 30_000_000;
+
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now
+  });
+
+  const actionId = getActionIdFromPanel(fixture.logs[0], MODLOG_REVERT_PREFIX);
+  assert.ok(await getModerationAction(actionId, { now }));
+
+  await cleanupExpiredModerationActions({ now: now + 12 * 60 * 60 * 1000 + 1 });
+  assert.equal(await getModerationAction(actionId, { now }), null);
+
+  const ui = buildModerationLogInteraction(`${MODLOG_VIEW_PREFIX}${actionId}`, fixture);
+  const consumed = await maybeHandleModerationLogInteraction(ui.interaction, {
+    now: now + 12 * 60 * 60 * 1000 + 1
+  });
+  assert.equal(consumed, true);
+  assert.equal(ui.edits.length, 1);
+  assert.match(ui.replies[0].embeds[0].data.description, /expired|resolved/i);
 });
 
 test("repeated bare scam-market words stay quiet without context", async () => {

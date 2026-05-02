@@ -1,5 +1,8 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
+const MODLOG_VIEW_PREFIX = "modlog:messages:";
+const MODLOG_REVERT_PREFIX = "modlog:revert:";
+
 function isValidHttpUrl(url) {
   try {
     const parsed = new URL(String(url || ""));
@@ -28,6 +31,34 @@ function buildLinkButtonRows(buttons = []) {
   ];
 }
 
+function buildModerationLogButtonRows(actionId, {
+  canRevert = true,
+  disabled = false
+} = {}) {
+  const id = String(actionId || "").trim();
+  if (!id) return [];
+
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${MODLOG_VIEW_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("\u{1F4DC}")
+        .setLabel("View User's Messages")
+        .setDisabled(Boolean(disabled)),
+      new ButtonBuilder()
+        .setCustomId(`${MODLOG_REVERT_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji("\u26A0\uFE0F")
+        .setLabel("Revert Action")
+        .setDisabled(Boolean(disabled) || !canRevert)
+    )
+  ];
+}
+
 module.exports = {
+  MODLOG_REVERT_PREFIX,
+  MODLOG_VIEW_PREFIX,
+  buildModerationLogButtonRows,
   buildLinkButtonRows
 };

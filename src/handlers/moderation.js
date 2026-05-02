@@ -19,16 +19,25 @@ const {
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_TIMEOUT_MS
 } = require("../config");
+const {
+  MODLOG_REVERT_PREFIX,
+  MODLOG_VIEW_PREFIX,
+  buildModerationLogButtonRows
+} = require("../components");
 const { formatDuration } = require("../duration");
-const { buildPanel, DANGER, WARN } = require("../embed");
+const { buildPanel, DANGER, INFO, SUCCESS, WARN } = require("../embed");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
-const { hasModerationBypassMessage } = require("../permissions");
+const { canUseEmojiCommands, hasModerationBypassMessage } = require("../permissions");
 const {
+  cleanupExpiredModerationActions,
+  deleteModerationAction,
+  getModerationAction,
   isModerationWhitelistedUser,
   listTrustedLinks,
   recordDailyModerationEvent,
+  recordModerationAction,
   recordScamDecisionAudit
 } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
@@ -83,6 +92,8 @@ const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?(?:selling|trading|buying
 const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|trading is|buying is|rules say|rule says|scammer|scamming is|report scam|avoid scam)\b/;
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/;
 const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone)\b/;
+const MODERATION_ACTION_REVIEW_MAX_MS = 12 * 60 * 60 * 1000;
+const MODERATION_CONTEXT_VIEW_LIMIT = 8;
 
 const SUSPICIOUS_PATTERNS = [
   {
@@ -1217,6 +1228,161 @@ function buildScamAiContext({ message, recentMessages, repliedToMessage }) {
   };
 }
 
+function formatDiscordTimestamp(timestamp, style = "R") {
+  const seconds = Math.floor(Math.max(0, Number(timestamp || 0)) / 1000);
+  return `<t:${seconds}:${style}>`;
+}
+
+function getModerationReviewExpiresAt(now = Date.now(), timeoutMs = 0) {
+  const actionMs = Math.max(0, Number(timeoutMs || 0));
+  const reviewMs = actionMs > 0
+    ? Math.min(actionMs, MODERATION_ACTION_REVIEW_MAX_MS)
+    : MODERATION_ACTION_REVIEW_MAX_MS;
+  return Math.max(now + 60_000, now + reviewMs);
+}
+
+function formatModerationActionReviewWindow(expiresAt) {
+  return `${formatDiscordTimestamp(expiresAt, "R")} (${formatDiscordTimestamp(expiresAt, "f")})`;
+}
+
+function formatSignalReasonsForStorage(input) {
+  const signals = Array.isArray(input) ? input : input ? [input] : [];
+  const reasons = [];
+  for (const signal of signals) {
+    if (Array.isArray(signal?.reasons) && signal.reasons.length) {
+      reasons.push(...signal.reasons);
+    } else if (signal?.reason) {
+      reasons.push(signal.reason);
+    }
+  }
+  return reasons;
+}
+
+function normalizeModerationActionContext(recentMessages, fallbackMessage, now = Date.now()) {
+  const entries = (recentMessages || [])
+    .map(normalizeRecentMessageEntry)
+    .filter((entry) => cleanText(entry.content));
+
+  if (!entries.length && fallbackMessage) {
+    entries.push({
+      at: now,
+      content: String(fallbackMessage.content || ""),
+      repliedToMessage: null
+    });
+  }
+
+  return entries.slice(-SELL_CONTEXT_MAX_MESSAGES).map((entry) => ({
+    at: Number(entry.at || now),
+    content: cleanText(entry.content),
+    repliedToMessage: cloneReplyContext(entry.repliedToMessage)
+  }));
+}
+
+async function createModerationActionReview(message, {
+  actionType,
+  actionLabel,
+  timeoutMs = 0,
+  timeoutApplied = false,
+  deleteApplied = false,
+  dmSent = false,
+  reasons = [],
+  recentMessages = [],
+  now = Date.now()
+} = {}) {
+  try {
+    await cleanupExpiredModerationActions({ now });
+  } catch (err) {
+    recordRuntimeEvent("warn", "moderation-action-cleanup", err?.message || err);
+  }
+
+  const expiresAt = getModerationReviewExpiresAt(now, timeoutApplied ? timeoutMs : 0);
+  const actionId = await recordModerationAction({
+    createdAt: now,
+    expiresAt,
+    guildId: message.guildId || message.guild?.id || null,
+    channelId: message.channelId || null,
+    messageId: message.id || null,
+    messageUrl: buildMessageUrl(message),
+    userId: message.author?.id || null,
+    username: message.member?.displayName || message.author?.username || null,
+    actionType,
+    actionLabel,
+    timeoutMs: timeoutApplied ? timeoutMs : 0,
+    timeoutApplied,
+    deleteApplied,
+    dmSent,
+    messageContent: message.content || "",
+    recentMessages: normalizeModerationActionContext(recentMessages, message, now),
+    reasons
+  });
+
+  return {
+    actionId,
+    expiresAt
+  };
+}
+
+function withModerationLogTools(panel, {
+  actionId,
+  expiresAt,
+  canRevert = false
+} = {}) {
+  if (!actionId) return panel;
+  const toolText = [
+    "## Staff Tools",
+    [
+      "Use the buttons below to view the captured context or revert the timeout while the review window is open.",
+      canRevert
+        ? `**Review Window:** closes ${formatModerationActionReviewWindow(expiresAt)}.`
+        : `**Review Window:** context stays available until ${formatModerationActionReviewWindow(expiresAt)}; no reversible timeout was stored.`,
+      "**Cleanup:** this short-lived review record is removed after revert, expiry, or daily cleanup."
+    ].join("\n")
+  ].join("\n");
+
+  return {
+    ...panel,
+    body: [panel.body, toolText].filter(Boolean).join("\n\n"),
+    components: buildModerationLogButtonRows(actionId, { canRevert })
+  };
+}
+
+async function sendModerationLogWithTools(sendLog, guild, message, panel, {
+  actionType,
+  actionLabel,
+  timeoutMs = 0,
+  timeoutApplied = false,
+  deleteApplied = false,
+  dmSent = false,
+  reasons = [],
+  recentMessages = [],
+  now = Date.now()
+} = {}) {
+  let logPanel = panel;
+
+  try {
+    const review = await createModerationActionReview(message, {
+      actionType,
+      actionLabel: actionLabel || panel.header,
+      timeoutMs,
+      timeoutApplied,
+      deleteApplied,
+      dmSent,
+      reasons,
+      recentMessages,
+      now
+    });
+    logPanel = withModerationLogTools(panel, {
+      actionId: review.actionId,
+      expiresAt: review.expiresAt,
+      canRevert: timeoutApplied
+    });
+  } catch (err) {
+    recordRuntimeEvent("warn", "moderation-action-record", err?.message || err);
+  }
+
+  return sendLog(guild, logPanel).catch(() => null);
+}
+
 function observeRaidMessage(message, now = Date.now()) {
   if (!message?.inGuild?.()) return null;
 
@@ -1571,7 +1737,8 @@ function mightContainLink(content) {
 async function handleBlockedLinkMessage(message, signal, {
   sendLog = sendLogPanel,
   timeoutMs = LINK_MODERATION_TIMEOUT_MS,
-  now = Date.now()
+  now = Date.now(),
+  recentMessages = []
 } = {}) {
   const action = signal.action || "timeout";
   const effectiveTimeoutMs = Number(signal.timeoutMs || 0) > 0 ? Number(signal.timeoutMs) : timeoutMs;
@@ -1604,14 +1771,25 @@ async function handleBlockedLinkMessage(message, signal, {
     now
   );
 
-  await sendLog(message.guild, buildBlockedLinkLogPanel({
+  const panel = buildBlockedLinkLogPanel({
     message,
     signal,
     deleteResult,
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs
-  })).catch(() => null);
+  });
+  await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
+    actionType: "blocked_link",
+    actionLabel: panel.header,
+    timeoutMs: effectiveTimeoutMs,
+    timeoutApplied: timeoutResult.applied,
+    deleteApplied: deleteResult.deleted,
+    dmSent,
+    reasons: formatSignalReasonsForStorage(signal),
+    recentMessages,
+    now
+  });
 
   return action !== "review";
 }
@@ -1620,7 +1798,8 @@ async function handleSellingMessage(message, signals, {
   sendLog = sendLogPanel,
   timeoutMs = SELLING_TIMEOUT_MS,
   now = Date.now(),
-  replyPublic = true
+  replyPublic = true,
+  recentMessages = []
 } = {}) {
   const state = rememberSellingMessage(message, signals, now);
   const effectiveTimeoutMs = Number(state.durationMs || 0) > 0 ? Number(state.durationMs) : timeoutMs;
@@ -1652,7 +1831,7 @@ async function handleSellingMessage(message, signals, {
   }
 
   await recordModerationStat(state.action === "timeout" ? "selling_timeout" : "selling_alert", now);
-  await sendLog(message.guild, buildSellingLogPanel({
+  const panel = buildSellingLogPanel({
     message,
     signals,
     state,
@@ -1660,7 +1839,18 @@ async function handleSellingMessage(message, signals, {
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs
-  })).catch(() => null);
+  });
+  await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
+    actionType: "scam_trade",
+    actionLabel: panel.header,
+    timeoutMs: effectiveTimeoutMs,
+    timeoutApplied: timeoutResult.applied,
+    deleteApplied: deleteResult.deleted,
+    dmSent,
+    reasons: formatSignalReasonsForStorage(signals),
+    recentMessages,
+    now
+  });
 
   return {
     ...state,
@@ -1802,7 +1992,8 @@ async function handleSuspiciousMessage(message, signals, {
   sendLog = sendLogPanel,
   timeoutMs = SUSPICIOUS_TIMEOUT_MS,
   highConfidenceTimeoutMs = SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
-  now = Date.now()
+  now = Date.now(),
+  recentMessages = []
 } = {}) {
   const state = rememberSuspiciousMessage(message, signals, now);
   const effectiveTimeoutMs = state.highConfidence ? highConfidenceTimeoutMs : timeoutMs;
@@ -1852,14 +2043,25 @@ async function handleSuspiciousMessage(message, signals, {
     now
   );
 
-  await sendLog(message.guild, buildSuspiciousLogPanel({
+  const panel = buildSuspiciousLogPanel({
     message,
     signals,
     state,
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs
-  })).catch(() => null);
+  });
+  await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
+    actionType: "suspicious",
+    actionLabel: panel.header,
+    timeoutMs: effectiveTimeoutMs,
+    timeoutApplied: timeoutResult.applied,
+    deleteApplied: false,
+    dmSent,
+    reasons: formatSignalReasonsForStorage(signals),
+    recentMessages,
+    now
+  });
 
   return {
     ...state,
@@ -1901,7 +2103,11 @@ async function maybeHandleModerationWatch(message, {
         posterContext: getPosterLinkContext(message, now)
       });
       if (blockedLinkSignal) {
-        const linkHandled = await handleBlockedLinkMessage(message, blockedLinkSignal, { sendLog, now });
+        const linkHandled = await handleBlockedLinkMessage(message, blockedLinkSignal, {
+          sendLog,
+          now,
+          recentMessages: recentMessageEntries
+        });
         if (linkHandled) {
           clearRecentUserMessagesFor(message);
           return true;
@@ -1939,7 +2145,8 @@ async function maybeHandleModerationWatch(message, {
       const state = await handleSellingMessage(message, confirmedSellingSignals, {
         sendLog,
         now,
-        replyPublic: !suspiciousSignals.length
+        replyPublic: !suspiciousSignals.length,
+        recentMessages: recentMessageEntries
       });
       clearRecentUserMessagesFor(message);
       publicReplySent = publicReplySent || state.publicReplySent;
@@ -1960,7 +2167,11 @@ async function maybeHandleModerationWatch(message, {
     }
 
     if (suspiciousSignals.length) {
-      const state = await handleSuspiciousMessage(message, suspiciousSignals, { sendLog, now });
+      const state = await handleSuspiciousMessage(message, suspiciousSignals, {
+        sendLog,
+        now,
+        recentMessages: recentMessageEntries
+      });
       clearRecentUserMessagesFor(message);
       publicReplySent = publicReplySent || state.publicReplySent;
     }
@@ -1988,6 +2199,305 @@ async function maybeHandleModerationWatch(message, {
   return false;
 }
 
+function parseModerationLogInteraction(customId) {
+  const raw = String(customId || "");
+  if (raw.startsWith(MODLOG_VIEW_PREFIX)) {
+    return {
+      type: "view",
+      actionId: raw.slice(MODLOG_VIEW_PREFIX.length)
+    };
+  }
+  if (raw.startsWith(MODLOG_REVERT_PREFIX)) {
+    return {
+      type: "revert",
+      actionId: raw.slice(MODLOG_REVERT_PREFIX.length)
+    };
+  }
+  return null;
+}
+
+function canUseModerationLogTools(interaction) {
+  return canUseEmojiCommands({
+    author: interaction?.user,
+    member: interaction?.member
+  });
+}
+
+function buildInteractionPayload(panel, { ephemeral = true } = {}) {
+  const payload = {
+    embeds: [buildPanel(panel)],
+    allowedMentions: { parse: [] }
+  };
+  if (ephemeral) payload.ephemeral = true;
+  return payload;
+}
+
+async function replyToModerationLogInteraction(interaction, panel) {
+  if (interaction?.deferred || interaction?.replied) {
+    await interaction.editReply?.(buildInteractionPayload(panel, { ephemeral: false })).catch(() => null);
+    return true;
+  }
+  await interaction.reply?.(buildInteractionPayload(panel)).catch(() => null);
+  return true;
+}
+
+async function deferModerationLogInteraction(interaction) {
+  if (interaction?.deferred || interaction?.replied || !interaction?.deferReply) return false;
+  await interaction.deferReply({ ephemeral: true }).catch(() => null);
+  return true;
+}
+
+async function disableModerationLogButtons(interaction, actionId) {
+  await interaction?.message?.edit?.({
+    components: buildModerationLogButtonRows(actionId, {
+      canRevert: false,
+      disabled: true
+    })
+  }).catch(() => null);
+}
+
+async function resolveActionChannel(guild, channelId) {
+  if (!guild?.channels || !channelId) return null;
+  const cached = guild.channels.cache?.get?.(channelId);
+  if (cached) return cached;
+  if (typeof guild.channels.fetch === "function") {
+    return guild.channels.fetch(channelId).catch(() => null);
+  }
+  return null;
+}
+
+function asMessageArray(messages) {
+  if (!messages) return [];
+  if (Array.isArray(messages)) return messages;
+  if (typeof messages.values === "function") return [...messages.values()];
+  if (messages.cache && typeof messages.cache.values === "function") return [...messages.cache.values()];
+  return [];
+}
+
+async function fetchVisibleUserMessages(guild, action) {
+  const channel = await resolveActionChannel(guild, action.channelId);
+  if (!channel?.messages?.fetch) return [];
+  const fetched = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  return asMessageArray(fetched)
+    .filter((entry) => entry?.author?.id === action.userId)
+    .sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0))
+    .slice(-MODERATION_CONTEXT_VIEW_LIMIT);
+}
+
+function formatCapturedActionMessages(action) {
+  const entries = Array.isArray(action?.recentMessages) ? action.recentMessages.slice(-SELL_CONTEXT_MAX_MESSAGES) : [];
+  if (!entries.length) return "none captured";
+
+  return entries.map((entry, index) => {
+    const when = entry.at ? formatDiscordTimestamp(entry.at, "R") : "captured";
+    const reply = entry.repliedToMessage?.content
+      ? `\n  reply context: ${entry.repliedToMessage.authorLabel || "other user"} said "${trimExcerpt(entry.repliedToMessage.content, 130)}"`
+      : "";
+    return `${index + 1}. ${when} - ${trimExcerpt(entry.content, 170)}${reply}`;
+  }).join("\n");
+}
+
+function formatVisibleActionMessages(messages) {
+  if (!messages.length) return "no visible recent messages found in that channel";
+  return messages.map((entry, index) => {
+    const when = entry.createdTimestamp ? formatDiscordTimestamp(entry.createdTimestamp, "R") : "recent";
+    const jump = entry.url ? ` [jump](${entry.url})` : "";
+    return `${index + 1}. ${when}${jump} - ${trimExcerpt(entry.content || "(no text)", 170)}`;
+  }).join("\n");
+}
+
+function buildActionMessagesPanel(action, visibleMessages) {
+  return {
+    header: "User Message Context",
+    body: [
+      "here is the captured moderation context plus any recent visible messages still fetchable from the channel",
+      `**User:** ${action.userId ? `<@${action.userId}>` : action.username || "unknown"}`,
+      action.channelId ? `**Channel:** <#${action.channelId}>` : null,
+      `**Original Action:** ${action.actionLabel}`,
+      `**Review Window:** closes ${formatModerationActionReviewWindow(action.expiresAt)}`,
+      action.messageUrl ? `**Original Jump:** [Open log trigger](${action.messageUrl})` : null,
+      `**Stored Trigger:** ${trimExcerpt(action.messageContent || "(no text)", 220)}`,
+      `**Captured Last ${SELL_CONTEXT_MAX_MESSAGES}:**\n${formatCapturedActionMessages(action)}`,
+      `**Visible Recent Messages:**\n${formatVisibleActionMessages(visibleMessages)}`
+    ].filter(Boolean).join("\n\n"),
+    color: INFO
+  };
+}
+
+function buildModerationActionExpiredPanel() {
+  return {
+    header: "Review Window Closed",
+    body: "that log review record expired or was already resolved, so the buttons have been retired",
+    color: WARN
+  };
+}
+
+async function resolveActionMember(guild, userId) {
+  if (!guild?.members || !userId) return null;
+  const cached = guild.members.cache?.get?.(userId);
+  if (cached) return cached;
+  if (typeof guild.members.fetch === "function") {
+    return guild.members.fetch(userId).catch(() => null);
+  }
+  return null;
+}
+
+async function resolveActionUser(interaction, action, member) {
+  if (member?.send || member?.user?.send) return member.user || member;
+  if (interaction?.client?.users?.fetch && action.userId) {
+    return interaction.client.users.fetch(action.userId).catch(() => null);
+  }
+  return null;
+}
+
+function buildRevertUserPayload({ action, actor }) {
+  return {
+    embeds: [
+      buildPanel({
+        header: "Action Reverted",
+        body: [
+          `your **${action.actionLabel}** was reverted by ${actor?.username || actor?.tag || "staff"}.`,
+          "sorry about that; staff reviewed the log and undid the timeout.",
+          action.channelId ? `**Channel:** <#${action.channelId}>` : null
+        ].filter(Boolean).join("\n\n"),
+        color: SUCCESS
+      })
+    ],
+    allowedMentions: { parse: [] }
+  };
+}
+
+function buildRevertLogPanel({ action, actor, dmSent }) {
+  return {
+    header: "Moderation Action Reverted",
+    body: [
+      "staff reverted a moderation timeout from the log controls",
+      `**User:** ${action.userId ? `<@${action.userId}>` : action.username || "unknown"}`,
+      `**Reverted By:** ${actor?.id ? `<@${actor.id}>` : actor?.username || "staff"}`,
+      action.channelId ? `**Channel:** <#${action.channelId}>` : null,
+      `**Original Action:** ${action.actionLabel}`,
+      `**Original Timeout:** ${formatDuration(action.timeoutMs || 0)}`,
+      action.messageUrl ? `**Original Jump:** [Open trigger](${action.messageUrl})` : null,
+      `**User DM:** ${dmSent ? "sent" : "not sent"}`,
+      "**Cleanup:** review record removed from SQLite"
+    ].filter(Boolean).join("\n\n"),
+    color: SUCCESS
+  };
+}
+
+async function handleModerationLogView(interaction, actionId, { now = Date.now() } = {}) {
+  const action = await getModerationAction(actionId, { now });
+  if (!action) {
+    await disableModerationLogButtons(interaction, actionId);
+    await replyToModerationLogInteraction(interaction, buildModerationActionExpiredPanel());
+    return true;
+  }
+
+  const visibleMessages = await fetchVisibleUserMessages(interaction.guild, action);
+  await replyToModerationLogInteraction(interaction, buildActionMessagesPanel(action, visibleMessages));
+  return true;
+}
+
+async function handleModerationLogRevert(interaction, actionId, {
+  sendLog = sendLogPanel,
+  now = Date.now()
+} = {}) {
+  await deferModerationLogInteraction(interaction);
+  const action = await getModerationAction(actionId, { now });
+  if (!action) {
+    await disableModerationLogButtons(interaction, actionId);
+    await replyToModerationLogInteraction(interaction, buildModerationActionExpiredPanel());
+    return true;
+  }
+
+  if (!action.timeoutApplied) {
+    await replyToModerationLogInteraction(interaction, {
+      header: "Nothing Reversible Stored",
+      body: "this log has context to review, but no active timeout was stored. Deleted messages cannot be restored from Discord.",
+      color: WARN
+    });
+    return true;
+  }
+
+  const member = await resolveActionMember(interaction.guild, action.userId);
+  if (!member?.timeout) {
+    await replyToModerationLogInteraction(interaction, {
+      header: "Could Not Revert",
+      body: "i could not fetch that member or clear their timeout. staff may need to check Discord manually.",
+      color: DANGER
+    });
+    return true;
+  }
+
+  try {
+    await member.timeout(null, `moderation action reverted by ${interaction.user?.tag || interaction.user?.id || "staff"}`);
+  } catch (err) {
+    await replyToModerationLogInteraction(interaction, {
+      header: "Could Not Revert",
+      body: `Discord refused the timeout clear: ${err?.message || err}`,
+      color: DANGER
+    });
+    return true;
+  }
+
+  const target = await resolveActionUser(interaction, action, member);
+  const dmSent = await safeSend(target, buildRevertUserPayload({
+    action,
+    actor: interaction.user
+  }));
+
+  await deleteModerationAction(action.id);
+  await disableModerationLogButtons(interaction, action.id);
+  await sendLog(interaction.guild, buildRevertLogPanel({
+    action,
+    actor: interaction.user,
+    dmSent
+  })).catch(() => null);
+
+  await replyToModerationLogInteraction(interaction, {
+    header: "Action Reverted",
+    body: [
+      `timeout cleared for ${action.userId ? `<@${action.userId}>` : action.username || "that user"}`,
+      `**User DM:** ${dmSent ? "sent" : "not sent"}`,
+      "**SQLite:** review record deleted"
+    ].join("\n"),
+    color: SUCCESS
+  });
+  return true;
+}
+
+async function maybeHandleModerationLogInteraction(interaction, deps = {}) {
+  if (!interaction?.isButton?.()) return false;
+  const parsed = parseModerationLogInteraction(interaction.customId);
+  if (!parsed?.actionId) return false;
+
+  if (!interaction.inGuild?.()) {
+    await replyToModerationLogInteraction(interaction, {
+      header: "Server Only",
+      body: "these moderation log tools only work inside the Kicia server log channel",
+      color: WARN
+    });
+    return true;
+  }
+
+  if (!canUseModerationLogTools(interaction)) {
+    await replyToModerationLogInteraction(interaction, {
+      header: "Staff Tools Locked",
+      body: "only staff and above can use log review controls",
+      color: WARN
+    });
+    return true;
+  }
+
+  if (parsed.type === "view") {
+    return handleModerationLogView(interaction, parsed.actionId, deps);
+  }
+  if (parsed.type === "revert") {
+    return handleModerationLogRevert(interaction, parsed.actionId, deps);
+  }
+  return false;
+}
+
 function resetModerationState() {
   raidBuckets.clear();
   lastRaidAlertAt.clear();
@@ -2008,6 +2518,7 @@ module.exports = {
   getSellingConfidenceTimeoutMs,
   getSellingConfidenceTimeoutTier,
   hasBypassPermission,
+  maybeHandleModerationLogInteraction,
   observeRaidMessage,
   resetModerationState,
   maybeHandleModerationWatch

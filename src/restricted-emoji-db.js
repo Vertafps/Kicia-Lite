@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const initSqlJs = require("sql.js");
 const { DEFAULT_EMOJI_TIMEOUT_MS } = require("./config");
 const { clampDurationMs } = require("./duration");
@@ -240,7 +241,35 @@ function createSchema(db) {
 
     CREATE INDEX IF NOT EXISTS scam_decision_audit_created_idx
       ON scam_decision_audit (created_at DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS moderation_actions (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      guild_id TEXT,
+      channel_id TEXT,
+      message_id TEXT,
+      message_url TEXT,
+      user_id TEXT,
+      username TEXT,
+      action_type TEXT NOT NULL,
+      action_label TEXT NOT NULL,
+      timeout_ms INTEGER NOT NULL DEFAULT 0,
+      timeout_applied INTEGER NOT NULL DEFAULT 0,
+      delete_applied INTEGER NOT NULL DEFAULT 0,
+      dm_sent INTEGER NOT NULL DEFAULT 0,
+      message_content TEXT,
+      recent_messages_json TEXT,
+      reasons_json TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS moderation_actions_expires_idx
+      ON moderation_actions (expires_at);
   `);
+
+  try {
+    db.exec("ALTER TABLE moderation_actions ADD COLUMN recent_messages_json TEXT;");
+  } catch {}
 }
 
 function getScalarValue(db, sql, params = []) {
@@ -413,6 +442,43 @@ function mapScamDecisionAuditRow(row) {
     messageContent: row.message_content ? String(row.message_content) : "",
     replyContent: row.reply_content ? String(row.reply_content) : "",
     recentMessages
+  };
+}
+
+function mapModerationActionRow(row) {
+  let reasons = [];
+  let recentMessages = [];
+  try {
+    reasons = JSON.parse(row.reasons_json || "[]");
+  } catch {
+    reasons = [];
+  }
+  try {
+    const parsed = JSON.parse(row.recent_messages_json || "[]");
+    recentMessages = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    recentMessages = [];
+  }
+
+  return {
+    id: row.id,
+    createdAt: Number(row.created_at || 0),
+    expiresAt: Number(row.expires_at || 0),
+    guildId: row.guild_id || null,
+    channelId: row.channel_id || null,
+    messageId: row.message_id || null,
+    messageUrl: row.message_url || null,
+    userId: row.user_id || null,
+    username: row.username || null,
+    actionType: row.action_type,
+    actionLabel: row.action_label,
+    timeoutMs: Number(row.timeout_ms || 0),
+    timeoutApplied: Boolean(row.timeout_applied),
+    deleteApplied: Boolean(row.delete_applied),
+    dmSent: Boolean(row.dm_sent),
+    messageContent: row.message_content || "",
+    recentMessages,
+    reasons: Array.isArray(reasons) ? reasons : []
   };
 }
 
@@ -987,6 +1053,119 @@ async function clearScamDecisionAuditForTests() {
   return clearScamDecisionAudit();
 }
 
+function buildModerationActionId() {
+  return crypto.randomBytes(9).toString("base64url");
+}
+
+async function recordModerationAction(record = {}) {
+  const db = await getDatabase();
+  const now = Math.max(1, Math.round(Number(record.createdAt) || Date.now()));
+  const expiresAt = Math.max(now + 60_000, Math.round(Number(record.expiresAt) || (now + (12 * 60 * 60 * 1000))));
+  const id = String(record.id || buildModerationActionId());
+  const reasons = Array.isArray(record.reasons)
+    ? record.reasons.slice(0, 12).map((reason) => trimAuditText(reason, 260)).filter(Boolean)
+    : [];
+  const recentMessages = Array.isArray(record.recentMessages)
+    ? record.recentMessages.slice(-8).map((entry) => ({
+        at: Math.max(0, Math.round(Number(entry?.at) || 0)),
+        content: trimAuditText(entry?.content, 360),
+        repliedToMessage: entry?.repliedToMessage
+          ? {
+              authorLabel: trimAuditText(entry.repliedToMessage.authorLabel, 120) || "other user",
+              authorId: entry.repliedToMessage.authorId ? String(entry.repliedToMessage.authorId) : null,
+              content: trimAuditText(entry.repliedToMessage.content, 260)
+            }
+          : null
+      })).filter((entry) => entry.content)
+    : [];
+
+  db.run(
+    `
+      INSERT OR REPLACE INTO moderation_actions (
+        id,
+        created_at,
+        expires_at,
+        guild_id,
+        channel_id,
+        message_id,
+        message_url,
+        user_id,
+        username,
+        action_type,
+        action_label,
+        timeout_ms,
+        timeout_applied,
+        delete_applied,
+        dm_sent,
+        message_content,
+        recent_messages_json,
+        reasons_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      id,
+      now,
+      expiresAt,
+      record.guildId ? String(record.guildId) : null,
+      record.channelId ? String(record.channelId) : null,
+      record.messageId ? String(record.messageId) : null,
+      record.messageUrl ? trimAuditText(record.messageUrl, 300) : null,
+      record.userId ? String(record.userId) : null,
+      record.username ? trimAuditText(record.username, 120) : null,
+      trimAuditText(record.actionType || "moderation", 80) || "moderation",
+      trimAuditText(record.actionLabel || "Moderation Action", 120) || "Moderation Action",
+      Math.max(0, Math.round(Number(record.timeoutMs) || 0)),
+      record.timeoutApplied ? 1 : 0,
+      record.deleteApplied ? 1 : 0,
+      record.dmSent ? 1 : 0,
+      trimAuditText(record.messageContent, 900) || null,
+      JSON.stringify(recentMessages),
+      JSON.stringify(reasons)
+    ]
+  );
+  schedulePersist(db);
+  return id;
+}
+
+async function getModerationAction(actionId, { now = Date.now(), cleanupExpired = true } = {}) {
+  const id = String(actionId || "").trim();
+  if (!id) return null;
+  const db = await getDatabase();
+  const row = getRows(
+    db,
+    "SELECT * FROM moderation_actions WHERE id = ? LIMIT 1",
+    [id]
+  )[0];
+  if (!row) return null;
+
+  const action = mapModerationActionRow(row);
+  if (cleanupExpired && action.expiresAt <= now) {
+    db.run("DELETE FROM moderation_actions WHERE id = ?", [id]);
+    schedulePersist(db);
+    return null;
+  }
+
+  return action;
+}
+
+async function deleteModerationAction(actionId) {
+  const id = String(actionId || "").trim();
+  if (!id) return false;
+  const db = await getDatabase();
+  db.run("DELETE FROM moderation_actions WHERE id = ?", [id]);
+  schedulePersist(db);
+  return true;
+}
+
+async function cleanupExpiredModerationActions({ now = Date.now() } = {}) {
+  const db = await getDatabase();
+  db.run("DELETE FROM moderation_actions WHERE expires_at <= ?", [
+    Math.max(1, Math.round(Number(now) || Date.now()))
+  ]);
+  schedulePersist(db);
+  return true;
+}
+
 async function recordDailyTrackedMessage({
   userId,
   username,
@@ -1230,7 +1409,8 @@ async function getRestrictedEmojiDatabaseSnapshot() {
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
       dailyStaff: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_staff_message_stats") || 0),
       dailyModeration: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_moderation_stats") || 0),
-      scamDecisionAudit: Number(getScalarValue(db, "SELECT COUNT(*) FROM scam_decision_audit") || 0)
+      scamDecisionAudit: Number(getScalarValue(db, "SELECT COUNT(*) FROM scam_decision_audit") || 0),
+      moderationActions: Number(getScalarValue(db, "SELECT COUNT(*) FROM moderation_actions") || 0)
     }
   };
 }
@@ -1280,6 +1460,10 @@ module.exports = {
   listScamDecisionAudit,
   clearScamDecisionAudit,
   clearScamDecisionAuditForTests,
+  cleanupExpiredModerationActions,
+  deleteModerationAction,
+  getModerationAction,
+  recordModerationAction,
   recordDailyTrackedMessage,
   recordDailyModerationEvent,
   getDailyStatsSnapshot,

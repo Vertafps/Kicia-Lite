@@ -21,6 +21,7 @@ async function sendLogPanel(guild, panel) {
 
   await channel.send({
     embeds: [buildPanel(panel)],
+    components: panel.components || [],
     allowedMentions: { parse: [] }
   });
   return true;

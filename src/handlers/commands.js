@@ -262,6 +262,7 @@ async function handleDatabaseCommand(message, {
       `**Daily Staff Rows:** ${snapshot.tableCounts.dailyStaff}`,
       `**Daily Moderation Rows:** ${snapshot.tableCounts.dailyModeration || 0}`,
       `**Scam Audit Rows:** ${snapshot.tableCounts.scamDecisionAudit || 0}`,
+      `**Open Action Reviews:** ${snapshot.tableCounts.moderationActions || 0}`,
       "**Restricted Reaction Action:** remove reaction + DM warning",
       `**Window Start:** ${snapshot.dailyStats.windowStartedAt ? `<t:${Math.floor(snapshot.dailyStats.windowStartedAt / 1000)}:f>` : "unset"}`,
       `**Restricted Emojis:** ${formatEmojiList(snapshot.emojis)}`,

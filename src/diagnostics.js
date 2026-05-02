@@ -310,6 +310,9 @@ async function buildSecuritySection(message, channelLockRoleId) {
       `**Daily Tracking DB:** users ${emojiDb.tableCounts.dailyUsers} | channels ${emojiDb.tableCounts.dailyChannels} | staff ${emojiDb.tableCounts.dailyStaff}`
     );
     securityLines.push(
+      `**Moderation Review DB:** ${emojiDb.tableCounts.moderationActions || 0} open action reviews | auto-cleaned after revert, expiry, and daily cleanup`
+    );
+    securityLines.push(
       ...buildIntelligenceGuardLines()
     );
     securityLines.push(

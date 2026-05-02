@@ -10,12 +10,18 @@ const { fetchKb } = require("./kb");
 const { refreshScamPulseFeeds } = require("./link-policy");
 const { sendLogPanel } = require("./log-channel");
 const { maybeHandleControlCommand } = require("./handlers/commands");
-const { maybeHandleModerationWatch } = require("./handlers/moderation");
+const {
+  maybeHandleModerationLogInteraction,
+  maybeHandleModerationWatch
+} = require("./handlers/moderation");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
 const { maybeHandleStatusCommand } = require("./handlers/status");
-const { flushRestrictedEmojiDatabaseNow } = require("./restricted-emoji-db");
+const {
+  cleanupExpiredModerationActions,
+  flushRestrictedEmojiDatabaseNow
+} = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { safeReply } = require("./utils/respond");
 
@@ -138,6 +144,15 @@ async function refreshAndReportScamPulse(readyClient, { initial = false } = {}) 
   }
 }
 
+async function cleanupModerationActionReviews() {
+  try {
+    await cleanupExpiredModerationActions();
+  } catch (err) {
+    console.warn("Moderation action cleanup failed:", err.message);
+    recordRuntimeEvent("warn", "moderation-action-cleanup", err?.message || err);
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready as ${readyClient.user.tag}`);
   readyClient.user.setActivity(BOT_PRESENCE_TEXT, {
@@ -161,6 +176,12 @@ client.once(Events.ClientReady, async (readyClient) => {
     refreshAndReportScamPulse(readyClient).catch(() => null);
   }, 60 * 60 * 1000);
   pulseTimer.unref?.();
+
+  await cleanupModerationActionReviews();
+  const moderationActionCleanupTimer = setInterval(() => {
+    cleanupModerationActionReviews().catch(() => null);
+  }, 60 * 60 * 1000);
+  moderationActionCleanupTimer.unref?.();
 
   try {
     const statsSchedule = await startDailyStatsScheduler(readyClient);
@@ -279,6 +300,12 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
   await runGuarded("reaction-handler", async () => {
     await maybeHandleRestrictedReactionAdd(reaction, user);
+  });
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  await runGuarded("interaction-handler", async () => {
+    if (await maybeHandleModerationLogInteraction(interaction)) return;
   });
 });
 

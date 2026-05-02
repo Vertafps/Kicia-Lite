@@ -10,6 +10,7 @@ const { buildPanel, INFO, SUCCESS, WARN } = require("./embed");
 const { isStaffOnlyTrackedMember } = require("./permissions");
 const {
   cleanupRestrictedEmojiDatabaseTempFiles,
+  cleanupExpiredModerationActions,
   clearScamDecisionAudit,
   clearDailyStatsTracking,
   ensureDailyStatsWindowStartedAt,
@@ -374,6 +375,7 @@ async function trackDailyStatsMessage(message, { now = Date.now() } = {}) {
 async function runPostDailyReportCleanup() {
   const result = {
     scamAuditCleared: false,
+    moderationActionsCleaned: false,
     tempFiles: null
   };
 
@@ -382,6 +384,13 @@ async function runPostDailyReportCleanup() {
     result.scamAuditCleared = true;
   } catch (err) {
     recordRuntimeEvent("warn", "daily-scam-audit-clear", err?.message || err);
+  }
+
+  try {
+    await cleanupExpiredModerationActions();
+    result.moderationActionsCleaned = true;
+  } catch (err) {
+    recordRuntimeEvent("warn", "daily-moderation-action-cleanup", err?.message || err);
   }
 
   try {

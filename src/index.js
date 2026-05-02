@@ -7,6 +7,7 @@ const { isNoResponseMessage } = require("./channel-policy");
 const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-stats");
 const { buildPanel, DANGER } = require("./embed");
 const { fetchKb } = require("./kb");
+const { refreshScamPulseFeeds } = require("./link-policy");
 const { maybeHandleControlCommand } = require("./handlers/commands");
 const { maybeHandleModerationWatch } = require("./handlers/moderation");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
@@ -100,6 +101,24 @@ client.once(Events.ClientReady, async (readyClient) => {
     fetchKb().catch((err) => console.warn("Scheduled KB refresh failed:", err.message));
   }, 10 * 60 * 1000);
   timer.unref?.();
+
+  try {
+    const pulse = await refreshScamPulseFeeds();
+    console.log(`Scam Pulse primed: ${pulse.domains} domains, ${pulse.urls} URLs`);
+  } catch (err) {
+    console.warn("Initial Scam Pulse refresh failed:", err.message);
+    recordRuntimeEvent("warn", "scam-pulse-refresh", err?.message || err);
+  }
+
+  const pulseTimer = setInterval(() => {
+    refreshScamPulseFeeds()
+      .then((pulse) => console.log(`Scam Pulse refreshed: ${pulse.domains} domains, ${pulse.urls} URLs`))
+      .catch((err) => {
+        console.warn("Scheduled Scam Pulse refresh failed:", err.message);
+        recordRuntimeEvent("warn", "scam-pulse-refresh", err?.message || err);
+      });
+  }, 60 * 60 * 1000);
+  pulseTimer.unref?.();
 
   try {
     const statsSchedule = await startDailyStatsScheduler(readyClient);

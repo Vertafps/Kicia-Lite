@@ -5,6 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildIntelligenceGuardLines,
   buildJarvisProgressBody,
   buildModerationGuardLines,
   pickJarvisVisibleMs,
@@ -41,13 +42,23 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   assert.doesNotMatch(body, /disable-security/i);
 });
 
+test("jarvis intelligence guard shows scam pulse coverage", () => {
+  const body = buildIntelligenceGuardLines().join("\n");
+
+  assert.match(body, /Scam Pulse/i);
+  assert.match(body, /FishFish URL\/domain checks enabled/i);
+  assert.match(body, /timeout 7d/i);
+  assert.match(body, /PhishTank/i);
+});
+
 test("jarvis progress body is clean and current", () => {
   const body = buildJarvisProgressBody(2, "refreshing KB");
 
-  assert.match(body, /JARVIS diagnostic sweep/i);
-  assert.match(body, /Visible sweep target: 15s-30s/i);
-  assert.match(body, /\[done\] Wake Core/i);
-  assert.match(body, /\[now \] KB Cache/i);
+  assert.match(body, /JARVIS \/\/ Wizard of Kicia systems sweep/i);
+  assert.match(body, /window\s+15s-30s/i);
+  assert.match(body, /\[OK  \] Wake Core/i);
+  assert.match(body, /\[RUN \] KB Cache/i);
+  assert.match(body, /matrix\s+runtime \| docs \| moderation \| security \| intel/i);
   assert.doesNotMatch(body, /under 15 seconds/i);
   assert.doesNotMatch(body, /Core heat/i);
 });

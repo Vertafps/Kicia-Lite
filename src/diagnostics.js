@@ -23,12 +23,16 @@ const {
   GEMINI_SCAM_MIN_INTERVAL_MS,
   GEMINI_SCAM_MODEL,
   GEMINI_SCAM_TIMEOUT_MS,
+  FISHFISH_API_BASE_URL,
   GOOGLE_SAFE_BROWSING_API_KEY,
   GOOGLE_WEB_RISK_API_KEY,
+  PHISHTANK_API_KEY,
+  SCAM_PULSE_TIMEOUT_MS,
   VIRUSTOTAL_API_KEY
 } = require("./config");
 const { formatDuration } = require("./duration");
 const { SUCCESS, WARN } = require("./embed");
+const { getScamPulseSnapshot } = require("./link-policy");
 const { getRestrictedEmojiDatabaseSnapshot } = require("./restricted-emoji-db");
 const { getRuntimeHealthSnapshot } = require("./runtime-health");
 const { getRuntimeStatus } = require("./runtime-status");
@@ -106,26 +110,32 @@ function describeLockState(channel, roleId) {
 
 function buildJarvisProgressBody(stepIndex, note) {
   const completed = Math.max(0, Math.min(JARVIS_STEPS.length, stepIndex));
-  const progressWidth = 18;
+  const progressWidth = 24;
   const percent = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * 100);
   const filled = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * progressWidth);
-  const progressBar = `${"=".repeat(filled)}${"-".repeat(Math.max(0, progressWidth - filled))}`;
+  const progressBar = `${"#".repeat(filled)}${".".repeat(Math.max(0, progressWidth - filled))}`;
+  const activeStep = JARVIS_STEPS[Math.min(stepIndex, JARVIS_STEPS.length - 1)] || "Starting";
+  const phaseIndex = Math.min(JARVIS_STEPS.length, Math.max(1, stepIndex + 1));
   const lines = [
-    "JARVIS diagnostic sweep",
-    `Progress: [${progressBar}] ${percent}%`,
-    `Visible sweep target: ${formatDuration(JARVIS_MIN_VISIBLE_MS)}-${formatDuration(JARVIS_MAX_VISIBLE_MS)}`,
+    "`JARVIS // Wizard of Kicia systems sweep`",
+    "```text",
+    `phase   ${String(phaseIndex).padStart(2, "0")}/${String(JARVIS_STEPS.length).padStart(2, "0")}  ${activeStep}`,
+    `scan    [${progressBar}] ${String(percent).padStart(3, " ")}%`,
+    `window  ${formatDuration(JARVIS_MIN_VISIBLE_MS)}-${formatDuration(JARVIS_MAX_VISIBLE_MS)}`,
+    "matrix  runtime | docs | moderation | security | intel",
     "",
     ...JARVIS_STEPS.map((step, index) => {
-      if (index < stepIndex) return `[done] ${step}`;
-      if (index === stepIndex) return `[now ] ${step}`;
-      return `[next] ${step}`;
+      if (index < stepIndex) return `[OK  ] ${step}`;
+      if (index === stepIndex) return `[RUN ] ${step}`;
+      return `[WAIT] ${step}`;
     })
   ];
 
   if (note) {
-    lines.push("", `Current: ${note}`);
+    lines.push("", `now    ${note}`);
   }
 
+  lines.push("```");
   return lines.join("\n");
 }
 
@@ -185,7 +195,12 @@ function buildModerationGuardLines() {
 }
 
 function buildIntelligenceGuardLines() {
+  const pulse = getScamPulseSnapshot();
+  const pulseCache = pulse.lastRefreshAt
+    ? `${pulse.domains} domains / ${pulse.urls} URLs cached`
+    : "cache pending";
   return [
+    `**Scam Pulse:** FishFish URL/domain checks enabled (${FISHFISH_API_BASE_URL}); ${pulseCache}; verified pulse hits timeout ${formatDuration(SCAM_PULSE_TIMEOUT_MS)}; PhishTank ${PHISHTANK_API_KEY ? "enabled" : "not configured"}`,
     `**Gemini Scam AI:** ${GEMINI_API_KEY ? `enabled (${GEMINI_SCAM_MODEL})` : "not configured"}`,
     `**Safe Browsing:** ${GOOGLE_SAFE_BROWSING_API_KEY ? "enabled" : "not configured"}`,
     `**Google Web Risk:** ${GOOGLE_WEB_RISK_API_KEY ? "enabled" : "not configured"}`,

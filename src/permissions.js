@@ -1,6 +1,7 @@
 const { PermissionFlagsBits } = require("discord.js");
 const {
   OWNER_USER_ID,
+  OWNER_USER_IDS,
   OWNER_ROLE_IDS,
   ADMIN_ROLE_IDS,
   MOD_ROLE_IDS,
@@ -29,7 +30,11 @@ function hasAnyPermission(member, permissions) {
 }
 
 function isKernelUserId(userId) {
-  return String(userId || "") === OWNER_USER_ID;
+  const normalized = String(userId || "");
+  const ownerUserIds = Array.isArray(OWNER_USER_IDS) && OWNER_USER_IDS.length
+    ? OWNER_USER_IDS
+    : [OWNER_USER_ID];
+  return ownerUserIds.includes(normalized);
 }
 
 function isKernelMessage(message) {

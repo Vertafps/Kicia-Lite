@@ -366,6 +366,14 @@ function buildLocalAuditResult(localResult) {
   };
 }
 
+function getConfirmedSignalConfidence(signal, verdictResult, fallback = 88) {
+  return Math.max(
+    Number(signal?.confidence || 0),
+    Number(verdictResult?.confidence || 0),
+    fallback
+  );
+}
+
 async function recordScamAudit(message, {
   action,
   handled,
@@ -1398,6 +1406,7 @@ function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
 
 function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult, dmSent, durationMs }) {
   const link = buildMessageUrl(message);
+  const isScamPulse = (signal.reasons || []).some((reason) => /FishFish|PhishTank|Scam Pulse/i.test(reason));
   const shownLinks = signal.blockedLinks
     .slice(0, 5)
     .map((entry) => `- ${entry.raw}`)
@@ -1405,8 +1414,10 @@ function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult
 
   return {
     header:
-      signal.action === "timeout"
-        ? timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert"
+      isScamPulse && signal.action === "timeout"
+        ? timeoutResult.applied ? "Scam Pulse Timeout" : "Scam Pulse Alert"
+        : signal.action === "timeout"
+          ? timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert"
         : signal.action === "warn"
           ? "Blocked Link Warning"
           : "Link Review",
@@ -1422,7 +1433,7 @@ function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult
         timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason
       } | dm ${dmSent ? "sent" : "not sent"}`,
       `**Threat:** ${signal.threatLevel} (${signal.confidence || 0}%)`,
-      `**Policy:** docs/trusted/gif/common-safe links pass; risky links escalate by threat`,
+      `**Policy:** docs/trusted/gif/common-safe links pass; risky links escalate by threat${isScamPulse ? "; Scam Pulse matches get the one-week timeout" : ""}`,
       `**Blocked Link Count:** ${signal.blockedCount}`,
       `**Why:**\n${formatBlockedLinkReasons(signal)}`,
       "**Blocked Link(s):**",
@@ -1544,17 +1555,18 @@ async function handleBlockedLinkMessage(message, signal, {
   now = Date.now()
 } = {}) {
   const action = signal.action || "timeout";
+  const effectiveTimeoutMs = Number(signal.timeoutMs || 0) > 0 ? Number(signal.timeoutMs) : timeoutMs;
   const deleteResult = action === "review"
     ? { deleted: false, reason: "not needed" }
     : await tryDeleteMessage(message);
   const timeoutResult = action === "timeout"
-    ? await tryTimeoutMessageMember(message.member, timeoutMs, "high-risk link")
+    ? await tryTimeoutMessageMember(message.member, effectiveTimeoutMs, "high-risk link")
     : { applied: false, reason: action === "warn" ? "warning only" : "not needed" };
   const dmSent = action === "timeout" || action === "warn"
     ? await safeSend(message.author, buildBlockedLinkUserPayload({
         message,
         signal,
-        durationMs: timeoutMs
+        durationMs: effectiveTimeoutMs
       }))
     : false;
 
@@ -1579,7 +1591,7 @@ async function handleBlockedLinkMessage(message, signal, {
     deleteResult,
     timeoutResult,
     dmSent,
-    durationMs: timeoutMs
+    durationMs: effectiveTimeoutMs
   })).catch(() => null);
 
   return action !== "review";
@@ -1656,7 +1668,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   if (localResult?.verdict === true && (localResult.confidence || 0) >= 92) {
     const confirmedSignals = signals.map((signal) => ({
       ...signal,
-      confidence: Math.max(signal.confidence || 0, 88),
+      confidence: getConfirmedSignalConfidence(signal, localVerdict),
       reason: `classifier-confirmed scam/trade intent: ${signal.reason}`,
       ai: localVerdict
     }));
@@ -1694,7 +1706,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   if (aiResult?.verdict === true) {
     const confirmedSignals = signals.map((signal) => ({
       ...signal,
-      confidence: Math.max(signal.confidence || 0, 88),
+      confidence: getConfirmedSignalConfidence(signal, aiResult),
       reason: `AI-confirmed scam/trade intent: ${signal.reason}`,
       ai: aiResult
     }));

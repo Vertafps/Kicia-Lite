@@ -1,10 +1,13 @@
 const { domainToASCII, domainToUnicode } = require("node:url");
 const {
   BRAND,
+  FISHFISH_API_BASE_URL,
   GOOGLE_SAFE_BROWSING_API_KEY,
   GOOGLE_WEB_RISK_API_KEY,
   LINK_EXPANSION_TIMEOUT_MS,
   LINK_THREAT_INTEL_TIMEOUT_MS,
+  PHISHTANK_API_KEY,
+  SCAM_PULSE_TIMEOUT_MS,
   TRUSTED_LINK_URLS,
   VIRUSTOTAL_API_KEY
 } = require("./config");
@@ -115,6 +118,14 @@ const RULE_CACHE = new WeakMap();
 const THREAT_INTEL_CACHE = new Map();
 const THREAT_INTEL_CACHE_MS = 10 * 60 * 1000;
 const SHORTENER_MAX_REDIRECTS = 4;
+const MALICIOUS_PULSE_CATEGORIES = new Set(["malware", "phishing"]);
+const SCAM_PULSE_CATEGORIES = ["phishing", "malware"];
+const SCAM_PULSE_FEED_CACHE = {
+  domains: new Map(),
+  urls: new Map(),
+  lastRefreshAt: 0,
+  lastError: null
+};
 
 function stripInvisibleUrlText(value) {
   return String(value || "")
@@ -778,6 +789,130 @@ function setCachedThreatIntel(service, url, value) {
   return value;
 }
 
+function buildFishFishEndpoint(kind, value = null, params = {}) {
+  const base = String(FISHFISH_API_BASE_URL || "").replace(/\/+$/g, "");
+  if (!base) return null;
+  const endpoint = new URL(`${base}/${kind}${value == null ? "" : `/${encodeURIComponent(value)}`}`);
+  for (const [key, paramValue] of Object.entries(params)) {
+    if (paramValue != null && String(paramValue).trim()) {
+      endpoint.searchParams.set(key, String(paramValue));
+    }
+  }
+  return endpoint.toString();
+}
+
+function normalizePulseDomain(value) {
+  return safeDomainToAscii(String(value || "").trim().toLowerCase().replace(/^www\./, "")).replace(/^www\./, "");
+}
+
+function buildPulseVerdict({ service, kind, value, category, description }) {
+  const normalizedCategory = String(category || "phishing").toLowerCase();
+  const details = description ? ` (${description})` : "";
+  return {
+    service,
+    action: "timeout",
+    confidence: normalizedCategory === "malware" ? 98 : 97,
+    timeoutMs: SCAM_PULSE_TIMEOUT_MS,
+    reason: `${service} marked ${kind}${value ? ` ${value}` : ""} as ${normalizedCategory}${details}`
+  };
+}
+
+function getLocalScamPulseVerdict(url) {
+  if (!url?.hostname) return null;
+
+  const domain = normalizePulseDomain(url.hostname);
+  const labels = domain.split(".").filter(Boolean);
+  for (let i = 0; i <= Math.max(0, labels.length - 2); i += 1) {
+    const candidate = labels.slice(i).join(".");
+    const domainVerdict = SCAM_PULSE_FEED_CACHE.domains.get(candidate);
+    if (domainVerdict) return domainVerdict;
+  }
+
+  const urlVerdict = SCAM_PULSE_FEED_CACHE.urls.get(url.key);
+  if (urlVerdict) return urlVerdict;
+
+  return null;
+}
+
+async function fetchFishFishList(kind, category, fetchFn = fetchWithTimeout) {
+  const endpoint = buildFishFishEndpoint(kind, null, { category });
+  if (!endpoint) return [];
+
+  const response = await fetchFn(
+    endpoint,
+    {
+      headers: {
+        "user-agent": "WizardOfKicia-ScamPulse/1.0"
+      }
+    },
+    LINK_THREAT_INTEL_TIMEOUT_MS
+  );
+  if (!response.ok) throw new Error(`FishFish ${kind}/${category} returned ${response.status}`);
+
+  const payload = await response.json().catch(() => []);
+  return Array.isArray(payload) ? payload : [];
+}
+
+async function refreshScamPulseFeeds({ fetchFn = fetchWithTimeout, now = Date.now() } = {}) {
+  const nextDomains = new Map();
+  const nextUrls = new Map();
+
+  try {
+    for (const category of SCAM_PULSE_CATEGORIES) {
+      const domains = await fetchFishFishList("domains", category, fetchFn);
+      for (const entry of domains) {
+        const domain = normalizePulseDomain(entry?.domain || entry?.name || entry);
+        if (!domain) continue;
+        nextDomains.set(domain, buildPulseVerdict({
+          service: "FishFish Scam Pulse",
+          kind: "domain",
+          value: domain,
+          category,
+          description: entry?.description || ""
+        }));
+      }
+
+      const urls = await fetchFishFishList("urls", category, fetchFn);
+      for (const entry of urls) {
+        const normalizedUrl = normalizeUrlCandidate(entry?.url || entry);
+        if (!normalizedUrl) continue;
+        nextUrls.set(normalizedUrl.key, buildPulseVerdict({
+          service: "FishFish Scam Pulse",
+          kind: "URL",
+          value: normalizedUrl.url,
+          category,
+          description: entry?.description || ""
+        }));
+      }
+    }
+
+    SCAM_PULSE_FEED_CACHE.domains = nextDomains;
+    SCAM_PULSE_FEED_CACHE.urls = nextUrls;
+    SCAM_PULSE_FEED_CACHE.lastRefreshAt = now;
+    SCAM_PULSE_FEED_CACHE.lastError = null;
+    return getScamPulseSnapshot();
+  } catch (err) {
+    SCAM_PULSE_FEED_CACHE.lastError = err?.message || String(err);
+    throw err;
+  }
+}
+
+function getScamPulseSnapshot() {
+  return {
+    domains: SCAM_PULSE_FEED_CACHE.domains.size,
+    urls: SCAM_PULSE_FEED_CACHE.urls.size,
+    lastRefreshAt: SCAM_PULSE_FEED_CACHE.lastRefreshAt,
+    lastError: SCAM_PULSE_FEED_CACHE.lastError
+  };
+}
+
+function resetScamPulseFeedsForTests() {
+  SCAM_PULSE_FEED_CACHE.domains = new Map();
+  SCAM_PULSE_FEED_CACHE.urls = new Map();
+  SCAM_PULSE_FEED_CACHE.lastRefreshAt = 0;
+  SCAM_PULSE_FEED_CACHE.lastError = null;
+}
+
 async function checkGoogleWebRisk(url) {
   if (!GOOGLE_WEB_RISK_API_KEY) return null;
   const cached = getCachedThreatIntel("webrisk", url);
@@ -914,9 +1049,118 @@ async function checkVirusTotalUrlReport(url) {
   }
 }
 
+function parseFishFishPayload(payload, kind) {
+  const category = String(payload?.category || "").toLowerCase();
+  if (!MALICIOUS_PULSE_CATEGORIES.has(category)) return null;
+
+  const value = payload?.url || payload?.domain || payload?.name || null;
+  return buildPulseVerdict({
+    service: "FishFish Scam Pulse",
+    kind,
+    value,
+    category,
+    description: payload?.description || ""
+  });
+}
+
+async function checkFishFishPath(serviceKey, endpoint, kind, cacheSubject) {
+  if (!endpoint) return null;
+  const cached = getCachedThreatIntel(serviceKey, cacheSubject);
+  if (cached !== undefined) return cached;
+
+  try {
+    const response = await fetchWithTimeout(
+      endpoint,
+      {
+        headers: {
+          "user-agent": "WizardOfKicia-ScamPulse/1.0"
+        }
+      },
+      LINK_THREAT_INTEL_TIMEOUT_MS
+    );
+    if (response.status === 404) return setCachedThreatIntel(serviceKey, cacheSubject, null);
+    if (!response.ok) return setCachedThreatIntel(serviceKey, cacheSubject, null);
+
+    const payload = await response.json().catch(() => ({}));
+    return setCachedThreatIntel(serviceKey, cacheSubject, parseFishFishPayload(payload, kind));
+  } catch {
+    return null;
+  }
+}
+
+async function checkFishFish(url) {
+  if (!url?.hostname) return null;
+
+  const domainVerdict = await checkFishFishPath(
+    "fishfish-domain",
+    buildFishFishEndpoint("domains", url.hostname),
+    "domain",
+    { key: url.hostname }
+  );
+  if (domainVerdict) return domainVerdict;
+
+  return checkFishFishPath(
+    "fishfish-url",
+    buildFishFishEndpoint("urls", url.url),
+    "URL",
+    url
+  );
+}
+
+async function checkPhishTank(url) {
+  if (!PHISHTANK_API_KEY || !url?.url) return null;
+  const cached = getCachedThreatIntel("phishtank", url);
+  if (cached !== undefined) return cached;
+
+  const body = new URLSearchParams({
+    url: url.url,
+    format: "json",
+    app_key: PHISHTANK_API_KEY
+  });
+
+  try {
+    const response = await fetchWithTimeout(
+      "http://checkurl.phishtank.com/checkurl/",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "user-agent": "WizardOfKicia-ScamPulse/1.0"
+        },
+        body
+      },
+      LINK_THREAT_INTEL_TIMEOUT_MS
+    );
+    if (!response.ok) return setCachedThreatIntel("phishtank", url, null);
+
+    const payload = await response.json().catch(() => ({}));
+    const result = payload?.results || {};
+    const inDatabase = result.in_database === true || result.in_database === "true";
+    const verified = result.verified === true || result.verified === "true" || result.verified === "y";
+    const valid = result.valid === true || result.valid === "true" || result.valid === "y";
+
+    if (inDatabase && verified && valid) {
+      return setCachedThreatIntel("phishtank", url, {
+        service: "PhishTank Scam Pulse",
+        action: "timeout",
+        confidence: 97,
+        timeoutMs: SCAM_PULSE_TIMEOUT_MS,
+        reason: `PhishTank verified this URL as an active phish${result.phish_id ? ` (#${result.phish_id})` : ""}`
+      });
+    }
+
+    return setCachedThreatIntel("phishtank", url, null);
+  } catch {
+    return null;
+  }
+}
+
 async function checkThreatIntel(url) {
   if (!url) return null;
   return (
+    getLocalScamPulseVerdict(url) ||
+    await checkFishFish(url) ||
+    await checkPhishTank(url) ||
     await checkGoogleWebRisk(url) ||
     await checkGoogleSafeBrowsing(url) ||
     await checkVirusTotalUrlReport(url)
@@ -930,6 +1174,8 @@ function buildThreatIntelRisk(url, verdict) {
     action: verdict.action || "warn",
     threatLevel: getThreatLevelForAction(verdict.action || "warn"),
     confidence: verdict.confidence || 80,
+    timeoutMs: verdict.timeoutMs || null,
+    service: verdict.service || null,
     reasons: [verdict.reason || `${verdict.service || "threat-intel"} flagged this URL`]
   };
 }
@@ -954,6 +1200,7 @@ function detectBlockedLinkSignal(text, { kb, trustedLinks = [] } = {}) {
 
   const action = pickStrongestAction(blockedLinks);
   const confidence = blockedLinks.reduce((max, url) => Math.max(max, url.confidence || 0), 0);
+  const timeoutMs = blockedLinks.reduce((max, url) => Math.max(max, Number(url.timeoutMs || 0)), 0);
   const reasons = [...new Set(blockedLinks.flatMap((url) => url.reasons || []))];
 
   return {
@@ -961,6 +1208,7 @@ function detectBlockedLinkSignal(text, { kb, trustedLinks = [] } = {}) {
     action,
     threatLevel: getThreatLevelForAction(action),
     confidence,
+    timeoutMs: timeoutMs || null,
     reason: reasons[0] || "risky link detected",
     reasons,
     blockedLinks,
@@ -971,6 +1219,7 @@ function detectBlockedLinkSignal(text, { kb, trustedLinks = [] } = {}) {
 async function assessUrlRiskWithExpansion(url, rules, text, options = {}) {
   if (!url) return null;
   if (isRuleAllowedLink(url, rules) || isGifLikeUrl(url)) return null;
+  const threatIntelChecker = options.checkThreatIntel || checkThreatIntel;
 
   if (isUrlShortenerHost(url.hostname)) {
     const expandedUrl = await expandShortenedUrl(url);
@@ -985,7 +1234,7 @@ async function assessUrlRiskWithExpansion(url, rules, text, options = {}) {
         (
           isGenericSafeLink(expandedUrl)
             ? null
-            : buildThreatIntelRisk(expandedUrl, await checkThreatIntel(expandedUrl))
+            : buildThreatIntelRisk(expandedUrl, await threatIntelChecker(expandedUrl))
         );
       if (expandedRisk) {
         return {
@@ -1003,10 +1252,10 @@ async function assessUrlRiskWithExpansion(url, rules, text, options = {}) {
   const heuristicRisk = assessUrlRisk(url, rules, text, options);
   if (heuristicRisk) return heuristicRisk;
   if (isGenericSafeLink(url)) return null;
-  return buildThreatIntelRisk(url, await checkThreatIntel(url));
+  return buildThreatIntelRisk(url, await threatIntelChecker(url));
 }
 
-async function detectBlockedLinkSignalAsync(text, { kb, trustedLinks = [], posterContext = null } = {}) {
+async function detectBlockedLinkSignalAsync(text, { kb, trustedLinks = [], posterContext = null, checkThreatIntel: threatIntelChecker = checkThreatIntel } = {}) {
   if (!kb) return null;
 
   const urls = extractUrlsFromText(text);
@@ -1015,13 +1264,17 @@ async function detectBlockedLinkSignalAsync(text, { kb, trustedLinks = [], poste
   const rules = buildAllowedLinkRules(kb, { trustedLinks });
   const blockedLinks = [];
   for (const url of urls.slice(0, 5)) {
-    const risk = await assessUrlRiskWithExpansion(url, rules, text, { posterContext });
+    const risk = await assessUrlRiskWithExpansion(url, rules, text, {
+      posterContext,
+      checkThreatIntel: threatIntelChecker
+    });
     if (risk) blockedLinks.push(risk);
   }
   if (!blockedLinks.length) return null;
 
   const action = pickStrongestAction(blockedLinks);
   const confidence = blockedLinks.reduce((max, url) => Math.max(max, url.confidence || 0), 0);
+  const timeoutMs = blockedLinks.reduce((max, url) => Math.max(max, Number(url.timeoutMs || 0)), 0);
   const reasons = [...new Set(blockedLinks.flatMap((url) => url.reasons || []))];
 
   return {
@@ -1029,6 +1282,7 @@ async function detectBlockedLinkSignalAsync(text, { kb, trustedLinks = [], poste
     action,
     threatLevel: getThreatLevelForAction(action),
     confidence,
+    timeoutMs: timeoutMs || null,
     reason: reasons[0] || "risky link detected",
     reasons,
     blockedLinks,
@@ -1041,6 +1295,9 @@ module.exports = {
   normalizeUrlCandidate,
   buildAllowedLinkRules,
   isAllowedLink,
+  refreshScamPulseFeeds,
+  getScamPulseSnapshot,
+  resetScamPulseFeedsForTests,
   detectBlockedLinkSignal,
   detectBlockedLinkSignalAsync
 };

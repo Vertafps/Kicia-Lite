@@ -27,6 +27,11 @@ const {
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
 const {
+  detectBlockedLinkSignalAsync,
+  refreshScamPulseFeeds,
+  resetScamPulseFeedsForTests
+} = require("../src/link-policy");
+const {
   detectBlockedLinkSignal,
   detectSellingSignal,
   detectContextualSellingSignal,
@@ -554,6 +559,49 @@ test("link detection allows docs/common links while escalating risky links", () 
   const exeSignal = detectBlockedLinkSignal("https://cdn.discordapp.com/attachments/1/2/update.exe", { kb });
   assert.ok(exeSignal);
   assert.equal(exeSignal.action, "timeout");
+});
+
+test("scam pulse threat intelligence escalates verified malicious links", async () => {
+  const signal = await detectBlockedLinkSignalAsync("check https://evil.example/login", {
+    kb,
+    checkThreatIntel: async (url) => ({
+      service: "FishFish Scam Pulse",
+      action: "timeout",
+      confidence: 97,
+      timeoutMs: 7 * 24 * 60 * 60 * 1000,
+      reason: `FishFish marked domain ${url.hostname} as phishing`
+    })
+  });
+
+  assert.ok(signal);
+  assert.equal(signal.action, "timeout");
+  assert.equal(signal.confidence, 97);
+  assert.equal(signal.timeoutMs, 7 * 24 * 60 * 60 * 1000);
+  assert.match(signal.reason, /FishFish/i);
+});
+
+test("scam pulse local feed catches malicious domains without a live lookup", async () => {
+  resetScamPulseFeedsForTests();
+  try {
+    await refreshScamPulseFeeds({
+      now: 123,
+      fetchFn: async (endpoint) => ({
+        ok: true,
+        json: async () => endpoint.includes("/domains") && endpoint.includes("phishing")
+          ? ["bad-pulse.example"]
+          : []
+      })
+    });
+
+    const signal = await detectBlockedLinkSignalAsync("check https://cdn.bad-pulse.example/login", { kb });
+
+    assert.ok(signal);
+    assert.equal(signal.action, "timeout");
+    assert.equal(signal.timeoutMs, 7 * 24 * 60 * 60 * 1000);
+    assert.match(signal.reason, /FishFish Scam Pulse/i);
+  } finally {
+    resetScamPulseFeedsForTests();
+  }
 });
 
 test("fake info guard catches wrong status claims", () => {
@@ -1133,6 +1181,7 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
+  assert.doesNotMatch(fixture.logs[0].body, /Confidence:\*\* 88%/i);
   assert.match(fixture.logs[0].body, /delete ok/i);
   assert.match(fixture.logs[0].body, /confidence \d+% > 70%/i);
   assert.equal(fixture.timeouts.length, 1);

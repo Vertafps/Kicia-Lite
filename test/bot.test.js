@@ -933,6 +933,30 @@ test("owner fetch command refreshes kb immediately", async () => {
   assert.equal(replied, true);
 });
 
+test("additional owner user id can use owner commands without owner role", async () => {
+  let replied = false;
+  let refreshCalls = 0;
+
+  const handled = await maybeHandleStatusCommand(
+    {
+      content: "$fetch",
+      author: { id: "648336016469655564" },
+      reply: async () => {
+        replied = true;
+      }
+    },
+    {
+      refreshKb: async () => {
+        refreshCalls += 1;
+      }
+    }
+  );
+
+  assert.equal(handled, true);
+  assert.equal(refreshCalls, 1);
+  assert.equal(replied, true);
+});
+
 test("owner role can refresh kb immediately", async () => {
   let replied = false;
   let refreshCalls = 0;

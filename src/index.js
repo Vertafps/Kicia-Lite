@@ -5,9 +5,10 @@ const { ActivityType, Client, Events, GatewayIntentBits, Partials } = require("d
 const { BOT_PRESENCE_TEXT, DISCORD_TOKEN } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
 const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-stats");
-const { buildPanel, DANGER } = require("./embed");
+const { buildPanel, DANGER, INFO, WARN } = require("./embed");
 const { fetchKb } = require("./kb");
 const { refreshScamPulseFeeds } = require("./link-policy");
+const { sendLogPanel } = require("./log-channel");
 const { maybeHandleControlCommand } = require("./handlers/commands");
 const { maybeHandleModerationWatch } = require("./handlers/moderation");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
@@ -85,6 +86,58 @@ function isBotPing(message) {
   return !!client.user && message.mentions.users.has(client.user.id);
 }
 
+async function sendClientLogPanel(readyClient, panel) {
+  const guilds = [...(readyClient.guilds?.cache?.values?.() || [])];
+  let sent = false;
+
+  for (const guild of guilds) {
+    const didSend = await sendLogPanel(guild, panel).catch(() => false);
+    sent = sent || didSend;
+  }
+
+  return sent;
+}
+
+function buildScamPulseRefreshPanel({ pulse, initial = false, error = null }) {
+  if (error) {
+    return {
+      header: "Scam Pulse Refresh Failed",
+      body: [
+        "FishFish global URL/domain cache refresh failed; existing cached entries remain in memory until the next successful refresh.",
+        `**Error:** ${error}`
+      ].join("\n\n"),
+      color: WARN
+    };
+  }
+
+  return {
+    header: initial ? "Scam Pulse Primed" : "Scam Pulse Refreshed",
+    body: [
+      "FishFish global phishing/malware feed refreshed.",
+      `**Domains Cached:** ${pulse.domains}`,
+      `**URLs Cached:** ${pulse.urls}`,
+      `**Source:** FishFish public phishing/malware lists`,
+      `**Next Refresh:** about 1 hour`
+    ].join("\n"),
+    color: INFO
+  };
+}
+
+async function refreshAndReportScamPulse(readyClient, { initial = false } = {}) {
+  try {
+    const pulse = await refreshScamPulseFeeds();
+    console.log(`Scam Pulse ${initial ? "primed" : "refreshed"}: ${pulse.domains} domains, ${pulse.urls} URLs`);
+    await sendClientLogPanel(readyClient, buildScamPulseRefreshPanel({ pulse, initial }));
+    return pulse;
+  } catch (err) {
+    const message = err?.message || String(err);
+    console.warn(`${initial ? "Initial" : "Scheduled"} Scam Pulse refresh failed:`, message);
+    recordRuntimeEvent("warn", "scam-pulse-refresh", message);
+    await sendClientLogPanel(readyClient, buildScamPulseRefreshPanel({ error: message })).catch(() => false);
+    return null;
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready as ${readyClient.user.tag}`);
   readyClient.user.setActivity(BOT_PRESENCE_TEXT, {
@@ -102,21 +155,10 @@ client.once(Events.ClientReady, async (readyClient) => {
   }, 10 * 60 * 1000);
   timer.unref?.();
 
-  try {
-    const pulse = await refreshScamPulseFeeds();
-    console.log(`Scam Pulse primed: ${pulse.domains} domains, ${pulse.urls} URLs`);
-  } catch (err) {
-    console.warn("Initial Scam Pulse refresh failed:", err.message);
-    recordRuntimeEvent("warn", "scam-pulse-refresh", err?.message || err);
-  }
+  await refreshAndReportScamPulse(readyClient, { initial: true });
 
   const pulseTimer = setInterval(() => {
-    refreshScamPulseFeeds()
-      .then((pulse) => console.log(`Scam Pulse refreshed: ${pulse.domains} domains, ${pulse.urls} URLs`))
-      .catch((err) => {
-        console.warn("Scheduled Scam Pulse refresh failed:", err.message);
-        recordRuntimeEvent("warn", "scam-pulse-refresh", err?.message || err);
-      });
+    refreshAndReportScamPulse(readyClient).catch(() => null);
   }, 60 * 60 * 1000);
   pulseTimer.unref?.();
 

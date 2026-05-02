@@ -181,7 +181,9 @@ function buildModerationGuardLines() {
       "**Scam/Trade Guard:**",
       "context-first prefilter checks the target user's last 5 messages plus per-message reply context;",
       "local Kicia policy + Naive Bayes classifier handles confident cases before remote AI;",
-      `Gemini model ${GEMINI_SCAM_MODEL} for borderline cases;`,
+      GEMINI_API_KEY
+        ? `Gemini ${GEMINI_SCAM_MODEL} handles borderline cases;`
+        : "Gemini fallback optional/off, local detection remains active;",
       `AI cache ${formatDuration(GEMINI_SCAM_CACHE_MS)};`,
       `local AI gap ${formatDuration(GEMINI_SCAM_MIN_INTERVAL_MS)};`,
       `remote AI failure cooldown ${formatDuration(GEMINI_SCAM_FAILURE_COOLDOWN_MS)};`,
@@ -200,11 +202,11 @@ function buildIntelligenceGuardLines() {
     ? `${pulse.domains} domains / ${pulse.urls} URLs cached`
     : "cache pending";
   return [
-    `**Scam Pulse:** FishFish URL/domain checks enabled (${FISHFISH_API_BASE_URL}); ${pulseCache}; verified pulse hits timeout ${formatDuration(SCAM_PULSE_TIMEOUT_MS)}; PhishTank ${PHISHTANK_API_KEY ? "enabled" : "not configured"}`,
-    `**Gemini Scam AI:** ${GEMINI_API_KEY ? `enabled (${GEMINI_SCAM_MODEL})` : "not configured"}`,
-    `**Safe Browsing:** ${GOOGLE_SAFE_BROWSING_API_KEY ? "enabled" : "not configured"}`,
-    `**Google Web Risk:** ${GOOGLE_WEB_RISK_API_KEY ? "enabled" : "not configured"}`,
-    `**VirusTotal:** ${VIRUSTOTAL_API_KEY ? "enabled" : "not configured"}`
+    `**Scam Pulse:** FishFish URL/domain checks enabled (${FISHFISH_API_BASE_URL}); ${pulseCache}; verified pulse hits timeout ${formatDuration(SCAM_PULSE_TIMEOUT_MS)}; PhishTank ${PHISHTANK_API_KEY ? "enabled" : "optional/off"}`,
+    `**Gemini Scam AI:** ${GEMINI_API_KEY ? `enabled (${GEMINI_SCAM_MODEL})` : "optional/off, local-only fallback active"}`,
+    `**Safe Browsing:** ${GOOGLE_SAFE_BROWSING_API_KEY ? "enabled" : "optional/off"}`,
+    `**Google Web Risk:** ${GOOGLE_WEB_RISK_API_KEY ? "enabled" : "optional/off"}`,
+    `**VirusTotal:** ${VIRUSTOTAL_API_KEY ? "enabled" : "optional/off"}`
   ];
 }
 

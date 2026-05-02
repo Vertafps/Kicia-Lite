@@ -31,7 +31,7 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   assert.match(body, /timeout 15m/i);
   assert.match(body, /last 5 messages plus per-message reply context/i);
   assert.match(body, /local Kicia policy \+ Naive Bayes classifier/i);
-  assert.match(body, /Gemini model gemini-2\.5-flash-lite/i);
+  assert.match(body, /Gemini fallback optional\/off|Gemini gemini-2\.5-flash-lite handles borderline cases/i);
   assert.match(body, /AI cache 10m/i);
   assert.match(body, /local AI gap 12s/i);
   assert.match(body, /remote AI failure cooldown 2m/i);
@@ -49,6 +49,7 @@ test("jarvis intelligence guard shows scam pulse coverage", () => {
   assert.match(body, /FishFish URL\/domain checks enabled/i);
   assert.match(body, /timeout 7d/i);
   assert.match(body, /PhishTank/i);
+  assert.doesNotMatch(body, /not configured/i);
 });
 
 test("jarvis progress body is clean and current", () => {

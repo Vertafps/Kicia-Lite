@@ -1164,8 +1164,8 @@ test("AI scam classifier can clear ambiguous market questions", async () => {
 });
 
 test("scam confidence ladder maps confirmed intent to timeout durations", () => {
-  assert.equal(getSellingConfidenceTimeoutMs(91), 3 * 24 * 60 * 60 * 1000);
-  assert.equal(getSellingConfidenceTimeoutMs(86), 24 * 60 * 60 * 1000);
+  assert.equal(getSellingConfidenceTimeoutMs(91), 24 * 60 * 60 * 1000);
+  assert.equal(getSellingConfidenceTimeoutMs(86), 6 * 60 * 60 * 1000);
   assert.equal(getSellingConfidenceTimeoutMs(76), 60 * 60 * 1000);
   assert.equal(getSellingConfidenceTimeoutMs(71), 30 * 60 * 1000);
   assert.equal(getSellingConfidenceTimeoutMs(70), 0);
@@ -1232,9 +1232,9 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
   assert.doesNotMatch(fixture.logs[0].body, /Confidence:\*\* 88%/i);
   assert.match(fixture.logs[0].body, /delete ok/i);
-  assert.match(fixture.logs[0].body, /confidence \d+% > 90% => timeout 3d/i);
+  assert.match(fixture.logs[0].body, /confidence \d+% > 90% => timeout 1d/i);
   assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.timeouts[0].durationMs, 3 * 24 * 60 * 60 * 1000);
+  assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.equal(fixture.dms.length, 1);
   assert.match(fixture.dms[0].embeds[0].data.description, /scam\/trade behavior/i);
 

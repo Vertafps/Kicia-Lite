@@ -126,8 +126,8 @@ module.exports = {
   SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS: 60 * 60 * 1000,
   SELLING_CONFIDENCE_TIMEOUT_THRESHOLD: 70,
   SELLING_CONFIDENCE_TIMEOUT_TIERS: [
-    { threshold: 90, timeoutMs: 3 * 24 * 60 * 60 * 1000 },
-    { threshold: 85, timeoutMs: 24 * 60 * 60 * 1000 },
+    { threshold: 90, timeoutMs: 24 * 60 * 60 * 1000 },
+    { threshold: 85, timeoutMs: 6 * 60 * 60 * 1000 },
     { threshold: 75, timeoutMs: 60 * 60 * 1000 },
     { threshold: 70, timeoutMs: 30 * 60 * 1000 }
   ],

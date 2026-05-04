@@ -120,6 +120,7 @@ const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|tickets|owner|admin|mod|mo
 const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why)\b/i;
 const PROTECTED_ITEM_RE =
   /\b(?:kicia|kiciahook|account|accounts|acc|alts?|config|configs|cfg|script|scripts|executor|executors|key|keys|license|licence|premium|robux|rbx|nitro|token|cookie|cookies)\b/i;
+const SHORT_SERVER_ITEM_RE = /\b(?:ue)\b/i;
 const DEICTIC_ITEM_RE = /\b(?:this|ts|that|it|one|thing|stuff|something)\b/i;
 const DIRECT_OFFER_RE =
   /\b(?:selling|sell|sold|wts|wtb|buying|buy my|buy from me|taking offers|for sale|offer|offers|reseller|middleman|mm)\b/i;
@@ -301,6 +302,7 @@ function extractPolicyIntent(context = {}, options = {}) {
   const hasOfficialRoute = OFFICIAL_ROUTE_RE.test(userText);
   const hasQuestionTone = QUESTION_START_RE.test(userText) || /\?$/.test(userText);
   const hasProtectedItem = PROTECTED_ITEM_RE.test(userText);
+  const hasShortServerItem = SHORT_SERVER_ITEM_RE.test(userText);
   const hasKiciaTradeAsset = TRADE_WORD_RE.test(userText) && KICIA_TRADE_ASSET_RE.test(userText);
   const hasDeicticItem = DEICTIC_ITEM_RE.test(userText);
   const hasKicia = KICIA_BRAND_RE.test(userText);
@@ -316,6 +318,16 @@ function extractPolicyIntent(context = {}, options = {}) {
     (hasProtectedItem || hasDeicticItem || hasKicia);
   const hasPrivateOfferHandoff = hasPrivateHandoff && hasOfferTone && (hasProtectedItem || hasDeicticItem);
   const hasTradeOffer = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i.test(userText) && hasOfferTone;
+  const hasGenericPricedSale =
+    hasDirectOffer &&
+    /\bmoneytoken\b/i.test(userText) &&
+    !hasProtectedItem &&
+    !hasShortServerItem &&
+    !hasPrivateHandoff &&
+    !hasKiciaTradeAsset &&
+    !hasBarter &&
+    !hasPrivatePurchaseHandoff &&
+    !hasPrivateOfferHandoff;
 
   if ((hasMetaDiscussion || hasTradeWarning) && (hasQuestionTone || hasTradeWarning || !/\b(?:i|im|i m|my|me)\b/i.test(userText))) {
     return localVerdict({
@@ -323,6 +335,15 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 93,
       score: 0.07,
       reason: "Meta-discussion, report, or policy question rather than target-user deal intent."
+    });
+  }
+
+  if (hasGenericPricedSale) {
+    return localVerdict({
+      verdict: false,
+      confidence: 94,
+      score: 0.06,
+      reason: "Generic priced sale lacks protected Kicia/server-risk item or private-deal evidence."
     });
   }
 

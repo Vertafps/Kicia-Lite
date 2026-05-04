@@ -421,6 +421,7 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("can i sell ue here"), null);
   assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
   assert.equal(detectSellingSignal("buying kicia"), null);
+  assert.equal(detectSellingSignal("SELLING MARUANA $100"), null);
   assert.equal(detectSellingSignal("how to buy kicia"), null);
   assert.equal(detectSellingSignal("where do i buy kicia premium"), null);
   assert.equal(detectSellingSignal("trusted reseller"), null);
@@ -504,6 +505,12 @@ test("local scam classifier follows KiciaHook safe and unsafe standards", () => 
   assert.equal(classifyScamContextLocally({
     userMessages: ["someone said dms to buy kicia is that allowed"]
   }).verdict, false);
+
+  const genericSale = classifyScamContextLocally({
+    userMessages: ["SELLING MARUANA", "$100"]
+  });
+  assert.equal(genericSale.verdict, false);
+  assert.match(genericSale.reason, /Generic priced sale/i);
 });
 
 test("local scam classifier separates explanations from private purchase handoffs", () => {
@@ -545,6 +552,8 @@ test("contextual selling detection catches split sell and price messages", () =>
   assert.equal(detectScamTradeCandidateContext(["selling"]), null);
   assert.equal(detectScamTradeCandidateContext(["selling", "trading", "buying"]), null);
   assert.equal(detectContextualSellingSignal(["selling is against rules", "1 buck"]), null);
+  assert.equal(detectContextualSellingSignal(["SELLING MARUANA", "$100"]), null);
+  assert.equal(detectScamTradeCandidateContext(["SELLING MARUANA", "$100"]), null);
   assert.ok(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]));
 });
 
@@ -840,6 +849,45 @@ test("single scam-market words do not trigger without context", async () => {
   assert.equal(fixture.replies.length, 0);
   assert.equal(fixture.logs.length, 0);
   assert.equal(fixture.timeouts.length, 0);
+});
+
+test("generic priced sale split across messages does not call scam AI or punish", async () => {
+  await clearDailyStatsTracking(1);
+  const userId = "generic-sale-user";
+  const first = buildModerationMessage("SELLING MARUANA", { userId, messageId: "generic-sale-1" });
+  const second = buildModerationMessage("$100", { userId, messageId: "generic-sale-2" });
+  let aiCalls = 0;
+
+  const firstHandled = await maybeHandleModerationWatch(first.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: first.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    },
+    now: 1_000
+  });
+
+  const secondHandled = await maybeHandleModerationWatch(second.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: second.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: true, answer: "TRUE", model: "test-gemini" };
+    },
+    now: 2_000
+  });
+
+  assert.equal(firstHandled, false);
+  assert.equal(secondHandled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(first.deleted.length, 0);
+  assert.equal(second.deleted.length, 0);
+  assert.equal(first.timeouts.length, 0);
+  assert.equal(second.timeouts.length, 0);
+  assert.equal(second.logs.length, 0);
 });
 
 test("official Kicia purchase questions do not call scam AI", async () => {
@@ -1488,7 +1536,8 @@ test("staff can revert a moderation timeout from the log button", async () => {
   assert.equal(ui.logPanels.length, 1);
   assert.match(ui.logPanels[0].header, /Moderation Action Reverted/i);
   assert.equal(fixture.dms.length, 2);
-  assert.match(fixture.dms[1].embeds[0].data.description, /reverted by staffuser/i);
+  assert.match(fixture.dms[1].embeds[0].data.description, /Your action was reverted by: <@staff-user>/i);
+  assert.match(fixture.dms[1].embeds[0].data.description, /Sorry for the mistake on my end/i);
 });
 
 test("non-staff cannot use moderation log controls", async () => {

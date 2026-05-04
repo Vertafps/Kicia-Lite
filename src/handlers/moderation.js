@@ -59,6 +59,7 @@ const suspiciousUserBuckets = new Map();
 const sellingUserBuckets = new Map();
 
 const SELL_ITEM_RE = /\b(?:acc|account|accounts|lvl|level|configuration|config|configs|cfg|cfgs|executor|executors|script|scripts|kicia|kiciahook|premium|license|licenses|key|keys|cheat|cheats|exploit|exploits|robux|nitro)\b/;
+const SELL_SHORT_CONTEXT_ITEM_RE = /\b(?:ue)\b/;
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|offer|offers|buy|buyer|buying|bucks?|dollars?|trade|trades|trading|swap|swapping|exchange|middleman|mm)\b/;
 const SELL_PRICE_RE = /(?:^|\s)(?:for\s+)?(?:[$\u20ac\u00a3]\s*)?\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd)?(?:\s|$)/;
 const SELL_CONTEXT_WINDOW_MS = 2 * 60 * 1000;
@@ -509,6 +510,7 @@ function detectSellingSignal(content) {
   const hasItemSignal =
     SELL_ITEM_RE.test(spaced) ||
     SELL_CONDENSED_ITEM_RE.test(condensed);
+  const hasShortContextItem = SELL_SHORT_CONTEXT_ITEM_RE.test(spaced);
   const hasMarketSignal =
     SELL_MARKET_RE.test(rawLower) ||
     /\$\s*\d/.test(content) ||
@@ -533,7 +535,12 @@ function detectSellingSignal(content) {
   if (hasQuestionTone && !hasPrivateHandoff && !SELL_PRICE_RE.test(rawLower)) {
     return null;
   }
-  if (!hasExplicitOffer && !hasPrivateHandoff && !(hasItemSignal && (hasMarketSignal || hasStrongIntent)) && !(hasPriceSignal && hasStrongIntent)) {
+  if (
+    !hasExplicitOffer &&
+    !hasPrivateHandoff &&
+    !(hasItemSignal && (hasMarketSignal || hasStrongIntent)) &&
+    !(hasPriceSignal && hasStrongIntent && (hasItemSignal || hasShortContextItem))
+  ) {
     return null;
   }
 
@@ -563,6 +570,8 @@ function getScamTradeTextFeatures(text) {
   const intentTokens = new Set(["sell", "selling", "seller", "sold", "buy", "buying", "buyer", "trade", "trading", "trader", "swap", "swapping", "exchange", "exchanging", "give", "giving", "offer", "offering", "wts", "wtb", "for", "sale"]);
   const objectishTokens = tokens.filter((token) => !intentTokens.has(token) && token.length > 1);
   const hasPriceSignal = /\$\s*\d/.test(text) || SELL_PRICE_RE.test(rawLower);
+  const hasShortItemSignal = SELL_SHORT_CONTEXT_ITEM_RE.test(spaced);
+  const hasProtectedItemSignal = SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed);
   const hasDeicticDealSignal = /\b(?:this|that|it|one|thing|stuff|something)\b/.test(spaced);
   const hasBarterSignal =
     /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offer|offering)\b.{0,80}\bfor\b/.test(spaced);
@@ -571,11 +580,11 @@ function getScamTradeTextFeatures(text) {
   const hasPrivatePurchaseSignal =
     hasPrivateHandoff &&
     /\b(?:buy|buying|purchase|price|prices|pay|payment|get|sell|selling|offer|offers)\b/.test(spaced) &&
-    (SELL_ITEM_RE.test(spaced) || hasDeicticDealSignal);
+    (hasProtectedItemSignal || hasShortItemSignal || hasDeicticDealSignal);
   const hasPrivateOfferSignal =
     hasPrivateHandoff &&
     hasOfferTone &&
-    (SELL_ITEM_RE.test(spaced) || hasDeicticDealSignal);
+    (hasProtectedItemSignal || hasShortItemSignal || hasDeicticDealSignal);
   return {
     rawLower,
     spaced,
@@ -585,7 +594,8 @@ function getScamTradeTextFeatures(text) {
       SELL_CONTEXT_NEGATIVE_RE.test(spaced),
     hasExplicitOffer: SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced)),
     hasBroadIntent: SELL_BROAD_INTENT_RE.test(spaced) || SELL_CONDENSED_INTENT_RE.test(condensed),
-    hasItemSignal: SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed),
+    hasItemSignal: hasProtectedItemSignal,
+    hasShortItemSignal,
     hasMarketSignal: SELL_MARKET_RE.test(rawLower) || hasPriceSignal,
     hasPriceSignal,
     hasPrivateHandoff,
@@ -618,6 +628,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
   const previousFeatures = texts.slice(0, -1).map(getScamTradeTextFeatures);
   const latestHasDealDetail =
     latestFeatures.hasItemSignal ||
+    latestFeatures.hasShortItemSignal ||
     latestFeatures.hasPriceSignal ||
     latestFeatures.hasPrivateHandoff ||
     latestFeatures.hasOfferTone ||
@@ -673,11 +684,39 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     };
   }
 
+  const combinedHasProtectedDealItem = combinedFeatures.hasItemSignal || combinedFeatures.hasShortItemSignal;
+  const previousHasProtectedDealContext = previousFeatures.some((features) =>
+    features.hasItemSignal ||
+    features.hasShortItemSignal ||
+    features.hasPrivateHandoff ||
+    features.hasPrivatePurchaseSignal ||
+    features.hasPrivateOfferSignal ||
+    features.hasBarterSignal
+  );
+  const latestIsOnlyPrice =
+    latestFeatures.hasPriceSignal &&
+    !latestFeatures.hasItemSignal &&
+    !latestFeatures.hasShortItemSignal &&
+    !latestFeatures.hasPrivateHandoff &&
+    !latestFeatures.hasOfferTone &&
+    !latestFeatures.hasPrivatePurchaseSignal &&
+    !latestFeatures.hasPrivateOfferSignal &&
+    !latestFeatures.hasBarterSignal;
   const splitIntentAndItem =
     texts.length >= 2 &&
     (
       previousFeatures.some((features) => features.hasBroadIntent || features.hasExplicitOffer) &&
-      latestHasDealDetail
+      latestHasDealDetail &&
+      (
+        combinedHasProtectedDealItem ||
+        previousHasProtectedDealContext ||
+        latestFeatures.hasPrivateHandoff ||
+        latestFeatures.hasOfferTone ||
+        latestFeatures.hasPrivatePurchaseSignal ||
+        latestFeatures.hasPrivateOfferSignal ||
+        latestFeatures.hasBarterSignal
+      ) &&
+      !(latestIsOnlyPrice && !combinedHasProtectedDealItem)
     );
   if (splitIntentAndItem) {
     return {
@@ -693,9 +732,10 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     combinedFeatures.hasBroadIntent &&
     (
       combinedFeatures.hasItemSignal ||
-      combinedFeatures.hasPriceSignal ||
       combinedFeatures.hasPrivateHandoff ||
-      combinedFeatures.hasOfferTone
+      combinedFeatures.hasOfferTone ||
+      combinedFeatures.hasBarterSignal ||
+      (combinedFeatures.hasPriceSignal && combinedHasProtectedDealItem)
     )
   ) {
     return {
@@ -722,14 +762,26 @@ function detectContextualSellingSignal(messageTexts, repliedToMessage = null) {
     .slice(0, -1)
     .map((text) => buildSellingSpacedText(text))
     .filter(Boolean);
+  const previousFeatures = messageTexts
+    .slice(0, -1)
+    .map(getScamTradeTextFeatures);
 
   const hasStrongPriorIntent = previousTexts.some((text) =>
     SELL_STRONG_INTENT_RE.test(text) &&
     !SELL_ANTI_PATTERNS.some((pattern) => pattern.test(text)) &&
     !SELL_CONTEXT_NEGATIVE_RE.test(text)
   );
+  const hasActionablePriorObject = previousFeatures.some((features) =>
+    features.hasItemSignal ||
+    features.hasShortItemSignal ||
+    features.hasPrivateHandoff ||
+    features.hasPrivatePurchaseSignal ||
+    features.hasPrivateOfferSignal ||
+    features.hasBarterSignal
+  );
 
   if (!hasStrongPriorIntent) return detectScamTradeCandidateContext(messageTexts, repliedToMessage);
+  if (!hasActionablePriorObject) return null;
 
   return {
     type: "selling",
@@ -1566,7 +1618,30 @@ function formatDeleteSummary(deleteResult) {
   return deleteResult.reason || "not needed";
 }
 
-function buildSellingLogPanel({ message, signals, state, deleteResult, timeoutResult, dmSent, durationMs }) {
+function formatSellingEvidence(message, recentMessages = []) {
+  const entries = normalizeModerationActionContext(recentMessages, message)
+    .filter((entry) => cleanText(entry.content))
+    .slice(-SELL_CONTEXT_MAX_MESSAGES);
+
+  if (entries.length <= 1) {
+    return trimExcerpt(message.content);
+  }
+
+  return entries
+    .map((entry, index) => `${index + 1}. ${trimExcerpt(entry.content, 150)}`)
+    .join("\n");
+}
+
+function buildSellingLogPanel({
+  message,
+  signals,
+  state,
+  deleteResult,
+  timeoutResult,
+  dmSent,
+  durationMs,
+  recentMessages = []
+}) {
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
   const confidenceLines = signals
     .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
@@ -1590,7 +1665,7 @@ function buildSellingLogPanel({ message, signals, state, deleteResult, timeoutRe
       `**Scam/Trade Hits:** ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `**Why:**\n${confidenceLines}`,
       aiLines ? `**AI Scam Verdict:**\n${aiLines}` : null,
-      `**Evidence:** ${trimExcerpt(message.content)}`
+      `**Evidence:**\n${formatSellingEvidence(message, recentMessages)}`
     ].filter(Boolean).join("\n\n"),
     color: state.action === "timeout" ? DANGER : WARN
   };
@@ -1929,7 +2004,8 @@ async function handleSellingMessage(message, signals, {
     deleteResult: deletePlan,
     timeoutResult,
     dmSent,
-    durationMs: effectiveTimeoutMs
+    durationMs: effectiveTimeoutMs,
+    recentMessages
   });
   await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
     actionType: "scam_trade",
@@ -2455,13 +2531,17 @@ async function resolveActionUser(interaction, action, member) {
 }
 
 function buildRevertUserPayload({ action, actor }) {
+  const actorLabel = actor?.id
+    ? `<@${actor.id}>`
+    : actor?.username || actor?.tag || "staff";
   return {
     embeds: [
       buildPanel({
         header: "Action Reverted",
         body: [
-          `your **${action.actionLabel}** was reverted by ${actor?.username || actor?.tag || "staff"}.`,
-          "sorry about that; staff reviewed the log and undid the timeout.",
+          `Your action was reverted by: ${actorLabel}`,
+          "Sorry for the mistake on my end.",
+          `**Original Action:** ${action.actionLabel}`,
           action.channelId ? `**Channel:** <#${action.channelId}>` : null
         ].filter(Boolean).join("\n\n"),
         color: SUCCESS

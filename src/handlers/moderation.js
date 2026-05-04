@@ -30,6 +30,7 @@ const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { canUseEmojiCommands, hasModerationBypassMessage } = require("../permissions");
+const { detectProhibitedCommerce } = require("../prohibited-commerce");
 const {
   cleanupExpiredModerationActions,
   deleteModerationAction,
@@ -750,8 +751,40 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
   return null;
 }
 
+function detectProhibitedCommerceSignal(messageTexts, repliedToMessage = null) {
+  const texts = (Array.isArray(messageTexts) ? messageTexts : [messageTexts])
+    .map((text) => String(text || "").trim())
+    .filter(Boolean)
+    .slice(-SELL_CONTEXT_MAX_MESSAGES);
+  if (!texts.length) return null;
+  if (isExplanationResponseIntent(texts, repliedToMessage)) return null;
+
+  const result = detectProhibitedCommerce(texts);
+  if (!result) return null;
+
+  return {
+    type: "selling",
+    subtype: "prohibited_sale",
+    source: "local_policy",
+    requiresAi: false,
+    confirmedByPolicy: true,
+    confidence: result.confidence,
+    reason: result.reason,
+    policy: {
+      model: "local-commerce-policy-v3",
+      category: result.category,
+      term: result.term,
+      matched: result.matched,
+      score: result.score
+    }
+  };
+}
+
 function detectContextualSellingSignal(messageTexts, repliedToMessage = null) {
   if (!Array.isArray(messageTexts) || !messageTexts.length) return null;
+
+  const prohibitedSignal = detectProhibitedCommerceSignal(messageTexts, repliedToMessage);
+  if (prohibitedSignal) return prohibitedSignal;
 
   const latest = String(messageTexts[messageTexts.length - 1] || "");
   if (!isSellPriceFollowUp(latest)) {
@@ -1591,14 +1624,23 @@ function buildSignalAlertPanel(message, signals) {
   };
 }
 
+function hasProhibitedSaleSignal(signals) {
+  return (signals || []).some((signal) => signal.subtype === "prohibited_sale");
+}
+
 function buildSellingDmPayload({ message, signals, state, durationMs }) {
+  const isProhibitedSale = hasProhibitedSaleSignal(signals);
   return {
     embeds: [
       buildPanel({
-        header: "Scam/Trade Timeout",
+        header: isProhibitedSale ? "Prohibited Sale Timeout" : "Scam/Trade Timeout",
         body: [
-          `i timed you out for ${formatDuration(durationMs)} because your recent message looked like scam/trade behavior`,
-          "please keep buying, selling, trading, account deals, and private download handoffs out of the chat",
+          isProhibitedSale
+            ? `i timed you out for ${formatDuration(durationMs)} because your recent message looked like prohibited-goods sale behavior`
+            : `i timed you out for ${formatDuration(durationMs)} because your recent message looked like scam/trade behavior`,
+          isProhibitedSale
+            ? "please keep prohibited goods, illegal sales, and unsafe marketplace behavior out of the chat"
+            : "please keep buying, selling, trading, account deals, and private download handoffs out of the chat",
           `**Channel:** <#${message.channelId}>`,
           `**Confidence:** ${state.confidence}%`,
           `**Trigger:** ${state.trigger}`,
@@ -1642,6 +1684,7 @@ function buildSellingLogPanel({
   durationMs,
   recentMessages = []
 }) {
+  const isProhibitedSale = hasProhibitedSaleSignal(signals);
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
   const confidenceLines = signals
     .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
@@ -1654,7 +1697,9 @@ function buildSellingLogPanel({
       : `delete ${deleteText} | log only`;
 
   return {
-    header: state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
+    header: isProhibitedSale
+      ? state.action === "timeout" ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
+      : state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
     body: [
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
@@ -1662,7 +1707,7 @@ function buildSellingLogPanel({
       `**Action:** ${action}`,
       `**Confidence:** ${state.confidence}%`,
       `**Trigger:** ${state.trigger}`,
-      `**Scam/Trade Hits:** ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
+      `${isProhibitedSale ? "**Unsafe Commerce Hits:**" : "**Scam/Trade Hits:**"} ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `**Why:**\n${confidenceLines}`,
       aiLines ? `**AI Scam Verdict:**\n${aiLines}` : null,
       `**Evidence:**\n${formatSellingEvidence(message, recentMessages)}`
@@ -1886,6 +1931,9 @@ function buildRaidAlertPanel(message, raidAlert) {
 
 function collectContentSignals(content, { kb, runtimeStatus }) {
   const signals = [];
+  const prohibitedCommerceSignal = detectProhibitedCommerceSignal([content]);
+  if (prohibitedCommerceSignal) signals.push(prohibitedCommerceSignal);
+
   const sellingSignal = detectSellingSignal(content);
   if (sellingSignal) signals.push(sellingSignal);
 
@@ -2041,6 +2089,35 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     (best, signal) => (!best || (signal.confidence || 0) > (best.confidence || 0) ? signal : best),
     null
   );
+  const policyConfirmedSignals = signals.filter((signal) => signal.confirmedByPolicy);
+  if (policyConfirmedSignals.length) {
+    const policyConfidence = getMaxSignalConfidence(policyConfirmedSignals);
+    const policyResult = {
+      verdict: true,
+      confidence: policyConfidence,
+      score: policyConfidence / 100,
+      reason: "High-confidence local policy matched prohibited commerce.",
+      model: "local-commerce-policy-v3"
+    };
+    const policyVerdict = buildClassifierVerdictResult(policyResult);
+    const confirmedSignals = policyConfirmedSignals.map((signal) => ({
+      ...signal,
+      confidence: getConfirmedSignalConfidence(signal, policyVerdict),
+      reason: `policy-confirmed unsafe commerce: ${signal.reason}`,
+      ai: policyVerdict
+    }));
+    await recordScamAudit(message, {
+      action: "local_policy_true",
+      handled: true,
+      signals: confirmedSignals,
+      strongest,
+      scamContext,
+      localResult: policyResult,
+      now
+    });
+    return confirmedSignals;
+  }
+
   const needsAi = signals.some((signal) => signal.requiresAi) || Boolean(strongest);
   if (!needsAi) return signals;
 
@@ -2693,6 +2770,7 @@ function resetModerationState() {
 module.exports = {
   detectSellingSignal,
   detectContextualSellingSignal,
+  detectProhibitedCommerceSignal,
   detectScamTradeCandidateContext,
   detectSuspiciousSignal,
   detectRoastingSignal,

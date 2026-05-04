@@ -41,6 +41,7 @@ const {
   detectBlockedLinkSignal,
   detectSellingSignal,
   detectContextualSellingSignal,
+  detectProhibitedCommerceSignal,
   detectScamTradeCandidateContext,
   detectSuspiciousSignal,
   detectRoastingSignal,
@@ -422,6 +423,7 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
   assert.equal(detectSellingSignal("buying kicia"), null);
   assert.equal(detectSellingSignal("SELLING MARUANA $100"), null);
+  assert.ok(detectProhibitedCommerceSignal(["SELLING MARUANA $100"]));
   assert.equal(detectSellingSignal("how to buy kicia"), null);
   assert.equal(detectSellingSignal("where do i buy kicia premium"), null);
   assert.equal(detectSellingSignal("trusted reseller"), null);
@@ -509,8 +511,8 @@ test("local scam classifier follows KiciaHook safe and unsafe standards", () => 
   const genericSale = classifyScamContextLocally({
     userMessages: ["SELLING MARUANA", "$100"]
   });
-  assert.equal(genericSale.verdict, false);
-  assert.match(genericSale.reason, /Generic priced sale/i);
+  assert.equal(genericSale.verdict, true);
+  assert.match(genericSale.reason, /prohibited goods sale/i);
 });
 
 test("local scam classifier separates explanations from private purchase handoffs", () => {
@@ -552,8 +554,10 @@ test("contextual selling detection catches split sell and price messages", () =>
   assert.equal(detectScamTradeCandidateContext(["selling"]), null);
   assert.equal(detectScamTradeCandidateContext(["selling", "trading", "buying"]), null);
   assert.equal(detectContextualSellingSignal(["selling is against rules", "1 buck"]), null);
-  assert.equal(detectContextualSellingSignal(["SELLING MARUANA", "$100"]), null);
-  assert.equal(detectScamTradeCandidateContext(["SELLING MARUANA", "$100"]), null);
+  const prohibitedSignal = detectContextualSellingSignal(["SELLING MARUANA", "$100"]);
+  assert.ok(prohibitedSignal);
+  assert.equal(prohibitedSignal.subtype, "prohibited_sale");
+  assert.match(prohibitedSignal.reason, /prohibited goods sale/i);
   assert.ok(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]));
 });
 
@@ -851,11 +855,11 @@ test("single scam-market words do not trigger without context", async () => {
   assert.equal(fixture.timeouts.length, 0);
 });
 
-test("generic priced sale split across messages does not call scam AI or punish", async () => {
+test("prohibited priced sale split across messages times out without scam AI", async () => {
   await clearDailyStatsTracking(1);
-  const userId = "generic-sale-user";
-  const first = buildModerationMessage("SELLING MARUANA", { userId, messageId: "generic-sale-1" });
-  const second = buildModerationMessage("$100", { userId, messageId: "generic-sale-2" });
+  const userId = "prohibited-sale-user";
+  const first = buildModerationMessage("SELLING MARUANA", { userId, messageId: "prohibited-sale-1" });
+  const second = buildModerationMessage("$100", { userId, messageId: "prohibited-sale-2" });
   let aiCalls = 0;
 
   const firstHandled = await maybeHandleModerationWatch(first.message, {
@@ -881,13 +885,17 @@ test("generic priced sale split across messages does not call scam AI or punish"
   });
 
   assert.equal(firstHandled, false);
-  assert.equal(secondHandled, false);
+  assert.equal(secondHandled, true);
   assert.equal(aiCalls, 0);
-  assert.equal(first.deleted.length, 0);
-  assert.equal(second.deleted.length, 0);
+  assert.equal(first.deleted.length, 1);
+  assert.equal(second.deleted.length, 1);
   assert.equal(first.timeouts.length, 0);
-  assert.equal(second.timeouts.length, 0);
-  assert.equal(second.logs.length, 0);
+  assert.equal(second.timeouts.length, 1);
+  assert.equal(second.dms.length, 1);
+  assert.equal(second.logs.length, 1);
+  assert.match(second.logs[0].header, /Prohibited Sale Timeout/i);
+  assert.match(second.logs[0].body, /SELLING MARUANA/i);
+  assert.match(second.logs[0].body, /\$100/i);
 });
 
 test("official Kicia purchase questions do not call scam AI", async () => {

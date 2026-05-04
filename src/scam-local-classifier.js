@@ -1,5 +1,7 @@
 "use strict";
 
+const { detectProhibitedCommerce } = require("./prohibited-commerce");
+
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?/gi;
 const MONEY_RE = /(?:[$€£]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|dollars?|bucks?|rs|lkr|robux|rbx)\b)/gi;
 
@@ -248,14 +250,14 @@ function isExplanationResponseIntent(input, repliedToMessage = null) {
   return getExplanationResponseIntent(input, repliedToMessage)?.verdict === false;
 }
 
-function localVerdict({ verdict, confidence, score, reason, stage = "policy" }) {
+function localVerdict({ verdict, confidence, score, reason, stage = "policy", model = MODEL_NAME }) {
   return {
     verdict,
     confidence,
     score,
     reason,
     stage,
-    model: MODEL_NAME
+    model
   };
 }
 
@@ -335,6 +337,18 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 93,
       score: 0.07,
       reason: "Meta-discussion, report, or policy question rather than target-user deal intent."
+    });
+  }
+
+  const prohibitedCommerce = detectProhibitedCommerce(userMessages.length ? userMessages : [userText]);
+  if (prohibitedCommerce) {
+    return localVerdict({
+      verdict: true,
+      confidence: prohibitedCommerce.confidence,
+      score: prohibitedCommerce.confidence / 100,
+      reason: prohibitedCommerce.reason,
+      stage: "policy",
+      model: "local-commerce-policy-v3"
     });
   }
 

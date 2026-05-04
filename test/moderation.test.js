@@ -15,6 +15,7 @@ const {
   addTrustedLink,
   clearScamDecisionAuditForTests,
   clearDailyStatsTracking,
+  getBotPresenceState,
   getDailyStatsSnapshot,
   getModerationAction,
   getRestrictedEmojiDatabaseSnapshot,
@@ -27,6 +28,8 @@ const {
   removeRestrictedEmojiByKey,
   removeTrustedLinkByKey,
   cleanupExpiredModerationActions,
+  resetBotPresenceState,
+  setBotPresenceState,
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
 const {
@@ -1768,6 +1771,23 @@ test("trusted link database adds and removes links", async () => {
 
   const linksAfterRemove = await listTrustedLinks();
   assert.equal(linksAfterRemove.length, 0);
+});
+
+test("bot presence state persists in app config and resets to default", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+
+  assert.equal(await getBotPresenceState(), "Monitoring ;)");
+
+  const stored = await setBotPresenceState(" V3\nGuard online ");
+  assert.equal(stored, "V3 Guard online");
+  assert.equal(await getBotPresenceState(), "V3 Guard online");
+
+  const snapshot = await getRestrictedEmojiDatabaseSnapshot();
+  assert.equal(snapshot.tableCounts.appConfig >= 2, true);
+
+  const reset = await resetBotPresenceState();
+  assert.equal(reset, "Monitoring ;)");
+  assert.equal(await getBotPresenceState(), "Monitoring ;)");
 });
 
 test("manual moderation whitelist persists and skips message guards", async () => {

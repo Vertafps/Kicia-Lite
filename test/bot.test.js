@@ -3,7 +3,7 @@ process.env.KB_URL = process.env.KB_URL || "https://example.com/kb.json";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { PermissionFlagsBits, PermissionsBitField } = require("discord.js");
+const { ActivityType, PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 
 const { isNoResponseChannel, isNoResponseMessage } = require("../src/channel-policy");
 const { maybeHandleControlCommand } = require("../src/handlers/commands");
@@ -12,6 +12,7 @@ const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
 const { maybeHandleLockCommand, parseLockCommand } = require("../src/handlers/lockdown");
 const { isOwnerCommandMessage, maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
+const { buildCustomPresenceData, MAX_PRESENCE_STATE_LENGTH } = require("../src/presence-state");
 const { resetRuntimeStatus, getRuntimeStatus } = require("../src/runtime-status");
 
 const kb = normalizeKb({
@@ -1038,6 +1039,153 @@ test("jarvis counts as an owner-only command while public status does not", () =
   assert.equal(isOwnerCommandMessage("$jarvis"), true);
   assert.equal(isOwnerCommandMessage("$status"), false);
   assert.equal(isOwnerCommandMessage("$status down"), true);
+});
+
+test("custom presence payload uses exact bot state text", () => {
+  const payload = buildCustomPresenceData("V3 guard online");
+
+  assert.equal(payload.status, "online");
+  assert.equal(payload.afk, false);
+  assert.equal(payload.activities[0].type, ActivityType.Custom);
+  assert.equal(payload.activities[0].name, "customstatus");
+  assert.equal(payload.activities[0].state, "V3 guard online");
+});
+
+test("owner state command can view, set, audit, and reset bot presence", async () => {
+  let storedState = "Monitoring ;)";
+  let replyPayload = null;
+  let logPanel = null;
+  const appliedStates = [];
+  const message = {
+    content: "$state V3\nGuard   online",
+    author: { id: "847703912932311091", username: "owner" },
+    member: {
+      displayName: "Owner"
+    },
+    guild: { id: "guild-1" },
+    client: { user: { id: "bot-user" } },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  };
+  const deps = {
+    getPresenceState: async () => storedState,
+    setPresenceState: async (state) => {
+      storedState = state;
+      return storedState;
+    },
+    resetPresenceState: async () => {
+      storedState = "Monitoring ;)";
+      return storedState;
+    },
+    applyPresenceState: async (_user, state) => {
+      appliedStates.push(state);
+      return true;
+    },
+    sendLog: async (_guild, panel) => {
+      logPanel = panel;
+      return true;
+    }
+  };
+
+  let handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(storedState, "V3 Guard online");
+  assert.deepEqual(appliedStates, ["V3 Guard online"]);
+  assert.match(replyPayload.embeds[0].data.description, /V3 Guard online/i);
+  assert.match(logPanel.header, /Bot State Updated/i);
+  assert.match(logPanel.body, /847703912932311091/i);
+
+  message.content = "$state";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /Current:\*\* V3 Guard online/i);
+
+  message.content = "$state reset";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(storedState, "Monitoring ;)");
+  assert.equal(appliedStates.at(-1), "Monitoring ;)");
+  assert.match(replyPayload.embeds[0].data.description, /Monitoring ;\)/i);
+});
+
+test("owner role can use state command", async () => {
+  let storedState = null;
+  const handled = await maybeHandleControlCommand({
+    content: "$state Guarding support",
+    author: { id: "owner-role-user" },
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleId === "1484221158390890496"
+        }
+      }
+    },
+    client: { user: {} },
+    reply: async () => {}
+  }, {
+    setPresenceState: async (state) => {
+      storedState = state;
+      return state;
+    },
+    applyPresenceState: async () => true
+  });
+
+  assert.equal(handled, true);
+  assert.equal(storedState, "Guarding support");
+});
+
+test("state command ignores non-owners and rejects overlong state", async () => {
+  let replyPayload = null;
+  let setCalls = 0;
+  let applyCalls = 0;
+
+  let handled = await maybeHandleControlCommand({
+    content: "$state hacked",
+    author: { id: "regular-user" },
+    member: {
+      roles: {
+        cache: {
+          has: () => false
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    setPresenceState: async () => {
+      setCalls += 1;
+    },
+    applyPresenceState: async () => {
+      applyCalls += 1;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(replyPayload, null);
+  assert.equal(setCalls, 0);
+  assert.equal(applyCalls, 0);
+
+  handled = await maybeHandleControlCommand({
+    content: `$state ${"x".repeat(MAX_PRESENCE_STATE_LENGTH + 1)}`,
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    setPresenceState: async () => {
+      setCalls += 1;
+    },
+    applyPresenceState: async () => {
+      applyCalls += 1;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /128 characters or less/i);
+  assert.equal(setCalls, 0);
+  assert.equal(applyCalls, 0);
 });
 
 test("emoji command is available to owner role", async () => {

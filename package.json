@@ -2,7 +2,7 @@
   "name": "kicialite",
   "version": "1.0.0",
   "private": true,
-  "description": "Tiny KB classifier bot for the Kicia main server.",
+  "description": "Discord support, moderation, and utility bot for the Kicia main server.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

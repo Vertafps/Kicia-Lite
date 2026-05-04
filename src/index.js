@@ -1,14 +1,15 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { ActivityType, Client, Events, GatewayIntentBits, Partials } = require("discord.js");
-const { BOT_PRESENCE_TEXT, DISCORD_TOKEN } = require("./config");
+const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
+const { DISCORD_TOKEN } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
 const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-stats");
 const { buildPanel, DANGER, INFO, WARN } = require("./embed");
 const { fetchKb } = require("./kb");
 const { refreshScamPulseFeeds } = require("./link-policy");
 const { sendLogPanel } = require("./log-channel");
+const { applyConfiguredPresenceState } = require("./presence-state");
 const { maybeHandleControlCommand } = require("./handlers/commands");
 const {
   maybeHandleModerationLogInteraction,
@@ -20,7 +21,8 @@ const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reac
 const { maybeHandleStatusCommand } = require("./handlers/status");
 const {
   cleanupExpiredModerationActions,
-  flushRestrictedEmojiDatabaseNow
+  flushRestrictedEmojiDatabaseNow,
+  getBotPresenceState
 } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { safeReply } = require("./utils/respond");
@@ -153,11 +155,20 @@ async function cleanupModerationActionReviews() {
   }
 }
 
+async function applyReadyPresence(readyClient) {
+  try {
+    const state = await getBotPresenceState();
+    await applyConfiguredPresenceState(readyClient.user, state);
+    console.log(`Presence state set: ${state}`);
+  } catch (err) {
+    console.warn("Could not apply bot presence state:", err.message);
+    recordRuntimeEvent("warn", "presence-state", err?.message || err);
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready as ${readyClient.user.tag}`);
-  readyClient.user.setActivity(BOT_PRESENCE_TEXT, {
-    type: ActivityType.Custom
-  });
+  await applyReadyPresence(readyClient);
   try {
     await fetchKb();
     console.log("KB cache primed");

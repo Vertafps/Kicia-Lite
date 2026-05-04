@@ -17,9 +17,18 @@ const {
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
   getRestrictedEmojiDatabaseSnapshot,
-  listScamDecisionAudit
+  listScamDecisionAudit,
+  getBotPresenceState,
+  setBotPresenceState,
+  resetBotPresenceState
 } = require("../restricted-emoji-db");
 const { normalizeUrlCandidate } = require("../link-policy");
+const { sendLogPanel } = require("../log-channel");
+const {
+  MAX_PRESENCE_STATE_LENGTH,
+  applyConfiguredPresenceState,
+  validatePresenceState
+} = require("../presence-state");
 const { safeReply } = require("../utils/respond");
 
 function isCommandsListMessage(content) {
@@ -38,6 +47,32 @@ function parseScamAuditMessage(content) {
   if (!match) return null;
   const limit = Math.min(25, Math.max(1, Math.round(Number(match[1]) || 10)));
   return { limit };
+}
+
+function parseStateMessage(content) {
+  const match = String(content || "").match(/^\$state(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+
+  const value = String(match[1] || "");
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {
+      action: "show",
+      value: ""
+    };
+  }
+
+  if (/^(?:reset|default)$/i.test(trimmed)) {
+    return {
+      action: "reset",
+      value: ""
+    };
+  }
+
+  return {
+    action: "set",
+    value
+  };
 }
 
 function parseEmojiMessage(content) {
@@ -207,6 +242,9 @@ function buildCommandsBody() {
     "`$cmd` show this command list",
     "`$status up` mark status as up",
     "`$status down` mark status as down",
+    "`$state` show the bot presence text",
+    "`$state <message>` set the bot presence text",
+    "`$state reset` restore the default bot presence text",
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
     "`$db` / `$database` inspect the SQLite moderation database",
@@ -285,6 +323,83 @@ async function handleScamAuditCommand(message, command, {
     ].join("\n\n"),
     color: INFO
   });
+  return true;
+}
+
+function getCommandActorLabel(message) {
+  return message.member?.displayName || message.author?.tag || message.author?.username || message.author?.id || "unknown";
+}
+
+function buildStateAuditPanel({ message, state, action, applied }) {
+  return {
+    header: action === "reset" ? "Bot State Reset" : "Bot State Updated",
+    body: [
+      `**Actor:** ${message.author?.id ? `<@${message.author.id}>` : getCommandActorLabel(message)}`,
+      `**Action:** ${action}`,
+      `**Presence:** ${state}`,
+      `**Applied Now:** ${applied ? "yes" : "pending"}`
+    ].join("\n"),
+    color: SUCCESS
+  };
+}
+
+async function handleStateCommand(message, command, {
+  getPresenceState = getBotPresenceState,
+  setPresenceState = setBotPresenceState,
+  resetPresenceState = resetBotPresenceState,
+  applyPresenceState = applyConfiguredPresenceState,
+  sendLog = sendLogPanel
+} = {}) {
+  if (command.action === "show") {
+    const state = await getPresenceState();
+    await replyWithCommandPanel(message, {
+      header: "Bot State",
+      body: [
+        `**Current:** ${state}`,
+        `**Max Length:** ${MAX_PRESENCE_STATE_LENGTH}`,
+        "**Usage:** `$state <message>` or `$state reset`"
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  const nextState = command.action === "reset" ? await resetPresenceState() : null;
+  const validation = command.action === "set" ? validatePresenceState(command.value) : { ok: true, state: nextState };
+  if (!validation.ok) {
+    await replyWithCommandPanel(message, {
+      header: "Bot State Rejected",
+      body: [
+        validation.error,
+        `**Max Length:** ${MAX_PRESENCE_STATE_LENGTH}`,
+        "**Usage:** `$state <message>` or `$state reset`"
+      ].join("\n"),
+      color: DANGER
+    });
+    return true;
+  }
+
+  const state = command.action === "set" ? await setPresenceState(validation.state) : nextState;
+  const applied = await applyPresenceState(message.client?.user, state);
+
+  await replyWithCommandPanel(message, {
+    header: command.action === "reset" ? "Bot State Reset" : "Bot State Updated",
+    body: [
+      `**Presence:** ${state}`,
+      `**Applied Now:** ${applied ? "yes" : "pending until the bot is ready"}`
+    ].join("\n"),
+    color: SUCCESS
+  });
+
+  if (message.guild) {
+    await sendLog(message.guild, buildStateAuditPanel({
+      message,
+      state,
+      action: command.action,
+      applied
+    })).catch(() => null);
+  }
+
   return true;
 }
 
@@ -481,6 +596,12 @@ async function handleTrustedLinkCommand(message, command, {
 }
 
 async function maybeHandleControlCommand(message, deps = {}) {
+  const stateCommand = parseStateMessage(message.content);
+  if (stateCommand) {
+    if (!canUseOwnerCommands(message)) return true;
+    return handleStateCommand(message, stateCommand, deps);
+  }
+
   const whitelistCommand = parseWhitelistMessage(message.content);
   if (whitelistCommand) {
     if (!canUseOwnerCommands(message)) return true;
@@ -522,9 +643,11 @@ module.exports = {
   isCommandsListMessage,
   isDatabaseMessage,
   parseScamAuditMessage,
+  parseStateMessage,
   parseEmojiMessage,
   parseTrustedLinkMessage,
   parseWhitelistMessage,
   parseUserIdInput,
+  handleStateCommand,
   maybeHandleControlCommand
 };

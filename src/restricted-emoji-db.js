@@ -2,8 +2,13 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const initSqlJs = require("sql.js");
-const { DEFAULT_EMOJI_TIMEOUT_MS } = require("./config");
+const { BOT_PRESENCE_TEXT, DEFAULT_EMOJI_TIMEOUT_MS } = require("./config");
 const { clampDurationMs } = require("./duration");
+const {
+  BOT_PRESENCE_STATE_KEY,
+  sanitizePresenceState,
+  validatePresenceState
+} = require("./presence-state");
 const { recordRuntimeEvent } = require("./runtime-health");
 
 const CUSTOM_EMOJI_RE = /^<(a?):([A-Za-z0-9_]+):(\d+)>$/;
@@ -314,6 +319,10 @@ function ensureDefaultConfig(db) {
     "emoji_timeout_ms",
     String(DEFAULT_EMOJI_TIMEOUT_MS)
   ]);
+  db.run("INSERT OR IGNORE INTO app_config (key, value) VALUES (?, ?)", [
+    BOT_PRESENCE_STATE_KEY,
+    BOT_PRESENCE_TEXT
+  ]);
 }
 
 function mapEmojiRow(row) {
@@ -579,6 +588,29 @@ async function setEmojiTimeoutMs(durationMs) {
 
   setAppConfigValue(db, "emoji_timeout_ms", normalized, { immediate: true });
   return normalized;
+}
+
+async function getBotPresenceState() {
+  const db = await getDatabase();
+  const stored = sanitizePresenceState(getAppConfigValue(db, BOT_PRESENCE_STATE_KEY));
+  return stored || BOT_PRESENCE_TEXT;
+}
+
+async function setBotPresenceState(input) {
+  const validation = validatePresenceState(input);
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+
+  const db = await getDatabase();
+  setAppConfigValue(db, BOT_PRESENCE_STATE_KEY, validation.state, { immediate: true });
+  return validation.state;
+}
+
+async function resetBotPresenceState() {
+  const db = await getDatabase();
+  setAppConfigValue(db, BOT_PRESENCE_STATE_KEY, BOT_PRESENCE_TEXT, { immediate: true });
+  return BOT_PRESENCE_TEXT;
 }
 
 async function getDailyStatsWindowStartedAt() {
@@ -1447,6 +1479,9 @@ module.exports = {
   matchesStoredEmoji,
   getEmojiTimeoutMs,
   setEmojiTimeoutMs,
+  getBotPresenceState,
+  setBotPresenceState,
+  resetBotPresenceState,
   getDailyStatsWindowStartedAt,
   ensureDailyStatsWindowStartedAt,
   setDailyStatsWindowStartedAt,

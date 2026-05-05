@@ -98,6 +98,68 @@ function buildRowFields(rows, { padRows = false } = {}) {
   return fields;
 }
 
+function looksLikeAutoFieldLine(line) {
+  return String(line || "").match(/^\s*\*\*([^*\n:][^*\n]{0,80}?):\*\*\s*(.*)$/);
+}
+
+function shouldInlineAutoField(name, value) {
+  if (/\n/.test(value)) return false;
+  if (String(value || "").length > 90) return false;
+  return !/why|evidence|message|blocked|policy|trigger|stored|saved|visible|reason/i.test(name);
+}
+
+function parseAutoFields(body, maxFields = 18) {
+  const lines = String(body || "").split(/\r?\n/);
+  const description = [];
+  const fields = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (!current || fields.length >= maxFields) {
+      current = null;
+      return;
+    }
+    const value = current.value.join("\n").trim() || "\u200b";
+    fields.push({
+      name: current.name,
+      value: truncateFieldValue(value),
+      inline: shouldInlineAutoField(current.name, value)
+    });
+    current = null;
+  };
+
+  for (const line of lines) {
+    const match = looksLikeAutoFieldLine(line);
+    if (match && fields.length < maxFields) {
+      pushCurrent();
+      current = {
+        name: String(match[1]).trim().slice(0, 256),
+        value: match[2] ? [String(match[2]).trim()] : []
+      };
+      continue;
+    }
+
+    if (current && line.trim()) {
+      current.value.push(line);
+      continue;
+    }
+
+    if (current && !line.trim()) {
+      pushCurrent();
+      continue;
+    }
+
+    description.push(line);
+  }
+
+  pushCurrent();
+
+  return {
+    description: description.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
+    fields
+  };
+}
+
 function buildPanel({
   header,
   body,
@@ -117,11 +179,13 @@ function buildPanel({
   color = SURFACE,
   headerLevel = "#",
   headerAsTitle = true,
+  autoFields = false,
   timestamp = true
 } = {}) {
   const parts = [];
   if (header && !headerAsTitle) parts.push(`${headerLevel} ${header}`);
-  if (body) parts.push(body);
+  const parsedBody = autoFields ? parseAutoFields(body) : { description: body, fields: [] };
+  if (parsedBody.description) parts.push(parsedBody.description);
   if (tip) {
     if (tipStyle === "heading") {
       parts.push(`${tipLevel} ${tip}`);
@@ -142,7 +206,8 @@ function buildPanel({
   if (thumbnail && isEmbedMediaUrl(thumbnail)) e.setThumbnail(String(thumbnail));
   if (image && isEmbedMediaUrl(image)) e.setImage(String(image));
   const rowFields = buildRowFields(rows, { padRows });
-  if (rowFields.length) e.addFields(rowFields);
+  const panelFields = [...parsedBody.fields, ...rowFields].slice(0, 25);
+  if (panelFields.length) e.addFields(panelFields);
   applyFooter(e, { footer, footerIcon });
   if (timestamp !== false) e.setTimestamp();
   return e;

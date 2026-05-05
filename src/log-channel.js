@@ -22,7 +22,7 @@ async function sendLogPanel(guild, panel) {
     ? panel.embed
     : typeof panel?.toJSON === "function"
       ? panel
-      : buildPanel(panel);
+      : buildPanel({ autoFields: true, ...panel });
 
   await channel.send({
     embeds: [embed],

@@ -79,6 +79,8 @@ const {
   buildDefaultBadName
 } = require("../src/nickname-policy");
 
+const HOMOGLYPH_CONFIG_PROMO = "\u0392u\u03a5 c\u03bf\u039d\u0393igs \u03b1\u03c4 spirahl.cc \u03c4hey \u03b1re \u03b9nsane!";
+
 const kb = normalizeKb({
   issues: [],
   executors: {
@@ -430,6 +432,7 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
   assert.ok(detectSellingSignal("s311in p3m1um ch34p, 5m3"));
   assert.ok(detectSellingSignal("sellin figs"));
+  assert.ok(detectSellingSignal(HOMOGLYPH_CONFIG_PROMO));
   assert.ok(detectSellingSignal("wts lvl 888 acc"));
   assert.equal(detectSellingSignal("selling"), null);
   assert.equal(detectSellingSignal("trading"), null);
@@ -1105,6 +1108,30 @@ test("promoted comma-dot domains are deleted, DM warned, and logged", async () =
   const fixture = buildModerationMessage(content);
 
   const urls = extractUrlsFromText(content);
+  assert.equal(urls[0]?.hostname, "spirahl.cc");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    checkThreatIntel: async () => null
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.dms.length, 1);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Blocked Link Warning/i);
+  assert.match(fixture.logs[0].body, /unknown offsite domain promoted/i);
+  assert.match(fixture.logs[0].body, /spirahl\.cc/i);
+});
+
+test("homoglyph config promotion is normalized, deleted, DM warned, and logged", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage(HOMOGLYPH_CONFIG_PROMO);
+
+  const urls = extractUrlsFromText(HOMOGLYPH_CONFIG_PROMO);
   assert.equal(urls[0]?.hostname, "spirahl.cc");
 
   const handled = await maybeHandleModerationWatch(fixture.message, {

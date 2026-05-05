@@ -50,7 +50,7 @@ const {
   isKiciaLegitPurchaseIntent,
   isSafePurchaseMethodQuestion
 } = require("../scam-local-classifier");
-const { cleanText, normalizeText } = require("../text");
+const { cleanText, foldConfusableText, normalizeText } = require("../text");
 const { safeReply, safeSend } = require("../utils/respond");
 
 const raidBuckets = new Map();
@@ -426,7 +426,7 @@ function isAssertiveStatement(content) {
 }
 
 function normalizeSellingSourceText(content) {
-  return String(content || "")
+  return foldConfusableText(content)
     .toLowerCase()
     .replace(/[@4]/g, "a")
     .replace(/3/g, "e")

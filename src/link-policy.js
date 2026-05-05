@@ -359,7 +359,7 @@ function hasExploitPromotionContext(text) {
 function hasOffsitePromotionContext(text) {
   const normalized = normalizeText(text);
   if (!normalized) return false;
-  const hasPromoVerb = /\b(?:check|try|use|join|visit|open|watch|look|look at|go to|search)\b/.test(normalized);
+  const hasPromoVerb = /\b(?:buy|sell|selling|purchase|get|check|try|use|join|visit|open|watch|look|look at|go to|search)\b/.test(normalized);
   const hasPromoTone = /\b(?:cool|nice|good|best|clean|op|underrated|new|free|cheap)\b/.test(normalized);
   return hasPromoVerb && (hasPromoTone || hasExploitPromotionContext(normalized));
 }

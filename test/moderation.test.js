@@ -1170,6 +1170,76 @@ test("normal bare domains are not removed without risky promo context", async ()
   assert.equal(fixture.logs.length, 0);
 });
 
+test("benign promoted dot-com bare domains are ignored when threat intel is clean", async () => {
+  await clearDailyStatsTracking(1);
+  const content = "check randomsite.com it is cool";
+  const fixture = buildModerationMessage(content);
+  let threatChecks = 0;
+
+  const urls = extractUrlsFromText(content);
+  assert.equal(urls[0]?.hostname, "randomsite.com");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    checkThreatIntel: async () => {
+      threatChecks += 1;
+      return null;
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(threatChecks, 1);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.logs.length, 0);
+});
+
+test("suspicious config sales remove unknown dot-com bare domains", async () => {
+  await clearDailyStatsTracking(1);
+  const content = "buy configs here randomsite.com";
+  const fixture = buildModerationMessage(content);
+
+  const urls = extractUrlsFromText(content);
+  assert.equal(urls[0]?.hostname, "randomsite.com");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    checkThreatIntel: async () => null
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.dms.length, 1);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Blocked Link Warning/i);
+  assert.match(fixture.logs[0].body, /unknown offsite domain promoted/i);
+  assert.match(fixture.logs[0].body, /randomsite\.com/i);
+});
+
+test("generic safe hosts stay allowed for benign promo wording", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("check github.com it is cool");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    checkThreatIntel: async () => {
+      throw new Error("generic safe hosts should not reach threat intel");
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.logs.length, 0);
+});
+
 test("single scam-market words do not trigger without context", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("selling");

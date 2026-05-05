@@ -325,6 +325,11 @@ async function buildSecuritySection(message, channelLockRoleId) {
         : "**Impersonation Guard:** join lookalike checks are installed but waiting for GuildMembers intent opt-in"
     );
     securityLines.push(
+      ENABLE_GUILD_MEMBER_EVENTS
+        ? "**Role Ops:** `$role all` member-list access enabled; bulk assignment still requires Manage Roles and role hierarchy"
+        : "**Role Ops:** single-user role assignment enabled; `$role all` requires ENABLE_GUILD_MEMBER_EVENTS=true"
+    );
+    securityLines.push(
       ...buildIntelligenceGuardLines()
     );
     securityLines.push(

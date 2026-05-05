@@ -1,6 +1,13 @@
+const { ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
+const {
+  NICKMOD_MODAL_PREFIX,
+  NICKMOD_NICKNAME_INPUT_ID,
+  NICKMOD_RENAME_PREFIX,
+  buildNicknameModerationButtonRows
+} = require("../components");
 const { WARN, buildRichPanel } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
-const { hasModerationBypassMember } = require("../permissions");
+const { canUseEmojiCommands, hasModerationBypassMember } = require("../permissions");
 const {
   listNicknamePatterns,
   recordDailyModerationEvent
@@ -55,16 +62,19 @@ function findNicknameMatch(nick, patterns) {
 }
 
 function buildNicknameLogPanel({ member, oldNick, rule }) {
-  return buildRichPanel({
-    title: "Nickname Renamed",
-    color: WARN,
-    fields: [
-      { name: "Member", value: `<@${member.id}>`, inline: true },
-      { name: "Old Nickname", value: `\`${oldNick || "(empty)"}\``, inline: true },
-      { name: "New Nickname", value: `\`${rule.renameTo}\``, inline: true },
-      { name: "Matched Rule", value: `/${rule.pattern}/${rule.flags} - id #${rule.id}`, inline: false }
-    ]
-  });
+  return {
+    embed: buildRichPanel({
+      title: "Nickname Renamed",
+      color: WARN,
+      fields: [
+        { name: "Member", value: `<@${member.id}>`, inline: true },
+        { name: "Old Nickname", value: `\`${oldNick || "(empty)"}\``, inline: true },
+        { name: "New Nickname", value: `\`${rule.renameTo}\``, inline: true },
+        { name: "Matched Rule", value: `/${rule.pattern}/${rule.flags} - id #${rule.id}`, inline: false }
+      ]
+    }),
+    components: buildNicknameModerationButtonRows(member.id)
+  };
 }
 
 async function recordNicknameModerationStat() {
@@ -118,10 +128,181 @@ async function maybeEnforceNicknameOnMessage(message, deps = {}) {
   return maybeEnforceNicknameMember(message.member, deps);
 }
 
+function sanitizeManualNickname(input) {
+  return String(input || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseNicknameModerationInteraction(customId) {
+  const raw = String(customId || "");
+  if (raw.startsWith(NICKMOD_RENAME_PREFIX)) {
+    return {
+      type: "button",
+      userId: raw.slice(NICKMOD_RENAME_PREFIX.length)
+    };
+  }
+  if (raw.startsWith(NICKMOD_MODAL_PREFIX)) {
+    return {
+      type: "modal",
+      userId: raw.slice(NICKMOD_MODAL_PREFIX.length)
+    };
+  }
+  return null;
+}
+
+function buildNicknameModal(userId) {
+  const input = new TextInputBuilder()
+    .setCustomId(NICKMOD_NICKNAME_INPUT_ID)
+    .setLabel("New nickname")
+    .setStyle(TextInputStyle.Short)
+    .setMinLength(1)
+    .setMaxLength(32)
+    .setRequired(true);
+
+  return new ModalBuilder()
+    .setCustomId(`${NICKMOD_MODAL_PREFIX}${userId}`)
+    .setTitle("Set Member Nickname")
+    .addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+async function replyNicknameInteraction(interaction, panel) {
+  const payload = {
+    embeds: [buildRichPanel({
+      title: panel.header,
+      description: panel.body,
+      color: panel.color || WARN,
+      timestamp: false
+    })],
+    ephemeral: true,
+    allowedMentions: { parse: [] }
+  };
+
+  if (interaction?.deferred || interaction?.replied) {
+    await interaction.editReply?.(payload).catch(() => null);
+    return true;
+  }
+  await interaction.reply?.(payload).catch(() => null);
+  return true;
+}
+
+async function resolveInteractionMember(guild, userId) {
+  const cached = guild?.members?.cache?.get?.(userId);
+  if (cached) return cached;
+  if (typeof guild?.members?.fetch !== "function") return null;
+  return guild.members.fetch({ user: userId, force: true }).catch(() => null);
+}
+
+async function handleNicknameButton(interaction, userId) {
+  if (!canUseEmojiCommands({ author: interaction?.user, member: interaction?.member })) {
+    await replyNicknameInteraction(interaction, {
+      header: "Staff Tools Locked",
+      body: "only staff and above can use nickname actions",
+      color: WARN
+    });
+    return true;
+  }
+
+  await interaction.showModal?.(buildNicknameModal(userId)).catch(async () => {
+    await replyNicknameInteraction(interaction, {
+      header: "Modal Failed",
+      body: "Discord refused the nickname form. Try again from the latest log message.",
+      color: WARN
+    });
+  });
+  return true;
+}
+
+async function handleNicknameModal(interaction, userId, { sendLog = sendLogPanel } = {}) {
+  if (!canUseEmojiCommands({ author: interaction?.user, member: interaction?.member })) {
+    await replyNicknameInteraction(interaction, {
+      header: "Staff Tools Locked",
+      body: "only staff and above can use nickname actions",
+      color: WARN
+    });
+    return true;
+  }
+
+  const nickname = sanitizeManualNickname(
+    interaction.fields?.getTextInputValue?.(NICKMOD_NICKNAME_INPUT_ID)
+  );
+  if (!nickname || nickname.length > 32) {
+    await replyNicknameInteraction(interaction, {
+      header: "Nickname Rejected",
+      body: "nickname must be 1-32 characters after cleanup",
+      color: WARN
+    });
+    return true;
+  }
+
+  const member = await resolveInteractionMember(interaction.guild, userId);
+  if (!member?.setNickname || member.manageable === false) {
+    await replyNicknameInteraction(interaction, {
+      header: "Cannot Rename",
+      body: "I could not fetch that member or their role is above mine.",
+      color: WARN
+    });
+    return true;
+  }
+
+  const oldNick = getMemberNick(member);
+  try {
+    await member.setNickname(nickname, `manual nickname moderation by ${interaction.user?.tag || interaction.user?.id || "staff"}`);
+  } catch (err) {
+    await replyNicknameInteraction(interaction, {
+      header: "Rename Failed",
+      body: `Discord refused the nickname change: ${err?.message || err}`,
+      color: WARN
+    });
+    return true;
+  }
+
+  await replyNicknameInteraction(interaction, {
+    header: "Nickname Updated",
+    body: `<@${member.id}> is now \`${nickname}\`.`,
+    color: WARN
+  });
+  await sendLog(interaction.guild, buildRichPanel({
+    title: "Manual Nickname Change",
+    color: WARN,
+    fields: [
+      { name: "Member", value: `<@${member.id}>`, inline: true },
+      { name: "Old Nickname", value: `\`${oldNick || "(empty)"}\``, inline: true },
+      { name: "New Nickname", value: `\`${nickname}\``, inline: true },
+      { name: "Changed By", value: interaction.user?.id ? `<@${interaction.user.id}>` : "staff", inline: false }
+    ]
+  })).catch(() => null);
+  return true;
+}
+
+async function maybeHandleNicknameModerationInteraction(interaction, deps = {}) {
+  const parsed = parseNicknameModerationInteraction(interaction?.customId);
+  if (!parsed?.userId) return false;
+  if (!interaction?.inGuild?.()) {
+    await replyNicknameInteraction(interaction, {
+      header: "Server Only",
+      body: "nickname moderation actions only work inside the server",
+      color: WARN
+    });
+    return true;
+  }
+  if (parsed.type === "button" && interaction?.isButton?.()) {
+    return handleNicknameButton(interaction, parsed.userId);
+  }
+  if (parsed.type === "modal" && interaction?.isModalSubmit?.()) {
+    return handleNicknameModal(interaction, parsed.userId, deps);
+  }
+  return false;
+}
+
 module.exports = {
   cleanupNicknameCache,
   findNicknameMatch,
   getMemberNick,
+  maybeHandleNicknameModerationInteraction,
   maybeEnforceNicknameMember,
-  maybeEnforceNicknameOnMessage
+  maybeEnforceNicknameOnMessage,
+  parseNicknameModerationInteraction,
+  sanitizeManualNickname
 };

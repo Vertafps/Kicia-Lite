@@ -2,6 +2,9 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
 const MODLOG_VIEW_PREFIX = "modlog:messages:";
 const MODLOG_REVERT_PREFIX = "modlog:revert:";
+const NICKMOD_RENAME_PREFIX = "nickmod:rename:";
+const NICKMOD_MODAL_PREFIX = "nickmod:rename-submit:";
+const NICKMOD_NICKNAME_INPUT_ID = "nickmod:nickname";
 
 function isValidHttpUrl(url) {
   try {
@@ -56,9 +59,28 @@ function buildModerationLogButtonRows(actionId, {
   ];
 }
 
+function buildNicknameModerationButtonRows(userId, { disabled = false } = {}) {
+  const id = String(userId || "").trim();
+  if (!id) return [];
+
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${NICKMOD_RENAME_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel("Set Nickname")
+        .setDisabled(Boolean(disabled))
+    )
+  ];
+}
+
 module.exports = {
   MODLOG_REVERT_PREFIX,
   MODLOG_VIEW_PREFIX,
+  NICKMOD_MODAL_PREFIX,
+  NICKMOD_NICKNAME_INPUT_ID,
+  NICKMOD_RENAME_PREFIX,
+  buildNicknameModerationButtonRows,
   buildModerationLogButtonRows,
   buildLinkButtonRows
 };

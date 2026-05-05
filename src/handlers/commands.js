@@ -291,6 +291,8 @@ function buildCommandsBody() {
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
     "`$testpromax` run the extended diagnostics sweep",
+    "`$role all <roleid>` assign a safe role to every human member missing it",
+    "`$role <@user|userid> <roleid>` assign a role to one member",
     "`$db` / `$database` inspect the SQLite moderation database",
     "`$scamaudit` inspect recent scam/trade classifier decisions",
     "`$whitelist` list manual moderation whitelist users",

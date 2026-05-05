@@ -46,6 +46,8 @@ Owners:
 - `$fetch` refreshes the KB cache.
 - `$jarvis` runs runtime, KB, moderation, intelligence, and security diagnostics.
 - `$testpromax` runs the extended diagnostics sweep with a longer progress pass.
+- `$role all <roleid>` assigns a safe role to every human member missing it.
+- `$role <@user|userid> <roleid>` assigns a role to one member.
 - `$db` inspects SQLite state.
 - `$scamaudit` shows recent scam/trade classifier decisions.
 - `$whitelist <user>` / `$whitelist remove <user>` manages manual moderation bypass.
@@ -75,6 +77,6 @@ Required intents:
 
 Optional privileged intent:
 
-- `GuildMembers` enables join/member-update nickname checks and join-time staff impersonation review. Set `ENABLE_GUILD_MEMBER_EVENTS=true` only after enabling this intent in the Discord Developer Portal.
+- `GuildMembers` enables `$role all`, join/member-update nickname checks, and join-time staff impersonation review. Set `ENABLE_GUILD_MEMBER_EVENTS=true` only after enabling this intent in the Discord Developer Portal.
 
-Recommended invite permissions include View Channel, Send Messages, Embed Links, Read Message History, Add Reactions, Manage Messages, Moderate Members, and channel/role permissions needed for lockdown.
+Recommended invite permissions include View Channel, Send Messages, Embed Links, Read Message History, Add Reactions, Manage Messages, Manage Nicknames, Manage Roles, Moderate Members, and channel/role permissions needed for lockdown. The bot role must be above every role it assigns and above every member it renames.

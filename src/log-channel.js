@@ -18,7 +18,11 @@ async function resolveLogChannel(guild) {
 async function sendLogPanel(guild, panel) {
   const channel = await resolveLogChannel(guild);
   if (!channel) return false;
-  const embed = typeof panel?.toJSON === "function" ? panel : buildPanel(panel);
+  const embed = typeof panel?.embed?.toJSON === "function"
+    ? panel.embed
+    : typeof panel?.toJSON === "function"
+      ? panel
+      : buildPanel(panel);
 
   await channel.send({
     embeds: [embed],

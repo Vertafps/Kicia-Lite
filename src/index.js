@@ -18,10 +18,12 @@ const {
 const { maybeHandleImpersonationCheck } = require("./handlers/impersonation");
 const {
   maybeEnforceNicknameMember,
-  maybeEnforceNicknameOnMessage
+  maybeEnforceNicknameOnMessage,
+  maybeHandleNicknameModerationInteraction
 } = require("./handlers/nickname-mod");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
+const { maybeHandleRoleCommand } = require("./handlers/role-assignment");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
 const { maybeHandleStatusCommand } = require("./handlers/status");
 const {
@@ -296,6 +298,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (await maybeHandleLockCommand(message)) return;
     if (await maybeHandleControlCommand(message)) return;
+    if (await maybeHandleRoleCommand(message)) return;
     if (await maybeHandleModerationWatch(message)) return;
 
     if (isNoResponseMessage(message)) {
@@ -366,6 +369,7 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   await runGuarded("interaction-handler", async () => {
+    if (await maybeHandleNicknameModerationInteraction(interaction)) return;
     if (await maybeHandleModerationLogInteraction(interaction)) return;
   });
 });

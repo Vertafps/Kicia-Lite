@@ -2,7 +2,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
-const { DISCORD_TOKEN } = require("./config");
+const { DISCORD_TOKEN, ENABLE_GUILD_MEMBER_EVENTS } = require("./config");
 const { isNoResponseMessage } = require("./channel-policy");
 const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-stats");
 const { buildPanel, DANGER, INFO, WARN } = require("./embed");
@@ -15,6 +15,11 @@ const {
   maybeHandleModerationLogInteraction,
   maybeHandleModerationWatch
 } = require("./handlers/moderation");
+const { maybeHandleImpersonationCheck } = require("./handlers/impersonation");
+const {
+  maybeEnforceNicknameMember,
+  maybeEnforceNicknameOnMessage
+} = require("./handlers/nickname-mod");
 const { handleDm, handleGuildPing, replyWithError } = require("./handlers/ping");
 const { maybeHandleLockCommand } = require("./handlers/lockdown");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
@@ -79,14 +84,20 @@ for (const signal of ["SIGINT", "SIGTERM", "exit"]) {
   });
 }
 
+const gatewayIntents = [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMessages,
+  GatewayIntentBits.GuildMessageReactions,
+  GatewayIntentBits.MessageContent,
+  GatewayIntentBits.DirectMessages
+];
+
+if (ENABLE_GUILD_MEMBER_EVENTS) {
+  gatewayIntents.push(GatewayIntentBits.GuildMembers);
+}
+
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages
-  ],
+  intents: gatewayIntents,
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User]
 });
 
@@ -281,6 +292,7 @@ client.on(Events.MessageCreate, async (message) => {
       console.warn("Daily stats tracking failed:", err.message);
       recordRuntimeEvent("warn", "daily-stats-track", err?.message || err);
     }
+    await maybeEnforceNicknameOnMessage(message).catch(() => null);
 
     if (await maybeHandleLockCommand(message)) return;
     if (await maybeHandleControlCommand(message)) return;
@@ -303,6 +315,44 @@ client.on(Events.MessageCreate, async (message) => {
       !String(message.content || "").trim().startsWith("$") &&
       message.inGuild?.() &&
       isBotPing(message)
+  });
+});
+
+async function hydrateUpdatedMessage(message) {
+  if (!message) return null;
+  if (message.partial && typeof message.fetch === "function") {
+    return message.fetch().catch(() => null);
+  }
+  return message;
+}
+
+client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+  await runGuarded("message-update-handler", async () => {
+    const message = await hydrateUpdatedMessage(newMessage);
+    if (!message || message.author?.bot || !message.inGuild?.()) return;
+
+    const oldContent = typeof oldMessage?.content === "string" ? oldMessage.content : null;
+    const newContent = String(message.content || "");
+    if (!newContent.trim()) return;
+    if (oldContent !== null && oldContent === newContent) return;
+
+    await maybeEnforceNicknameOnMessage(message).catch(() => null);
+    await maybeHandleModerationWatch(message);
+  }, {
+    message: newMessage
+  });
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  await runGuarded("guild-member-add", async () => {
+    await maybeEnforceNicknameMember(member).catch(() => null);
+    await maybeHandleImpersonationCheck(member);
+  });
+});
+
+client.on(Events.GuildMemberUpdate, async (_oldMember, newMember) => {
+  await runGuarded("guild-member-update", async () => {
+    await maybeEnforceNicknameMember(newMember);
   });
 });
 

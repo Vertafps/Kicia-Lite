@@ -1,4 +1,4 @@
-const { buildPanel, WARN } = require("../embed");
+const { buildPanel, buildRichPanel, WARN } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const {
   listRestrictedEmojis,
@@ -94,19 +94,19 @@ function buildRestrictedReactionLogPanel({
 }) {
   const jumpUrl = buildMessageUrl(message);
 
-  return {
-    header: "Restricted Reaction Warning",
-    body: [
-      "restricted emoji reaction removed and user warned in DM",
-      `**User:** <@${reactingUserId}>`,
-      `**Emoji:** ${emojiDisplay}`,
-      `**Target Staff Message:** <@${targetMember?.id || message.author?.id}> in <#${message.channelId}>`,
-      jumpUrl ? `**Jump:** [Open message](${jumpUrl})` : null,
-      `**Reaction Removed:** ${reactionRemoved ? "yes" : "failed"}`,
-      `**DM:** ${dmSent ? "sent" : "not sent"}`
-    ].filter(Boolean).join("\n\n"),
-    color: WARN
-  };
+  return buildRichPanel({
+    title: "Restricted Reaction Warning",
+    color: WARN,
+    description: "restricted emoji reaction removed and user warned in DM",
+    fields: [
+      { name: "User", value: `<@${reactingUserId}>`, inline: true },
+      { name: "Emoji", value: emojiDisplay, inline: true },
+      { name: "Target Message", value: `<@${targetMember?.id || message.author?.id}> in <#${message.channelId}>`, inline: false },
+      jumpUrl ? { name: "Jump", value: `[Open message](${jumpUrl})`, inline: false } : null,
+      { name: "Reaction Removed", value: reactionRemoved ? "yes" : "failed", inline: true },
+      { name: "DM Sent", value: dmSent ? "sent" : "not sent", inline: true }
+    ].filter(Boolean)
+  });
 }
 
 async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {

@@ -45,6 +45,7 @@ Owners:
 - `$state reset` restores the default presence text.
 - `$fetch` refreshes the KB cache.
 - `$jarvis` runs runtime, KB, moderation, intelligence, and security diagnostics.
+- `$testpromax` runs the extended diagnostics sweep with a longer progress pass.
 - `$db` inspects SQLite state.
 - `$scamaudit` shows recent scam/trade classifier decisions.
 - `$whitelist <user>` / `$whitelist remove <user>` manages manual moderation bypass.
@@ -54,12 +55,13 @@ Staff and higher:
 
 - `$allowlink <url>` / `$removelink <url>` manages dynamic trusted links.
 - `$emoji <emoji>` / `$emoji remove <emoji>` manages restricted reactions.
+- `$nick` / `$nick add /pattern/i -> name` / `$nick remove <id>` manages nickname rename rules.
 
 ## State
 
 Persistent state is stored in `data/restricted-reactions.sqlite` via `sql.js`.
 
-The database currently stores app config, bot presence state, restricted emojis, trusted links, manual moderation whitelist users, daily stats, scam decision audits, and moderation action review records.
+The database currently stores app config, bot presence state, restricted emojis, trusted links, nickname rename rules, manual moderation whitelist users, daily stats, scam decision audits, and moderation action review records.
 
 ## Notes
 
@@ -70,5 +72,9 @@ Required intents:
 - `GuildMessageReactions`
 - `MessageContent`
 - `DirectMessages`
+
+Optional privileged intent:
+
+- `GuildMembers` enables join/member-update nickname checks and join-time staff impersonation review. Set `ENABLE_GUILD_MEMBER_EVENTS=true` only after enabling this intent in the Discord Developer Portal.
 
 Recommended invite permissions include View Channel, Send Messages, Embed Links, Read Message History, Add Reactions, Manage Messages, Moderate Members, and channel/role permissions needed for lockdown.

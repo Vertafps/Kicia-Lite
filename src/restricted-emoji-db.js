@@ -270,6 +270,17 @@ function createSchema(db) {
 
     CREATE INDEX IF NOT EXISTS moderation_actions_expires_idx
       ON moderation_actions (expires_at);
+
+    CREATE TABLE IF NOT EXISTS nickname_patterns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pattern TEXT NOT NULL,
+      flags TEXT NOT NULL DEFAULT 'i',
+      rename_to TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS nickname_patterns_pattern_flags_idx
+      ON nickname_patterns (pattern, flags);
   `);
 
   try {
@@ -398,6 +409,20 @@ function mapModerationWhitelistRow(row) {
     userId: String(row.user_id || ""),
     createdAt: Number(row.created_at || 0),
     createdBy: row.created_by ? String(row.created_by) : null
+  };
+}
+
+function mapNicknamePatternRow(row) {
+  const pattern = String(row.pattern || "");
+  const flags = String(row.flags || "i");
+  const renameTo = String(row.rename_to || "");
+  return {
+    id: Number(row.id || 0),
+    pattern,
+    flags,
+    renameTo,
+    createdAt: Number(row.created_at || 0),
+    display: `/${pattern}/${flags} -> ${renameTo}`
   };
 }
 
@@ -941,6 +966,114 @@ async function removeModerationWhitelistedUser(userId) {
   };
 }
 
+async function listNicknamePatterns() {
+  const db = await getDatabase();
+  return getRows(
+    db,
+    `
+      SELECT id, pattern, flags, rename_to, created_at
+      FROM nickname_patterns
+      ORDER BY created_at ASC, id ASC
+    `
+  ).map(mapNicknamePatternRow);
+}
+
+async function addNicknamePattern({ pattern, flags = "i", renameTo }) {
+  const normalizedPattern = String(pattern || "").trim();
+  const normalizedFlags = String(flags || "i").trim() || "i";
+  const normalizedRenameTo = String(renameTo || "").replace(/\s+/g, " ").trim();
+  if (!normalizedPattern || !normalizedRenameTo) {
+    throw new Error("Missing nickname pattern or rename target");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT id, pattern, flags, rename_to, created_at
+      FROM nickname_patterns
+      WHERE pattern = ? AND flags = ?
+      LIMIT 1
+    `,
+    [normalizedPattern, normalizedFlags]
+  )[0];
+
+  if (existing) {
+    return {
+      added: false,
+      pattern: mapNicknamePatternRow(existing)
+    };
+  }
+
+  const now = Date.now();
+  db.run(
+    `
+      INSERT INTO nickname_patterns (
+        pattern,
+        flags,
+        rename_to,
+        created_at
+      ) VALUES (?, ?, ?, ?)
+    `,
+    [
+      normalizedPattern,
+      normalizedFlags,
+      normalizedRenameTo,
+      now
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+  const inserted = getRows(
+    db,
+    `
+      SELECT id, pattern, flags, rename_to, created_at
+      FROM nickname_patterns
+      WHERE pattern = ? AND flags = ?
+      LIMIT 1
+    `,
+    [normalizedPattern, normalizedFlags]
+  )[0];
+
+  return {
+    added: true,
+    pattern: mapNicknamePatternRow(inserted)
+  };
+}
+
+async function removeNicknamePatternById(id) {
+  const normalizedId = Math.max(0, Math.round(Number(id) || 0));
+  if (!normalizedId) {
+    throw new Error("Missing nickname pattern id");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT id, pattern, flags, rename_to, created_at
+      FROM nickname_patterns
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [normalizedId]
+  )[0];
+
+  if (!existing) {
+    return {
+      removed: false,
+      pattern: null
+    };
+  }
+
+  db.run("DELETE FROM nickname_patterns WHERE id = ?", [normalizedId]);
+  schedulePersist(db, { immediate: true });
+
+  return {
+    removed: true,
+    pattern: mapNicknamePatternRow(existing)
+  };
+}
+
 function trimAuditText(value, max = 900) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text || text.length <= max) return text;
@@ -1425,6 +1558,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
   const emojis = await listRestrictedEmojis();
   const trustedLinks = await listTrustedLinks();
   const moderationWhitelist = await listModerationWhitelistedUsers();
+  const nicknamePatterns = await listNicknamePatterns();
   const emojiTimeoutMs = await getEmojiTimeoutMs();
   const dailyStats = await getDailyStatsSnapshot();
 
@@ -1434,12 +1568,14 @@ async function getRestrictedEmojiDatabaseSnapshot() {
     emojis,
     trustedLinks,
     moderationWhitelist,
+    nicknamePatterns,
     dailyStats,
     tableCounts: {
       appConfig: Number(getScalarValue(db, "SELECT COUNT(*) FROM app_config") || 0),
       restrictedEmojis: Number(getScalarValue(db, "SELECT COUNT(*) FROM restricted_emojis") || 0),
       trustedLinks: Number(getScalarValue(db, "SELECT COUNT(*) FROM trusted_links") || 0),
       moderationWhitelist: Number(getScalarValue(db, "SELECT COUNT(*) FROM moderation_whitelist") || 0),
+      nicknamePatterns: Number(getScalarValue(db, "SELECT COUNT(*) FROM nickname_patterns") || 0),
       dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
@@ -1495,6 +1631,9 @@ module.exports = {
   isModerationWhitelistedUser,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
+  listNicknamePatterns,
+  addNicknamePattern,
+  removeNicknamePatternById,
   recordScamDecisionAudit,
   listScamDecisionAudit,
   clearScamDecisionAudit,

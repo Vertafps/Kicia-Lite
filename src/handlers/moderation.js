@@ -17,7 +17,8 @@ const {
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
-  SELLING_TIMEOUT_MS
+  SELLING_TIMEOUT_MS,
+  PREMIUM_ROLE_IDS
 } = require("../config");
 const {
   MODLOG_REVERT_PREFIX,
@@ -30,7 +31,7 @@ const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const { canUseEmojiCommands, hasModerationBypassMessage } = require("../permissions");
-const { detectProhibitedCommerce } = require("../prohibited-commerce");
+const { detectProhibitedCommerce, similarity } = require("../prohibited-commerce");
 const {
   cleanupExpiredModerationActions,
   deleteModerationAction,
@@ -88,12 +89,16 @@ const SELL_ANTI_PATTERNS = [
 ];
 const SELL_NEUTRAL_WORD_RE = /\bresellers?\b/g;
 const SELL_BROAD_INTENT_RE = /\b(?:sell|selling|seller|sold|buy|buying|buyer|trade|trading|trader|swap|swapping|exchange|scam|scamming)\b/;
+const SELL_FUZZY_INTENT_TERMS = ["sell", "selling", "buy", "buying", "trade", "trading", "swap", "exchange"];
+const SELL_FUZZY_ITEM_TERMS = ["key", "keys", "license", "licenses", "account", "accounts", "config", "configs", "executor", "script", "premium"];
 const SELL_CONDENSED_INTENT_RE = /(?:s+e+l+l+(?:i+n+g+|e+r+)?)|(?:s+o+l+d+)|(?:b+u+y+(?:i+n+g+)?)|(?:t+r+a+d+(?:i+n+g+|e+r+)?)|(?:s+w+a+p+)|(?:w+t+s+)|(?:w+t+b+)|(?:f+o+r+s+a+l+e+)/;
 const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:l+v+l+|l+e+v+e+l+)|(?:c+f+g+|c+o+n+f+i+g+)|(?:e+x+e+c+u+t+o+r+)|(?:s+c+r+i+p+t+)|(?:p+r+e+m+i+u+m+)|(?:l+i+c+e+n+s+e+)|(?:k+e+y+)|(?:k+i+c+i+a+)|(?:k+i+c+i+a+h+o+o+k+)/;
 const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?(?:selling|trading|buying)\b|^(?:sell|trade|buy)\b|^(?:wts|wtb)\b|^for sale\b/;
 const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|trading is|buying is|rules say|rule says|scammer|scamming is|report scam|avoid scam)\b/;
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/;
 const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone)\b/;
+const WANT_OFFER_RE = /\b(?:who|anyone|somebody|someone|any1|some1)\s+(?:wants?|wanna|wana|want|need)\b|\b(?:wanna|wana)\s+(?:buy|trade|swap)\b/;
+const PREMIUM_SELLING_CONFIDENCE_DISCOUNT = 8;
 const MODERATION_ACTION_REVIEW_MAX_MS = 12 * 60 * 60 * 1000;
 const MODERATION_CONTEXT_VIEW_LIMIT = 8;
 const MODERATION_DELETE_CONTEXT_LIMIT = 3;
@@ -443,6 +448,30 @@ function buildSellingCondensedText(content) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+function hasApproxToken(tokens, terms, threshold = 0.78) {
+  return (tokens || []).some((token) =>
+    token.length >= 3 &&
+    terms.some((term) => similarity(token, term) >= threshold)
+  );
+}
+
+function hasPremiumMemberRole(member) {
+  return (PREMIUM_ROLE_IDS || []).some((roleId) => member?.roles?.cache?.has?.(roleId));
+}
+
+function applyPremiumSellingDiscount(message, signals) {
+  if (!hasPremiumMemberRole(message?.member)) return signals;
+  return (signals || []).map((signal) => {
+    if (signal.type !== "selling" || signal.subtype === "prohibited_sale") return signal;
+    const confidence = Math.max(1, Number(signal.confidence || 0) - PREMIUM_SELLING_CONFIDENCE_DISCOUNT);
+    return {
+      ...signal,
+      confidence,
+      reason: `${signal.reason} (premium member confidence dampened)`
+    };
+  });
+}
+
 function isSellPriceFollowUp(content) {
   const rawLower = String(content || "").toLowerCase().trim();
   if (!rawLower) return false;
@@ -467,13 +496,17 @@ function scoreSellingConfidence({
 
   const raw = String(content || "");
   const rawLower = raw.toLowerCase();
+  const tokens = spaced.split(/\s+/).filter(Boolean);
+  const hasFuzzyIntent = hasApproxToken(tokens, SELL_FUZZY_INTENT_TERMS);
+  const hasWantOffer = WANT_OFFER_RE.test(spaced);
   const hasQuestionTone =
     raw.includes("?") ||
     MARKET_QUESTION_RE.test(spaced);
   const hasStrongIntent =
     SELL_STRONG_INTENT_RE.test(spaced) ||
     /\b(?:wts|wtb)\b/.test(spaced) ||
-    /f+o+r+s+a+l+e+/.test(condensed);
+    /f+o+r+s+a+l+e+/.test(condensed) ||
+    hasFuzzyIntent;
   const hasCondensedIntent = SELL_CONDENSED_INTENT_RE.test(condensed);
   const hasPriceSignal = /\$\s*\d/.test(raw) || SELL_PRICE_RE.test(rawLower);
   const hasPrivateTradeSignal =
@@ -488,8 +521,9 @@ function scoreSellingConfidence({
   if (hasPriceSignal) score += 20;
   if (hasCondensedIntent && !hasStrongIntent) score += 10;
   if (hasPrivateTradeSignal) score += 12;
-  if (hasQuestionTone) score -= 35;
-  if (MARKET_QUESTION_RE.test(spaced)) score -= 15;
+  if (hasWantOffer) score += 18;
+  if (hasQuestionTone && !hasWantOffer) score -= 35;
+  if (MARKET_QUESTION_RE.test(spaced) && !hasWantOffer) score -= 15;
 
   return clampConfidence(score);
 }
@@ -499,18 +533,22 @@ function detectSellingSignal(content) {
   const spaced = buildSellingSpacedText(content);
   const condensed = buildSellingCondensedText(content);
   if (!spaced || !condensed) return null;
+  const tokens = spaced.split(/\s+/).filter(Boolean);
   if (SELL_ANTI_PATTERNS.some((pattern) => pattern.test(rawLower) || pattern.test(spaced))) return null;
   if (isKiciaLegitPurchaseIntent([content])) return null;
   if (isSafePurchaseMethodQuestion([content])) return null;
 
   const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced));
+  const hasFuzzyIntent = hasApproxToken(tokens, SELL_FUZZY_INTENT_TERMS);
   const hasBroadSellIntent =
     hasExplicitOffer ||
     SELL_BROAD_INTENT_RE.test(spaced) ||
-    SELL_CONDENSED_INTENT_RE.test(condensed);
+    SELL_CONDENSED_INTENT_RE.test(condensed) ||
+    hasFuzzyIntent;
   const hasItemSignal =
     SELL_ITEM_RE.test(spaced) ||
-    SELL_CONDENSED_ITEM_RE.test(condensed);
+    SELL_CONDENSED_ITEM_RE.test(condensed) ||
+    hasApproxToken(tokens, SELL_FUZZY_ITEM_TERMS);
   const hasShortContextItem = SELL_SHORT_CONTEXT_ITEM_RE.test(spaced);
   const hasMarketSignal =
     SELL_MARKET_RE.test(rawLower) ||
@@ -519,10 +557,12 @@ function detectSellingSignal(content) {
   const hasPriceSignal = /\$\s*\d/.test(content) || SELL_PRICE_RE.test(rawLower);
   const hasQuestionTone = rawLower.includes("?") || MARKET_QUESTION_RE.test(spaced);
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(spaced);
+  const hasWantOffer = WANT_OFFER_RE.test(spaced);
   const hasStrongIntent =
     SELL_STRONG_INTENT_RE.test(spaced) ||
     /\b(?:wts|wtb)\b/.test(spaced) ||
-    /f+o+r+s+a+l+e+/.test(condensed);
+    /f+o+r+s+a+l+e+/.test(condensed) ||
+    hasFuzzyIntent;
 
   if (!hasBroadSellIntent) {
     return null;
@@ -533,7 +573,7 @@ function detectSellingSignal(content) {
   if (!hasExplicitOffer && !hasItemSignal && !hasMarketSignal && !hasPrivateHandoff) {
     return null;
   }
-  if (hasQuestionTone && !hasPrivateHandoff && !SELL_PRICE_RE.test(rawLower)) {
+  if (hasQuestionTone && !hasWantOffer && !hasPrivateHandoff && !SELL_PRICE_RE.test(rawLower)) {
     return null;
   }
   if (
@@ -572,12 +612,17 @@ function getScamTradeTextFeatures(text) {
   const objectishTokens = tokens.filter((token) => !intentTokens.has(token) && token.length > 1);
   const hasPriceSignal = /\$\s*\d/.test(text) || SELL_PRICE_RE.test(rawLower);
   const hasShortItemSignal = SELL_SHORT_CONTEXT_ITEM_RE.test(spaced);
-  const hasProtectedItemSignal = SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed);
+  const hasFuzzyIntent = hasApproxToken(tokens, SELL_FUZZY_INTENT_TERMS);
+  const hasFuzzyItem = hasApproxToken(tokens, SELL_FUZZY_ITEM_TERMS);
+  const hasProtectedItemSignal = SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed) || hasFuzzyItem;
   const hasDeicticDealSignal = /\b(?:this|that|it|one|thing|stuff|something)\b/.test(spaced);
   const hasBarterSignal =
     /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offer|offering)\b.{0,80}\bfor\b/.test(spaced);
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(spaced);
-  const hasOfferTone = /\b(?:you|u)\s+want\b/.test(spaced) || /\b(?:want|need)\s+(?:it|this|one)\b/.test(spaced);
+  const hasOfferTone =
+    /\b(?:you|u)\s+want\b/.test(spaced) ||
+    /\b(?:want|need)\s+(?:it|this|one)\b/.test(spaced) ||
+    WANT_OFFER_RE.test(spaced);
   const hasPrivatePurchaseSignal =
     hasPrivateHandoff &&
     /\b(?:buy|buying|purchase|price|prices|pay|payment|get|sell|selling|offer|offers)\b/.test(spaced) &&
@@ -594,7 +639,7 @@ function getScamTradeTextFeatures(text) {
     hasAnti: SELL_ANTI_PATTERNS.some((pattern) => pattern.test(rawLower) || pattern.test(spaced)) ||
       SELL_CONTEXT_NEGATIVE_RE.test(spaced),
     hasExplicitOffer: SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced)),
-    hasBroadIntent: SELL_BROAD_INTENT_RE.test(spaced) || SELL_CONDENSED_INTENT_RE.test(condensed),
+    hasBroadIntent: SELL_BROAD_INTENT_RE.test(spaced) || SELL_CONDENSED_INTENT_RE.test(condensed) || hasFuzzyIntent,
     hasItemSignal: hasProtectedItemSignal,
     hasShortItemSignal,
     hasMarketSignal: SELL_MARKET_RE.test(rawLower) || hasPriceSignal,
@@ -2084,6 +2129,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   now = Date.now()
 } = {}) {
   if (!signals.length) return [];
+  signals = applyPremiumSellingDiscount(message, signals);
 
   const strongest = signals.reduce(
     (best, signal) => (!best || (signal.confidence || 0) > (best.confidence || 0) ? signal : best),
@@ -2142,7 +2188,12 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     return confirmedSignals;
   }
 
-  if (localResult?.verdict === false && (localResult.confidence || 0) >= 92) {
+  const hasAiRequiredSignals = signals.some((signal) => signal.requiresAi);
+  if (
+    localResult?.verdict === false &&
+    (localResult.confidence || 0) >= 92 &&
+    (!hasAiRequiredSignals || localResult.stage === "policy")
+  ) {
     await sendLog(message.guild, buildScamAiClearedLogPanel({
       message,
       candidateSignal: strongest,
@@ -2158,6 +2209,38 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       now
     });
     return [];
+  }
+
+  const deterministicSignals = signals.filter((signal) =>
+    !signal.requiresAi &&
+    (signal.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD
+  );
+  if (deterministicSignals.length) {
+    const deterministicConfidence = getMaxSignalConfidence(deterministicSignals);
+    const deterministicResult = {
+      verdict: true,
+      confidence: deterministicConfidence,
+      score: deterministicConfidence / 100,
+      reason: "High-confidence deterministic scam/trade signal.",
+      model: "local-kicia-policy-v3"
+    };
+    const deterministicVerdict = buildClassifierVerdictResult(deterministicResult);
+    const confirmedSignals = deterministicSignals.map((signal) => ({
+      ...signal,
+      confidence: getConfirmedSignalConfidence(signal, deterministicVerdict),
+      reason: `local-confirmed scam/trade intent: ${signal.reason}`,
+      ai: deterministicVerdict
+    }));
+    await recordScamAudit(message, {
+      action: "local_deterministic_true",
+      handled: true,
+      signals: confirmedSignals,
+      strongest,
+      scamContext,
+      localResult: deterministicResult,
+      now
+    });
+    return confirmedSignals;
   }
 
   const aiResult = await classifyScam(scamContext, { now });

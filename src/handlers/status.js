@@ -34,12 +34,17 @@ function isJarvisCommandMessage(content) {
   return String(content || "").trim().toLowerCase() === "$jarvis";
 }
 
+function isTestProMaxCommandMessage(content) {
+  return String(content || "").trim().toLowerCase() === "$testpromax";
+}
+
 function isOwnerCommandMessage(content) {
   return (
     parseStatusCommand(content) !== null ||
     (isStatusCommandMessage(content) && !isPublicStatusQueryMessage(content)) ||
     isFetchCommandMessage(content) ||
-    isJarvisCommandMessage(content)
+    isJarvisCommandMessage(content) ||
+    isTestProMaxCommandMessage(content)
   );
 }
 
@@ -81,13 +86,13 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
   return true;
 }
 
-async function handleJarvisCommand(message, refreshKb) {
+async function handleJarvisCommand(message, refreshKb, { deep = false } = {}) {
   if (!canUseOwnerCommands(message)) return true;
 
   const progressPayload = (body) => ({
     embeds: [
       buildPanel({
-        header: "Jarvis",
+        header: deep ? "Test Pro Max" : "Jarvis",
         body,
         color: INFO
       })
@@ -109,6 +114,7 @@ async function handleJarvisCommand(message, refreshKb) {
   const report = await runJarvisDiagnostics(message, {
     refreshKb,
     channelLockRoleId: CHANNEL_LOCK_ROLE_ID,
+    targetVisibleMs: deep ? 45_000 : undefined,
     onProgress: async ({ body }) => {
       await updateProgress(body);
     }
@@ -117,7 +123,7 @@ async function handleJarvisCommand(message, refreshKb) {
   const finalPayload = {
     embeds: [
       buildPanel({
-        header: "Jarvis Report",
+        header: deep ? "Test Pro Max Report" : "Jarvis Report",
         body: report.body,
         color: report.color
       })
@@ -140,17 +146,18 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   const nextStatus = parseStatusCommand(message.content);
   const fetchCommand = isFetchCommandMessage(message.content);
   const jarvisCommand = isJarvisCommandMessage(message.content);
+  const testProMaxCommand = isTestProMaxCommandMessage(message.content);
 
   if (statusCommand && isPublicStatusQueryMessage(message.content)) {
     return maybeReplyWithPublicStatus(message, { useCooldown: false });
   }
 
-  if (nextStatus || fetchCommand || jarvisCommand || statusCommand) {
+  if (nextStatus || fetchCommand || jarvisCommand || testProMaxCommand || statusCommand) {
     if (!canUseOwnerCommands(message)) return true;
   }
 
-  if (jarvisCommand) {
-    return handleJarvisCommand(message, refreshKb);
+  if (jarvisCommand || testProMaxCommand) {
+    return handleJarvisCommand(message, refreshKb, { deep: testProMaxCommand });
   }
 
   if (fetchCommand) {
@@ -197,7 +204,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     await safeReply(message, {
       embeds: [
         buildPanel({
-          body: "usage: `$status`, `$status up`, `$status down`, `$fetch`, or `$jarvis`",
+          body: "usage: `$status`, `$status up`, `$status down`, `$fetch`, `$jarvis`, or `$testpromax`",
           color: INFO
         })
       ],
@@ -214,6 +221,7 @@ module.exports = {
   parseStatusCommand,
   isFetchCommandMessage,
   isJarvisCommandMessage,
+  isTestProMaxCommandMessage,
   isStatusCommandMessage,
   isPublicStatusQueryMessage,
   isOwnerCommandMessage,

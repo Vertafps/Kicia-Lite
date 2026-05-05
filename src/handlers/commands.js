@@ -16,6 +16,9 @@ const {
   listModerationWhitelistedUsers,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
+  listNicknamePatterns,
+  addNicknamePattern,
+  removeNicknamePatternById,
   getRestrictedEmojiDatabaseSnapshot,
   listScamDecisionAudit,
   getBotPresenceState,
@@ -103,6 +106,38 @@ function parseEmojiMessage(content) {
     : null;
 }
 
+function parseNickMessage(content) {
+  const trimmed = String(content || "").trim();
+  if (!/^\$nick(?:\s|$)/i.test(trimmed)) return null;
+  if (/^\$nick$/i.test(trimmed)) {
+    return {
+      action: "list"
+    };
+  }
+
+  const removeMatch = trimmed.match(/^\$nick\s+(?:remove|delete|del)\s+(\d+)$/i);
+  if (removeMatch) {
+    return {
+      action: "remove",
+      id: Number(removeMatch[1])
+    };
+  }
+
+  const addMatch = trimmed.match(/^\$nick\s+add\s+\/((?:\\\/|[^/])+)\/([a-z]*)\s*->\s*(.+)$/i);
+  if (addMatch) {
+    return {
+      action: "add",
+      pattern: addMatch[1].replace(/\\\//g, "/"),
+      flags: addMatch[2] || "i",
+      renameTo: addMatch[3].trim()
+    };
+  }
+
+  return {
+    action: "help"
+  };
+}
+
 function parseTrustedLinkMessage(content) {
   const trimmed = String(content || "").trim();
   if (/^\$allowlink$/i.test(trimmed)) {
@@ -180,6 +215,14 @@ function formatEmojiList(emojis) {
   return emojis.map((emoji) => emoji.display).join(" ");
 }
 
+function formatNicknamePatternList(patterns) {
+  if (!Array.isArray(patterns) || !patterns.length) return "none yet";
+  return patterns
+    .slice(0, 25)
+    .map((entry) => `- #${entry.id} ${entry.display}`)
+    .join("\n");
+}
+
 function formatTrustedLinkList(links) {
   if (!Array.isArray(links) || !links.length) return "none yet";
   return links.map((link) => `- ${link.url}`).join("\n");
@@ -247,6 +290,7 @@ function buildCommandsBody() {
     "`$state reset` restore the default bot presence text",
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
+    "`$testpromax` run the extended diagnostics sweep",
     "`$db` / `$database` inspect the SQLite moderation database",
     "`$scamaudit` inspect recent scam/trade classifier decisions",
     "`$whitelist` list manual moderation whitelist users",
@@ -261,7 +305,10 @@ function buildCommandsBody() {
     "`$removelink <url>` remove a trusted link",
     "`$emoji` list restricted emojis",
     "`$emoji <emoji>` add a restricted emoji",
-    "`$emoji remove <emoji>` remove a restricted emoji"
+    "`$emoji remove <emoji>` remove a restricted emoji",
+    "`$nick` list nickname patterns",
+    "`$nick add /^!.*/i -> wawa` rename members matching pattern",
+    "`$nick remove <id>` remove a nickname pattern by id"
   ].join("\n");
 }
 
@@ -465,6 +512,105 @@ async function handleEmojiCommand(message, command, {
   return true;
 }
 
+function validateNicknamePatternCommand(command) {
+  const pattern = String(command.pattern || "").trim();
+  const flags = String(command.flags || "i").trim() || "i";
+  const renameTo = String(command.renameTo || "").replace(/\s+/g, " ").trim();
+  if (!pattern || pattern.length > 120) {
+    return { ok: false, error: "nickname regex must be 1-120 chars" };
+  }
+  if (!/^[imu]*$/.test(flags) || new Set(flags).size !== flags.length) {
+    return { ok: false, error: "nickname regex flags can only use unique `i`, `m`, and `u`" };
+  }
+  if (!renameTo || renameTo.length > 32) {
+    return { ok: false, error: "rename target must be 1-32 chars" };
+  }
+  if (/[^\x20-\x7E]/.test(renameTo)) {
+    return { ok: false, error: "rename target must use plain visible ASCII for now" };
+  }
+  if (/\([^)]*[+*][^)]*\)[+*?{]/.test(pattern)) {
+    return { ok: false, error: "nested quantified groups are blocked for nickname regex safety" };
+  }
+  try {
+    new RegExp(pattern, flags);
+  } catch (err) {
+    return { ok: false, error: `invalid regex: ${err?.message || err}` };
+  }
+  return { ok: true, pattern, flags, renameTo };
+}
+
+async function handleNickCommand(message, command, {
+  listPatterns = listNicknamePatterns,
+  addPattern = addNicknamePattern,
+  removePattern = removeNicknamePatternById
+} = {}) {
+  if (command.action === "list") {
+    const patterns = await listPatterns();
+    await replyWithCommandPanel(message, {
+      header: "Nickname Moderation",
+      body: [
+        `**Count:** ${patterns.length}`,
+        formatNicknamePatternList(patterns)
+      ].join("\n\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (command.action === "remove") {
+    const result = await removePattern(command.id);
+    const patterns = await listPatterns();
+    await replyWithCommandPanel(message, {
+      header: "Nickname Moderation",
+      body: [
+        result.removed ? `removed rule #${command.id}` : `no nickname rule found for #${command.id}`,
+        `**Count:** ${patterns.length}`
+      ].join("\n"),
+      color: result.removed ? SUCCESS : WARN
+    });
+    return true;
+  }
+
+  if (command.action === "add") {
+    const validation = validateNicknamePatternCommand(command);
+    if (!validation.ok) {
+      await replyWithCommandPanel(message, {
+        header: "Nickname Pattern Rejected",
+        body: [
+          validation.error,
+          "**Usage:** `$nick add /^!.*/i -> wawa`"
+        ].join("\n"),
+        color: DANGER
+      });
+      return true;
+    }
+
+    const result = await addPattern(validation);
+    const patterns = await listPatterns();
+    await replyWithCommandPanel(message, {
+      header: "Nickname Moderation",
+      body: [
+        result.added ? `added ${result.pattern.display}` : `that rule already exists: ${result.pattern.display}`,
+        `**Count:** ${patterns.length}`
+      ].join("\n"),
+      color: result.added ? SUCCESS : WARN
+    });
+    return true;
+  }
+
+  await replyWithCommandPanel(message, {
+    header: "Nickname Moderation",
+    body: [
+      "**Usage:**",
+      "`$nick`",
+      "`$nick add /^!.*/i -> wawa`",
+      "`$nick remove <id>`"
+    ].join("\n"),
+    color: INFO
+  });
+  return true;
+}
+
 async function handleWhitelistCommand(message, command, {
   listWhitelist = listModerationWhitelistedUsers,
   addWhitelistUser = addModerationWhitelistedUser,
@@ -626,6 +772,12 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleEmojiCommand(message, emojiCommand, deps);
   }
 
+  const nickCommand = parseNickMessage(message.content);
+  if (nickCommand) {
+    if (!canUseEmojiCommands(message)) return true;
+    return handleNickCommand(message, nickCommand, deps);
+  }
+
   if (isCommandsListMessage(message.content)) {
     if (!canUseOwnerCommands(message)) return true;
     return handleCommandsList(message);
@@ -645,9 +797,11 @@ module.exports = {
   parseScamAuditMessage,
   parseStateMessage,
   parseEmojiMessage,
+  parseNickMessage,
   parseTrustedLinkMessage,
   parseWhitelistMessage,
   parseUserIdInput,
   handleStateCommand,
+  handleNickCommand,
   maybeHandleControlCommand
 };

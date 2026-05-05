@@ -18,6 +18,8 @@ const {
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_TIMEOUT_MS,
+  PREMIUM_ROLE_IDS,
+  ENABLE_GUILD_MEMBER_EVENTS,
   GEMINI_API_KEY,
   GEMINI_SCAM_CACHE_MS,
   GEMINI_SCAM_FAILURE_COOLDOWN_MS,
@@ -184,6 +186,7 @@ function buildModerationGuardLines() {
     [
       "**Scam/Trade Guard:**",
       "context-first prefilter checks the target user's last 5 messages plus per-message reply context;",
+      "message edits are re-scanned through the same moderation watcher;",
       "local Kicia policy + Naive Bayes classifier handles confident cases before remote AI;",
       GEMINI_API_KEY
         ? `Gemini ${GEMINI_SCAM_MODEL} handles borderline cases;`
@@ -193,6 +196,7 @@ function buildModerationGuardLines() {
       `remote AI failure cooldown ${formatDuration(GEMINI_SCAM_FAILURE_COOLDOWN_MS)};`,
       `API timeout ${formatDuration(GEMINI_SCAM_TIMEOUT_MS)};`,
       `confirmed confidence ladder ${sellingTierText || `>${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`};`,
+      `premium role dampening ${PREMIUM_ROLE_IDS.length ? `${PREMIUM_ROLE_IDS.length} role(s), -8 confidence on scam/trade only` : "off"};`,
       `repeat fallback ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
       `repeat timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
@@ -311,6 +315,14 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
     securityLines.push(
       `**Moderation Review DB:** ${emojiDb.tableCounts.moderationActions || 0} open action reviews | auto-cleaned after revert, expiry, and daily cleanup`
+    );
+    securityLines.push(
+      `**Nickname Mod DB:** ${emojiDb.tableCounts.nicknamePatterns || 0} rename patterns | checked on messages${ENABLE_GUILD_MEMBER_EVENTS ? ", joins, and member updates" : "; join/update checks require ENABLE_GUILD_MEMBER_EVENTS=true"}`
+    );
+    securityLines.push(
+      ENABLE_GUILD_MEMBER_EVENTS
+        ? "**Impersonation Guard:** staff-name lookalikes on join are log-only for manual review"
+        : "**Impersonation Guard:** join lookalike checks are installed but waiting for GuildMembers intent opt-in"
     );
     securityLines.push(
       ...buildIntelligenceGuardLines()

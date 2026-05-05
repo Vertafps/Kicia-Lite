@@ -11,7 +11,7 @@ const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
 const { maybeHandleLockCommand, parseLockCommand } = require("../src/handlers/lockdown");
-const { isOwnerCommandMessage, maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
+const { isOwnerCommandMessage, isTestProMaxCommandMessage, maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
 const { buildCustomPresenceData, MAX_PRESENCE_STATE_LENGTH } = require("../src/presence-state");
 const { resetRuntimeStatus, getRuntimeStatus } = require("../src/runtime-status");
 
@@ -1037,6 +1037,8 @@ test("owner fetch command replies cleanly on kb refresh failure", async () => {
 
 test("jarvis counts as an owner-only command while public status does not", () => {
   assert.equal(isOwnerCommandMessage("$jarvis"), true);
+  assert.equal(isOwnerCommandMessage("$testpromax"), true);
+  assert.equal(isTestProMaxCommandMessage("$testpromax"), true);
   assert.equal(isOwnerCommandMessage("$status"), false);
   assert.equal(isOwnerCommandMessage("$status down"), true);
 });

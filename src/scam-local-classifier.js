@@ -54,7 +54,29 @@ const SCAM_SAMPLES = [
   "need middleman for kicia key trade",
   "selling premium bot access cheap",
   "dm for bypass download no official server",
-  "i trade configs want"
+  "i trade configs want",
+  "turn 100 into 1000 dm me",
+  "guaranteed returns investment group",
+  "join my signal group crypto profits",
+  "passive income opportunity dm",
+  "i tripled my money in 24 hours",
+  "invest with me guaranteed profit",
+  "free nitro click this link",
+  "win steam gift card react to this",
+  "giveaway react to claim nitro",
+  "paste this in your browser console",
+  "run this script to get free robux",
+  "enter your token for free premium",
+  "this script gives you free nitro",
+  "verify your discord account here",
+  "your account will be suspended click",
+  "claim your free gift before it expires",
+  "limited time free nitro claim now",
+  "act now before this expires dm me",
+  "100x returns guaranteed signal group",
+  "i made 500 in 24 hours invest with me",
+  "dm me for my crypto group guaranteed profit",
+  "send me 50 get 200 back paypal crypto"
 ];
 
 const SAFE_SAMPLES = [
@@ -107,7 +129,16 @@ const SAFE_SAMPLES = [
   "how to buy",
   "is trading allowed here",
   "can i trade this for that here",
-  "someone said dms to buy kicia is that allowed"
+  "someone said dms to buy kicia is that allowed",
+  "is this investment offer a scam",
+  "someone is posting free nitro links report them",
+  "do not paste anything in your console",
+  "warning this looks like a token grabber",
+  "is this giveaway real or fake",
+  "how do i report a scam investment post",
+  "someone said free nitro is that real",
+  "is this crypto offer legit or a scam",
+  "warning do not click that nitro link"
 ];
 
 const KICIA_BRAND_RE = /\b(?:kicia|kiciahook)\b/i;
@@ -146,6 +177,18 @@ const EXPLANATION_VERB_RE =
   /\b(?:buy|go|check|open|use|ask|look|find|purchase|pay|get|through|from|in|inside|under)\b/i;
 const SELF_PRIVATE_DEAL_RE =
   /\b(?:dm me|dms me|message me|msg me|pm me|inbox me|add me|from me|my shop|my server|my reseller|i sell|i can sell|i got|i have)\b/i;
+const CRYPTO_INVEST_RE =
+  /\b(?:invest|investing|investment|returns?|profit|profits|passive\s+income|signal\s+group|crypto\s+group|double\s+your|triple\s+your|guaranteed|100x|pump|trading\s+group|i\s+made\s+\d+|send\s+\d+\s+get)\b/i;
+const GIVEAWAY_PHISH_RE =
+  /\b(?:free\s+nitro|nitro\s+giveaway|steam\s+gift|gift\s+card\s+giveaway|win\s+a|react\s+to\s+(?:win|claim|get)|click\s+to\s+claim|claim\s+your\s+free|giveaway\s+ends)\b/i;
+const TOKEN_GRAB_RE =
+  /\b(?:paste\s+(?:this|it)\s+in|browser\s+console|devtools|run\s+this\s+script|enter\s+your\s+token|copy\s+(?:this|your)\s+token|token\s+grabber|cookie\s+logger)\b/i;
+const URGENCY_RE =
+  /\b(?:act\s+now|limited\s+time|expires?\s+(?:soon|now)|claim\s+before|before\s+it(?:'s|\s+is)\s+gone|last\s+chance|only\s+\d+\s+(?:left|remaining|spots?))\b/i;
+const ACCOUNT_PHISH_RE =
+  /\b(?:verify\s+your\s+(?:account|discord|identity)|account\s+(?:suspended|banned|terminated|flagged|at\s+risk)|confirm\s+your\s+(?:account|email)|unusual\s+activity|security\s+alert)\b/i;
+const MONEY_TEST_RE = new RegExp(MONEY_RE.source, "i");
+const URL_TEST_RE = new RegExp(URL_RE.source, "i");
 
 function normalizeClassifierText(value) {
   return String(value || "")
@@ -263,6 +306,7 @@ function localVerdict({ verdict, confidence, score, reason, stage = "policy", mo
 
 function extractPolicyIntent(context = {}, options = {}) {
   const userMessages = Array.isArray(context.userMessages) ? context.userMessages : [];
+  const rawUserText = userMessages.join(" ");
   const userText = normalizeClassifierText(userMessages.join(" "));
   const fullText = normalizeClassifierText(buildContextText(context));
   const signalConfidence = Number(options.strongestSignal?.confidence || 0);
@@ -337,6 +381,72 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 93,
       score: 0.07,
       reason: "Meta-discussion, report, or policy question rather than target-user deal intent."
+    });
+  }
+
+  const hasNewScamPattern =
+    TOKEN_GRAB_RE.test(userText) ||
+    ACCOUNT_PHISH_RE.test(userText) ||
+    CRYPTO_INVEST_RE.test(userText) ||
+    GIVEAWAY_PHISH_RE.test(userText);
+  const shouldDowngradeNewScam =
+    hasNewScamPattern &&
+    (
+      hasMetaDiscussion ||
+      (hasQuestionTone && !hasPrivateHandoff) ||
+      (OFFICIAL_ROUTE_RE.test(userText) && !hasPrivateHandoff)
+    );
+  if (shouldDowngradeNewScam) {
+    return localVerdict({
+      verdict: null,
+      confidence: 82,
+      score: 0.5,
+      reason: "Scam/phish topic appears in question, report, or official-support context."
+    });
+  }
+
+  if (TOKEN_GRAB_RE.test(userText)) {
+    return localVerdict({
+      verdict: true,
+      confidence: 96,
+      score: 0.97,
+      reason: "Token/credential grabber language detected."
+    });
+  }
+
+  if (ACCOUNT_PHISH_RE.test(userText) && (URGENCY_RE.test(userText) || hasPrivateHandoff)) {
+    return localVerdict({
+      verdict: true,
+      confidence: 94,
+      score: 0.95,
+      reason: "Account phishing pattern detected."
+    });
+  }
+
+  if (CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText) && hasPrivateHandoff) {
+    return localVerdict({
+      verdict: true,
+      confidence: 95,
+      score: 0.96,
+      reason: "Crypto investment scam: private money offer."
+    });
+  }
+
+  if (CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText)) {
+    return localVerdict({
+      verdict: null,
+      confidence: 85,
+      score: 0.5,
+      reason: "Investment language with money needs remote AI confirmation."
+    });
+  }
+
+  if (GIVEAWAY_PHISH_RE.test(userText) && (hasPrivateHandoff || URL_TEST_RE.test(rawUserText))) {
+    return localVerdict({
+      verdict: true,
+      confidence: 91,
+      score: 0.92,
+      reason: "Giveaway phishing pattern detected."
     });
   }
 

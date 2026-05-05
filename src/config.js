@@ -11,6 +11,12 @@ function optional(name) {
   return v && v.trim() ? v.trim() : "";
 }
 
+function optionalBoolean(name, fallback = false) {
+  const value = optional(name).toLowerCase();
+  if (!value) return fallback;
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
 function normalizeKbUrl(input) {
   const raw = input.trim();
   if (/^https?:\/\/raw\.githubusercontent\.com\//i.test(raw)) return raw;
@@ -49,9 +55,10 @@ const OWNER_USER_IDS = [
   "648336016469655564"
 ];
 const OWNER_ROLE_IDS = ["1484221158390890496"];
-const ADMIN_ROLE_IDS = ["1484218511797784576"];
+const ADMIN_ROLE_IDS = ["1484218516071518258"];
 const MOD_ROLE_IDS = ["1484221162647978016"];
-const STAFF_ROLE_IDS = ["1298767464678559794"];
+const STAFF_ROLE_IDS = ["1298767464678559794", "1495349698360508546"];
+const PREMIUM_ROLE_IDS = ["1484218502805061662"];
 const DAILY_STATS_CHANNEL_ID = "1484218637060407418";
 const LOG_CHANNEL_ID = "1497949003617140858";
 const NO_RESPONSE_CHANNEL_IDS = ["1498745066339045406"];
@@ -78,6 +85,7 @@ const TRUSTED_LINK_URLS = [
 module.exports = {
   DISCORD_TOKEN: required("DISCORD_TOKEN"),
   KB_URL: requiredUrl("KB_URL"),
+  ENABLE_GUILD_MEMBER_EVENTS: optionalBoolean("ENABLE_GUILD_MEMBER_EVENTS", false),
   BRAND,
   BOT_PRESENCE_TEXT: "Monitoring ;)",
   OWNER_USER_ID,
@@ -86,6 +94,7 @@ module.exports = {
   ADMIN_ROLE_IDS,
   MOD_ROLE_IDS,
   STAFF_ROLE_IDS,
+  PREMIUM_ROLE_IDS,
   DAILY_STATS_CHANNEL_ID,
   LOG_CHANNEL_ID,
   NO_RESPONSE_CHANNEL_IDS,

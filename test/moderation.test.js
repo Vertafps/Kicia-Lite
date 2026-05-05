@@ -10,6 +10,7 @@ const path = require("path");
 const { MODLOG_REVERT_PREFIX, MODLOG_VIEW_PREFIX } = require("../src/components");
 const { normalizeKb } = require("../src/kb");
 const {
+  addNicknamePattern,
   addRestrictedEmoji,
   addModerationWhitelistedUser,
   addTrustedLink,
@@ -23,7 +24,9 @@ const {
   listScamDecisionAudit,
   listModerationWhitelistedUsers,
   listTrustedLinks,
+  listNicknamePatterns,
   parseEmojiInput,
+  removeNicknamePatternById,
   removeModerationWhitelistedUser,
   removeRestrictedEmojiByKey,
   removeTrustedLinkByKey,
@@ -54,6 +57,14 @@ const {
   observeRaidMessage,
   resetModerationState
 } = require("../src/handlers/moderation");
+const {
+  findNicknameMatch,
+  maybeEnforceNicknameMember
+} = require("../src/handlers/nickname-mod");
+const {
+  findImpersonationMatch,
+  normalizeHomoglyphs
+} = require("../src/handlers/impersonation");
 const { maybeHandleRestrictedReactionAdd } = require("../src/handlers/restricted-reactions");
 const {
   classifyScamContextLocally,
@@ -559,6 +570,122 @@ test("contextual selling detection catches split sell and price messages", () =>
   assert.equal(prohibitedSignal.subtype, "prohibited_sale");
   assert.match(prohibitedSignal.reason, /prohibited goods sale/i);
   assert.ok(detectContextualSellingSignal(["anyone selling ue?", "1 buck"]));
+});
+
+test("obfuscated trade wording is caught without remote AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("hi");
+  let aiCalls = 0;
+
+  const firstHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("obvious local trade signal should not call AI");
+    },
+    now: 1_000
+  });
+
+  fixture.message.content = "wh0 wana trde k3ys";
+  const editHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("obvious local trade signal should not call AI");
+    },
+    now: 2_000
+  });
+
+  assert.equal(firstHandled, false);
+  assert.equal(editHandled, true);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
+  assert.equal(fixture.deleted.length, 1);
+  assert.match(fixture.logs[0].body, /local-kicia-policy-v3: TRUE/i);
+});
+
+test("premium users get lower scam-trade confidence without bypassing moderation", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("wh0 wana trde k3ys", {
+    roleIds: ["1484218502805061662"]
+  });
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      throw new Error("premium deterministic signal should not call AI");
+    },
+    now: 3_000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.timeouts[0].durationMs, 60 * 60 * 1000);
+  assert.match(fixture.logs[0].body, /premium member confidence dampened/i);
+});
+
+test("nickname moderation stores safe regex rules and renames matching members", async () => {
+  const result = await addNicknamePattern({
+    pattern: "^!.*",
+    flags: "i",
+    renameTo: "wawa"
+  });
+  const rule = result.pattern;
+  const patterns = await listNicknamePatterns();
+  const matched = findNicknameMatch("!badnick", patterns);
+  const renamed = [];
+  const logs = [];
+  const member = {
+    id: "nick-user",
+    displayName: "!badnick",
+    manageable: true,
+    roles: { cache: { has: () => false } },
+    user: { id: "nick-user", bot: false, username: "!badnick" },
+    guild: { id: "guild-1" },
+    setNickname: async (name, reason) => {
+      renamed.push({ name, reason });
+    }
+  };
+
+  const handled = await maybeEnforceNicknameMember(member, {
+    sendLog: async (_guild, panel) => {
+      logs.push(panel);
+      return true;
+    },
+    now: 10_000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(matched.id, rule.id);
+  assert.equal(renamed[0].name, "wawa");
+  assert.match(renamed[0].reason, /nickname moderation rule/i);
+  assert.equal(logs.length, 1);
+  await removeNicknamePatternById(rule.id);
+});
+
+test("staff impersonation helpers normalize homoglyphs and find close matches", () => {
+  assert.equal(normalizeHomoglyphs("K3rn@l"), "kernal");
+  const staff = {
+    id: "staff-1",
+    displayName: "Kernal",
+    user: { username: "Kernal" }
+  };
+  const joining = {
+    id: "join-1",
+    displayName: "K3rn@l",
+    user: { username: "K3rn@l" }
+  };
+
+  const match = findImpersonationMatch(joining, [staff]);
+  assert.ok(match);
+  assert.ok(match.score >= 0.75);
 });
 
 test("roasting detection catches playful cooking without logging food talk", () => {
@@ -1902,7 +2029,7 @@ test("restricted reactions on staff messages remove the reaction and DM warn the
   assert.equal(fixture.timeouts.length, 0);
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].header, /Restricted Reaction Warning/i);
+  assert.match(fixture.logs[0].toJSON().title, /Restricted Reaction Warning/i);
 
   const snapshot = await getDailyStatsSnapshot();
   const reactionAlert = snapshot.moderation.find((entry) => entry.eventKey === "restricted_reaction_alert");

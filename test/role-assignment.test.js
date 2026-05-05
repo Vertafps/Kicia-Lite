@@ -5,7 +5,8 @@ const {
   buildProgressBar,
   collectMembersMissingRole,
   maybeHandleRoleCommand,
-  parseRoleMessage
+  parseRoleMessage,
+  resetRoleAssignmentState
 } = require("../src/handlers/role-assignment");
 
 const OWNER_ID = "847703912932311091";
@@ -48,7 +49,9 @@ function memberWith({ id, bot = false, hasRole = false, manageable = true, addCa
 function buildRoleCommandFixture(content, {
   role = roleWith(),
   targetMember = memberWith({ id: USER_ID }),
-  allMembers = []
+  allMembers = [],
+  failReply = false,
+  failChannelSend = false
 } = {}) {
   const replies = [];
   const edits = [];
@@ -92,11 +95,23 @@ function buildRoleCommandFixture(content, {
     content,
     guild,
     author: { id: OWNER_ID, tag: "owner#0001" },
+    channelId: "channel-1",
+    channel: {
+      id: "channel-1",
+      send: async (payload) => {
+        if (failChannelSend) throw new Error("missing permissions");
+        replies.push(payload);
+        return {
+          edit: async (nextPayload) => edits.push(nextPayload)
+        };
+      }
+    },
     member: {
       roles: { cache: { has: (roleId) => roleId === "1484221158390890496" } }
     },
     inGuild: () => true,
     reply: async (payload) => {
+      if (failReply) throw new Error("missing permissions");
       replies.push(payload);
       return {
         edit: async (nextPayload) => edits.push(nextPayload)
@@ -119,6 +134,7 @@ function buildRoleCommandFixture(content, {
 }
 
 test("role command parses bulk and single formats without role pings", () => {
+  resetRoleAssignmentState();
   assert.deepEqual(parseRoleMessage(`$role all <@&${ROLE_ID}>`), {
     action: "all",
     roleId: ROLE_ID
@@ -128,10 +144,13 @@ test("role command parses bulk and single formats without role pings", () => {
     userId: USER_ID,
     roleId: ROLE_ID
   });
+  assert.deepEqual(parseRoleMessage("$role status"), { action: "status" });
+  assert.deepEqual(parseRoleMessage("$role cancel"), { action: "cancel" });
   assert.equal(buildProgressBar(5, 10), "[#########---------] 50%");
 });
 
 test("single role command assigns a role to one fetched member", async () => {
+  resetRoleAssignmentState();
   const fixture = buildRoleCommandFixture(`$role ${USER_ID} ${ROLE_ID}`);
   const handled = await maybeHandleRoleCommand(fixture.message, {
     sendLog: fixture.sendLog
@@ -145,6 +164,7 @@ test("single role command assigns a role to one fetched member", async () => {
 });
 
 test("role all rejects dangerous elevated roles", async () => {
+  resetRoleAssignmentState();
   const role = roleWith({
     permissions: [PermissionFlagsBits.Administrator]
   });
@@ -160,6 +180,7 @@ test("role all rejects dangerous elevated roles", async () => {
 });
 
 test("role all scans missing humans before applying the role", async () => {
+  resetRoleAssignmentState();
   const missing = memberWith({ id: "123456789012345678" });
   const already = memberWith({ id: "123456789012345679", hasRole: true });
   const bot = memberWith({ id: "123456789012345680", bot: true });
@@ -189,7 +210,31 @@ test("role all scans missing humans before applying the role", async () => {
   assert.equal(fixture.logs.length, 2);
 });
 
+test("role all clears the running lock when the progress reply cannot be sent", async () => {
+  resetRoleAssignmentState();
+  const failing = buildRoleCommandFixture(`$role all ${ROLE_ID}`, {
+    failReply: true,
+    failChannelSend: true
+  });
+
+  const handled = await maybeHandleRoleCommand(failing.message, {
+    allowBulkMemberList: true,
+    sendLog: failing.sendLog
+  });
+  assert.equal(handled, true);
+  assert.equal(failing.logs.length, 1);
+  assert.match(failing.logs[0].header, /Could Not Start/i);
+
+  const status = buildRoleCommandFixture("$role status");
+  await maybeHandleRoleCommand(status.message, {
+    allowBulkMemberList: true,
+    sendLog: status.sendLog
+  });
+  assert.match(status.replies[0].embeds[0].data.description, /no role-all job is running/i);
+});
+
 test("member list collector returns only humans missing the target role", async () => {
+  resetRoleAssignmentState();
   const missing = memberWith({ id: "123456789012345678" });
   const already = memberWith({ id: "123456789012345679", hasRole: true });
   const bot = memberWith({ id: "123456789012345680", bot: true });

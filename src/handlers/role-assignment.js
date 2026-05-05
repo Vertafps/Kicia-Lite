@@ -9,6 +9,7 @@ const ROLE_ASSIGN_DELAY_MS = 125;
 const ROLE_PROGRESS_EDIT_MS = 5_000;
 const ROLE_LIST_PAGE_SIZE = 1000;
 const activeRoleAllJobs = new Map();
+const ROLE_ALL_CANCELLED = "ROLE_ALL_CANCELLED";
 
 const DANGEROUS_ALL_ROLE_PERMISSIONS = [
   [PermissionFlagsBits.Administrator, "Administrator"],
@@ -38,6 +39,14 @@ function parseRoleMessage(content) {
   if (!/^\$role(?:\s|$)/i.test(trimmed)) return null;
   if (/^\$role$/i.test(trimmed)) return { action: "help" };
 
+  if (/^\$role\s+(?:status|running)$/i.test(trimmed)) {
+    return { action: "status" };
+  }
+
+  if (/^\$role\s+(?:cancel|stop)$/i.test(trimmed)) {
+    return { action: "cancel" };
+  }
+
   const allMatch = trimmed.match(/^\$role\s+all\s+(\S+)$/i);
   if (allMatch) {
     return {
@@ -63,6 +72,8 @@ function roleUsageBody() {
     "**Correct format:**",
     "`$role all <roleid>`",
     "`$role <@user|userid> <roleid>`",
+    "`$role status`",
+    "`$role cancel`",
     "",
     "Use the raw role id for large roles so Discord does not ping anyone."
   ].join("\n");
@@ -88,6 +99,79 @@ function describeRole(role) {
 
 function describeUser(userId) {
   return userId ? `<@${userId}> (${userId})` : "unknown user";
+}
+
+function makeRoleAllJob({ role, message, estimate = 0, now = Date.now() }) {
+  return {
+    roleId: role.id,
+    roleName: role.name || "role",
+    label: describeRole(role),
+    phase: "starting",
+    startedAt: now,
+    startedBy: message.author?.id || null,
+    channelId: message.channelId || message.channel?.id || null,
+    cancelRequested: false,
+    estimate,
+    scanned: 0,
+    missing: 0,
+    already: 0,
+    bots: 0,
+    added: 0,
+    failed: 0,
+    total: 0
+  };
+}
+
+function getRoleAllJobLabel(job) {
+  if (!job) return "unknown role";
+  if (typeof job === "string") return job;
+  return job.label || `${job.roleName || "role"} (${job.roleId || "unknown"})`;
+}
+
+function updateRoleAllJob(job, patch = {}) {
+  if (!job || typeof job === "string") return job;
+  Object.assign(job, patch);
+  return job;
+}
+
+function buildActiveRoleJobPanel(job) {
+  if (!job) {
+    return {
+      header: "Role All Status",
+      body: "no role-all job is running in this server",
+      color: INFO
+    };
+  }
+
+  const done = job.phase === "assigning" ? Number(job.added || 0) + Number(job.failed || 0) : Number(job.scanned || 0);
+  const total = job.phase === "assigning" ? Number(job.total || job.missing || 0) : Number(job.estimate || 0);
+  return {
+    header: "Role All Status",
+    body: [
+      `**Role:** ${getRoleAllJobLabel(job)}`,
+      `**Phase:** ${job.phase || "running"}${job.cancelRequested ? " (cancel requested)" : ""}`,
+      `**Progress:** ${buildProgressBar(done, total)}`,
+      `**Scanned:** ${job.scanned || 0}${job.estimate ? ` / about ${job.estimate}` : ""}`,
+      `**Missing Role:** ${job.missing || 0}`,
+      `**Already Had Role:** ${job.already || 0}`,
+      `**Bots Skipped:** ${job.bots || 0}`,
+      `**Assigned:** ${job.added || 0} / ${job.total || 0}`,
+      `**Failed/Skipped:** ${job.failed || 0}`,
+      job.startedBy ? `**Started By:** <@${job.startedBy}>` : null,
+      job.channelId ? `**Progress Channel:** <#${job.channelId}>` : null
+    ].filter(Boolean).join("\n"),
+    color: job.cancelRequested ? WARN : INFO
+  };
+}
+
+function makeRoleAllCancelledError() {
+  const err = new Error("cancelled by owner");
+  err.code = ROLE_ALL_CANCELLED;
+  return err;
+}
+
+function resetRoleAssignmentState() {
+  activeRoleAllJobs.clear();
 }
 
 function buildProgressBar(done, total, width = 18) {
@@ -257,8 +341,15 @@ function buildRoleAllPanel({ role, phase, scanned = 0, estimate = 0, missing = 0
   const isAssigning = phase === "assigning";
   const done = isAssigning ? added + failed : scanned;
   const denominator = isAssigning ? total : estimate;
+  const headers = {
+    assigning: "Role All - Assigning",
+    cancelled: "Role All Cancelled",
+    done: "Role All Complete",
+    failed: "Role All Failed",
+    scanning: "Role All - Scanning"
+  };
   return {
-    header: isAssigning ? "Role All - Assigning" : phase === "done" ? "Role All Complete" : "Role All - Scanning",
+    header: headers[phase] || "Role All - Scanning",
     body: [
       `**Role:** ${describeRole(role)}`,
       `**Progress:** ${buildProgressBar(done, denominator)}`,
@@ -266,10 +357,10 @@ function buildRoleAllPanel({ role, phase, scanned = 0, estimate = 0, missing = 0
       `**Missing Role:** ${missing}`,
       `**Already Had Role:** ${already}`,
       `**Bots Skipped:** ${bots}`,
-      isAssigning || phase === "done" ? `**Assigned:** ${added} / ${total}` : null,
-      isAssigning || phase === "done" ? `**Failed/Skipped During Apply:** ${failed}` : null
+      isAssigning || phase === "done" || phase === "cancelled" ? `**Assigned:** ${added} / ${total}` : null,
+      isAssigning || phase === "done" || phase === "cancelled" ? `**Failed/Skipped During Apply:** ${failed}` : null
     ].filter(Boolean).join("\n"),
-    color: phase === "done" ? SUCCESS : INFO
+    color: phase === "done" ? SUCCESS : phase === "failed" ? DANGER : phase === "cancelled" ? WARN : INFO
   };
 }
 
@@ -372,19 +463,41 @@ async function handleRoleAllCommand(message, command, {
   if (activeRoleAllJobs.has(lockKey)) {
     await sendRolePanel(message, {
       header: "Role All Already Running",
-      body: `A role-all job is already running in this server: ${activeRoleAllJobs.get(lockKey)}`,
+      body: [
+        `A role-all job is already running in this server: ${getRoleAllJobLabel(activeRoleAllJobs.get(lockKey))}`,
+        "Use `$role status` to inspect it or `$role cancel` to request a stop."
+      ].join("\n"),
       color: WARN
     });
     return true;
   }
 
-  activeRoleAllJobs.set(lockKey, describeRole(role));
   const estimate = Number(guild.memberCount || 0);
-  const progressMessage = await sendRolePanel(message, buildRoleAllPanel({
-    role,
-    phase: "scanning",
-    estimate
-  }));
+  const job = makeRoleAllJob({ role, message, estimate, now: nowFn() });
+  activeRoleAllJobs.set(lockKey, job);
+  let progressMessage = null;
+  try {
+    updateRoleAllJob(job, { phase: "scanning" });
+    progressMessage = await sendRolePanel(message, buildRoleAllPanel({
+      role,
+      phase: "scanning",
+      estimate
+    }));
+  } catch (err) {
+    activeRoleAllJobs.delete(lockKey);
+    await sendLog(guild, {
+      header: "Role All Could Not Start",
+      body: [
+        `**Role:** ${describeRole(role)}`,
+        `**Channel:** ${message.channelId ? `<#${message.channelId}>` : "unknown"}`,
+        `**Error:** ${err?.message || err}`,
+        "Give the bot Send Messages and Embed Links in the command channel, or run the command in a staff channel where the bot can reply."
+      ].join("\n"),
+      color: DANGER
+    }).catch(() => null);
+    return true;
+  }
+
   await sendLog(guild, {
     header: "Role All Started",
     body: [
@@ -409,6 +522,14 @@ async function handleRoleAllCommand(message, command, {
         scanned = progress.scanned;
         already = progress.already;
         bots = progress.bots;
+        updateRoleAllJob(job, {
+          phase: "scanning",
+          scanned,
+          already,
+          bots,
+          missing: progress.missing
+        });
+        if (job.cancelRequested) throw makeRoleAllCancelledError();
         const current = nowFn();
         if (current - lastEditAt >= ROLE_PROGRESS_EDIT_MS) {
           lastEditAt = current;
@@ -429,6 +550,14 @@ async function handleRoleAllCommand(message, command, {
     already = scan.already;
     bots = scan.bots;
     missing = scan.missing;
+    updateRoleAllJob(job, {
+      phase: "assigning",
+      scanned,
+      already,
+      bots,
+      missing: missing.length,
+      total: missing.length
+    });
 
     await editRolePanel(progressMessage, buildRoleAllPanel({
       role,
@@ -442,6 +571,7 @@ async function handleRoleAllCommand(message, command, {
     }));
 
     for (const userId of missing) {
+      if (job.cancelRequested) throw makeRoleAllCancelledError();
       const member = await resolveMember(guild, userId);
       if (!member || member.user?.bot || member.manageable === false || member.roles?.cache?.has?.(role.id)) {
         failed += 1;
@@ -453,6 +583,11 @@ async function handleRoleAllCommand(message, command, {
           failed += 1;
         }
       }
+      updateRoleAllJob(job, {
+        phase: "assigning",
+        added,
+        failed
+      });
 
       const current = nowFn();
       if (current - lastEditAt >= ROLE_PROGRESS_EDIT_MS || added + failed === missing.length) {
@@ -473,6 +608,11 @@ async function handleRoleAllCommand(message, command, {
       await sleepFn(ROLE_ASSIGN_DELAY_MS);
     }
 
+    updateRoleAllJob(job, {
+      phase: "done",
+      added,
+      failed
+    });
     await editRolePanel(progressMessage, buildRoleAllPanel({
       role,
       phase: "done",
@@ -499,20 +639,93 @@ async function handleRoleAllCommand(message, command, {
       color: failed ? WARN : SUCCESS
     }).catch(() => null);
   } catch (err) {
-    await editRolePanel(progressMessage, {
-      header: "Role All Failed",
-      body: `Bulk role assignment stopped: ${err?.message || err}`,
-      color: DANGER
+    const cancelled = err?.code === ROLE_ALL_CANCELLED;
+    updateRoleAllJob(job, {
+      phase: cancelled ? "cancelled" : "failed",
+      added,
+      failed
     });
+    await editRolePanel(progressMessage, cancelled
+      ? buildRoleAllPanel({
+          role,
+          phase: "cancelled",
+          scanned,
+          estimate,
+          missing: missing.length || job.missing,
+          already,
+          bots,
+          added,
+          failed,
+          total: missing.length || job.total
+        })
+      : {
+          header: "Role All Failed",
+          body: `Bulk role assignment stopped: ${err?.message || err}`,
+          color: DANGER
+        });
     await sendLog(guild, {
-      header: "Role All Failed",
-      body: `Bulk role assignment for ${describeRole(role)} failed: ${err?.message || err}`,
-      color: DANGER
+      header: cancelled ? "Role All Cancelled" : "Role All Failed",
+      body: cancelled
+        ? [
+            `Bulk role assignment for ${describeRole(role)} was cancelled by owner request.`,
+            `**Scanned:** ${scanned}`,
+            `**Assigned Before Stop:** ${added}`,
+            `**Failed/Skipped:** ${failed}`
+          ].join("\n")
+        : `Bulk role assignment for ${describeRole(role)} failed: ${err?.message || err}`,
+      color: cancelled ? WARN : DANGER
     }).catch(() => null);
   } finally {
     activeRoleAllJobs.delete(lockKey);
   }
 
+  return true;
+}
+
+async function handleRoleStatusCommand(message) {
+  if (!message?.inGuild?.()) {
+    await sendRolePanel(message, {
+      header: "Server Only",
+      body: "role-all status only works inside the server",
+      color: WARN
+    });
+    return true;
+  }
+
+  await sendRolePanel(message, buildActiveRoleJobPanel(activeRoleAllJobs.get(message.guild.id)));
+  return true;
+}
+
+async function handleRoleCancelCommand(message) {
+  if (!message?.inGuild?.()) {
+    await sendRolePanel(message, {
+      header: "Server Only",
+      body: "role-all cancel only works inside the server",
+      color: WARN
+    });
+    return true;
+  }
+
+  const job = activeRoleAllJobs.get(message.guild.id);
+  if (!job) {
+    await sendRolePanel(message, buildActiveRoleJobPanel(null));
+    return true;
+  }
+
+  if (typeof job === "string") {
+    activeRoleAllJobs.delete(message.guild.id);
+  } else {
+    job.cancelRequested = true;
+  }
+
+  await sendRolePanel(message, {
+    header: "Role All Cancel Requested",
+    body: [
+      `Requested stop for ${getRoleAllJobLabel(job)}.`,
+      "If it is currently applying roles, it will stop after the current Discord request finishes."
+    ].join("\n"),
+    color: WARN
+  });
   return true;
 }
 
@@ -530,6 +743,14 @@ async function maybeHandleRoleCommand(message, deps = {}) {
     return handleSingleRoleCommand(message, command, deps);
   }
 
+  if (command.action === "status") {
+    return handleRoleStatusCommand(message);
+  }
+
+  if (command.action === "cancel") {
+    return handleRoleCancelCommand(message);
+  }
+
   if (command.action === "all") {
     return handleRoleAllCommand(message, command, deps);
   }
@@ -542,7 +763,10 @@ module.exports = {
   buildProgressBar,
   collectMembersMissingRole,
   extractSnowflake,
+  handleRoleCancelCommand,
+  handleRoleStatusCommand,
   maybeHandleRoleCommand,
   parseRoleMessage,
+  resetRoleAssignmentState,
   validateRoleCommandTarget
 };

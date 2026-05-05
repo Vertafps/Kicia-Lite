@@ -37,6 +37,7 @@ const {
 } = require("../src/restricted-emoji-db");
 const {
   detectBlockedLinkSignalAsync,
+  extractUrlsFromText,
   refreshScamPulseFeeds,
   resetScamPulseFeedsForTests
 } = require("../src/link-policy");
@@ -427,6 +428,8 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.ok(detectSellingSignal("selling ue for 1 usd"));
   assert.ok(detectSellingSignal("s e l l i n g lvl 888 a c c"));
   assert.ok(detectSellingSignal("s3ll1ng lvl 888 acc"));
+  assert.ok(detectSellingSignal("s311in p3m1um ch34p, 5m3"));
+  assert.ok(detectSellingSignal("sellin figs"));
   assert.ok(detectSellingSignal("wts lvl 888 acc"));
   assert.equal(detectSellingSignal("selling"), null);
   assert.equal(detectSellingSignal("trading"), null);
@@ -438,6 +441,8 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("anyone selling kicia config?"), null);
   assert.equal(detectSellingSignal("buying kicia"), null);
   assert.equal(detectSellingSignal("SELLING MARUANA $100"), null);
+  assert.equal(detectSellingSignal("figs are underrated"), null);
+  assert.equal(detectSellingSignal("selling figs"), null);
   assert.ok(detectProhibitedCommerceSignal(["SELLING MARUANA $100"]));
   assert.equal(detectSellingSignal("how to buy kicia"), null);
   assert.equal(detectSellingSignal("where do i buy kicia premium"), null);
@@ -611,6 +616,42 @@ test("obfuscated trade wording is caught without remote AI", async () => {
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.equal(fixture.deleted.length, 1);
   assert.match(fixture.logs[0].body, /local-kicia-policy-v3: TRUE/i);
+});
+
+test("edited obfuscated config selling is caught without remote AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("hi");
+  let aiCalls = 0;
+
+  const firstHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("initial clean message should not call AI");
+    },
+    now: 1_000
+  });
+
+  fixture.message.content = "sellin figs";
+  const editHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("obfuscated config selling should not call AI");
+    },
+    now: 2_000
+  });
+
+  assert.equal(firstHandled, false);
+  assert.equal(editHandled, true);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.deleted.length, 1);
+  assert.match(fixture.logs[0].body, /sell-related wording detected/i);
 });
 
 test("premium users use the same scam-trade confidence thresholds as everyone else", async () => {
@@ -1052,6 +1093,54 @@ test("new account link scrutiny warns without escalating to timeout by itself", 
   assert.equal(suspiciousFixture.dms.length, 1);
   assert.match(suspiciousFixture.logs[0].header, /Blocked Link Warning/i);
   assert.match(suspiciousFixture.logs[0].body, /new account|recent server join/i);
+});
+
+test("promoted comma-dot domains are deleted, DM warned, and logged", async () => {
+  await clearDailyStatsTracking(1);
+  const content = [
+    "Check spirahl,cc it's cool and has vid ideas",
+    "Nice confs too XD",
+    "LOOK"
+  ].join("\n");
+  const fixture = buildModerationMessage(content);
+
+  const urls = extractUrlsFromText(content);
+  assert.equal(urls[0]?.hostname, "spirahl.cc");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    checkThreatIntel: async () => null
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.dms.length, 1);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Blocked Link Warning/i);
+  assert.match(fixture.logs[0].body, /unknown offsite domain promoted/i);
+  assert.match(fixture.logs[0].body, /spirahl\.cc/i);
+});
+
+test("normal bare domains are not removed without risky promo context", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("check example.com for setup notes");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    checkThreatIntel: async () => {
+      throw new Error("plain bare domains should not reach threat intel");
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(fixture.logs.length, 0);
 });
 
 test("single scam-market words do not trigger without context", async () => {

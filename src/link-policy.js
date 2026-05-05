@@ -22,6 +22,7 @@ const STATIC_ALLOWED_URLS = [
 ];
 const URL_CANDIDATE_RE = /<?(?:hxxps?:\/\/[^\s<>"'`|]+|https?:\/\/[^\s<>"'`|]+|www\.[^\s<>"'`|]+|discord\.gg\/[^\s<>"'`|]+|discord(?:app)?\.com\/invite\/[^\s<>"'`|]+|(?:[\p{L}a-z0-9-]+\.)+(?:[\p{L}a-z]{2,}|xn--[a-z0-9-]{2,})\/[^\s<>"'`|]+)>?/giu;
 const MARKDOWN_LINK_RE = /\[([^\]\n]{1,160})\]\((<?(?:hxxps?:\/\/|https?:\/\/|www\.|discord\.gg\/|discord(?:app)?\.com\/invite\/|(?:[\p{L}a-z0-9-]+\.)+(?:[\p{L}a-z]{2,}|xn--[a-z0-9-]{2,})\/)[^)>\s]+>?)\)/giu;
+const BARE_DOMAIN_CANDIDATE_RE = /(?<![\w@.-])[\p{L}a-z0-9](?:[\p{L}a-z0-9-]{0,61}[\p{L}a-z0-9])?(?:\.|,|\s*\[\s*dot\s*\]\s*|\s*\(\s*dot\s*\)\s*|\s*\{\s*dot\s*\}\s*|\s+dot\s+)(?:[\p{L}a-z]{2,}|xn--[a-z0-9-]{2,})(?![\w.-])/giu;
 const TRAILING_PUNCTUATION_RE = /[),.!?;:\]>]+$/;
 const INVISIBLE_URL_RE = /[\u200B-\u200D\u2060\uFEFF]/g;
 const DOT_VARIANTS_RE = /[\u3002\uFF0E\uFF61]/g;
@@ -114,6 +115,25 @@ const SAFE_SEARCH_HOSTS = [
   "ecosia.org",
   "startpage.com"
 ];
+const PROMOTED_DOMAIN_TLDS = new Set([
+  "cc",
+  "cfd",
+  "click",
+  "cyou",
+  "fun",
+  "icu",
+  "link",
+  "lol",
+  "monster",
+  "online",
+  "quest",
+  "sbs",
+  "shop",
+  "site",
+  "top",
+  "vip",
+  "xyz"
+]);
 const RULE_CACHE = new WeakMap();
 const THREAT_INTEL_CACHE = new Map();
 const THREAT_INTEL_CACHE_MS = 10 * 60 * 1000;
@@ -246,6 +266,14 @@ function buildDeobfuscatedText(text) {
     .replace(/\s+slash\s+/gi, "/");
 }
 
+function normalizeBareDomainCandidate(rawValue) {
+  return stripInvisibleUrlText(rawValue)
+    .trim()
+    .replace(/\s*(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\})\s*/gi, ".")
+    .replace(/\s+dot\s+/gi, ".")
+    .replace(/,/g, ".");
+}
+
 function sameSite(hostname, expectedHost) {
   return hostname === expectedHost || hostname.endsWith(`.${expectedHost}`);
 }
@@ -281,6 +309,10 @@ function getPosterContextReason(posterContext) {
   return null;
 }
 
+function isObfuscatedUrlSource(source) {
+  return String(source || "").includes("obfuscated");
+}
+
 function shouldKeepObfuscatedUrl(url) {
   if (!url) return false;
   return isKnownHighRiskHost(url.hostname) || Boolean(getProtectedLookalikeReason(url));
@@ -298,9 +330,9 @@ function mergeUrl(target, candidate) {
   return target;
 }
 
-function addNormalizedUrl(urls, byKey, candidate, { keepObfuscated = true } = {}) {
+function addNormalizedUrl(urls, byKey, candidate, { keepObfuscated = true, allowObfuscatedUnknown = false } = {}) {
   if (!candidate) return;
-  if (candidate.source === "obfuscated" && (!keepObfuscated || !shouldKeepObfuscatedUrl(candidate))) return;
+  if (isObfuscatedUrlSource(candidate.source) && !allowObfuscatedUnknown && (!keepObfuscated || !shouldKeepObfuscatedUrl(candidate))) return;
 
   const existing = byKey.get(candidate.key);
   if (existing) {
@@ -319,6 +351,36 @@ function collectRegexUrls(text, urls, byKey, { source = "direct", keepObfuscated
   }
 }
 
+function hasExploitPromotionContext(text) {
+  const normalized = normalizeText(text);
+  return /\b(?:cfgs?|configs?|confs?|scripts?|executors?|cheats?|bypass|keys?|premium|vid(?:eo)? ideas?)\b/.test(normalized);
+}
+
+function hasOffsitePromotionContext(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+  const hasPromoVerb = /\b(?:check|try|use|join|visit|open|watch|look|look at|go to|search)\b/.test(normalized);
+  const hasPromoTone = /\b(?:cool|nice|good|best|clean|op|underrated|new|free|cheap)\b/.test(normalized);
+  return hasPromoVerb && (hasPromoTone || hasExploitPromotionContext(normalized));
+}
+
+function shouldCollectBareDomainUrls(text) {
+  return hasScamLinkContext(text) || hasOffsitePromotionContext(text);
+}
+
+function collectBareDomainUrls(text, urls, byKey) {
+  const matches = String(text || "").match(BARE_DOMAIN_CANDIDATE_RE) || [];
+  for (const match of matches) {
+    const normalized = normalizeBareDomainCandidate(match);
+    const source = /,|\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\}|\sdot\s/i.test(match)
+      ? "bare_obfuscated"
+      : "bare";
+    addNormalizedUrl(urls, byKey, normalizeUrlCandidate(normalized, { source }), {
+      allowObfuscatedUnknown: true
+    });
+  }
+}
+
 function collectMarkdownUrls(text, urls, byKey) {
   const content = String(text || "");
   for (const match of content.matchAll(MARKDOWN_LINK_RE)) {
@@ -334,7 +396,7 @@ function collectMarkdownUrls(text, urls, byKey) {
   }
 }
 
-function extractUrlsFromText(text, { includeMarkdown = true, includeObfuscated = true } = {}) {
+function extractUrlsFromText(text, { includeMarkdown = true, includeObfuscated = true, includeBareDomains = "contextual" } = {}) {
   const urls = [];
   const byKey = new Map();
   const cleanText = stripInvisibleUrlText(text);
@@ -352,6 +414,13 @@ function extractUrlsFromText(text, { includeMarkdown = true, includeObfuscated =
         keepObfuscated: true
       });
     }
+  }
+
+  const collectBare =
+    includeBareDomains === true ||
+    (includeBareDomains !== false && shouldCollectBareDomainUrls(cleanText));
+  if (collectBare) {
+    collectBareDomainUrls(cleanText, urls, byKey);
   }
 
   return urls;
@@ -635,6 +704,19 @@ function hasScamLinkContext(text) {
   );
 }
 
+function getHostnameTld(hostname) {
+  const labels = String(hostname || "").split(".").filter(Boolean);
+  return labels.length ? labels[labels.length - 1] : "";
+}
+
+function isPromotedRiskyDomain(url) {
+  if (!url?.hostname || isGenericSafeLink(url)) return false;
+  return (
+    isObfuscatedUrlSource(url.source) ||
+    PROMOTED_DOMAIN_TLDS.has(getHostnameTld(url.hostname))
+  );
+}
+
 function addRisk(risks, score, reason) {
   if (!reason) return;
   risks.push({ score, reason });
@@ -677,7 +759,16 @@ function assessUrlRisk(url, rules, contextText, { posterContext = null } = {}) {
   if (!structuralScore && isGenericSafeLink(url)) return null;
 
   const scamContext = hasScamLinkContext(contextText);
+  const promoContext = hasOffsitePromotionContext(contextText);
+  const exploitPromoContext = hasExploitPromotionContext(contextText);
   addRisk(risks, 65, scamContext ? "scam-like wording appears with a link" : null);
+  addRisk(
+    risks,
+    62,
+    promoContext && (isPromotedRiskyDomain(url) || exploitPromoContext)
+      ? "unknown offsite domain promoted with risky/config context"
+      : null
+  );
   addRisk(risks, 70, isDiscordInviteUrl(url) ? "unapproved Discord invite" : null);
   addRisk(risks, 68, matchesAnyHost(url.hostname, URL_SHORTENER_HOSTS) ? "URL shortener hides the destination" : null);
   addRisk(risks, 60, url.source === "obfuscated" ? "URL was written in an obfuscated form" : null);

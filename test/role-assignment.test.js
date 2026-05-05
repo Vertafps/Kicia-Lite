@@ -159,7 +159,7 @@ test("single role command assigns a role to one fetched member", async () => {
   assert.equal(handled, true);
   assert.equal(fixture.addCalls.length, 1);
   assert.equal(fixture.addCalls[0].roleId, ROLE_ID);
-  assert.match(fixture.replies[0].embeds[0].data.description, /Role Added/i);
+  assert.match(fixture.replies[0].embeds[0].data.title, /Role Added/i);
   assert.equal(fixture.logs.length, 1);
 });
 
@@ -175,7 +175,7 @@ test("role all rejects dangerous elevated roles", async () => {
   });
 
   assert.equal(handled, true);
-  assert.match(fixture.replies[0].embeds[0].data.description, /Unsafe Bulk Role/i);
+  assert.match(fixture.replies[0].embeds[0].data.title, /Unsafe Bulk Role/i);
   assert.equal(fixture.logs.length, 0);
 });
 
@@ -206,7 +206,7 @@ test("role all scans missing humans before applying the role", async () => {
   assert.equal(fixture.addCalls.length, 1);
   assert.equal(fixture.addCalls[0].id, missing.id);
   assert.ok(fixture.edits.length >= 2);
-  assert.match(fixture.edits.at(-1).embeds[0].data.description, /Role All Complete/i);
+  assert.match(fixture.edits.at(-1).embeds[0].data.title, /Role All Complete/i);
   assert.equal(fixture.logs.length, 2);
 });
 

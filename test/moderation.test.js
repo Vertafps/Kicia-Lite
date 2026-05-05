@@ -73,6 +73,10 @@ const {
   isSafePurchaseMethodQuestion,
   isSafeSecurityDisableSupport
 } = require("../src/scam-local-classifier");
+const {
+  DEFAULT_NICKNAME_RENAME_SENTINEL,
+  buildDefaultBadName
+} = require("../src/nickname-policy");
 
 const kb = normalizeKb({
   issues: [],
@@ -668,6 +672,96 @@ test("nickname moderation stores safe regex rules and renames matching members",
   assert.match(renamed[0].reason, /nickname moderation rule/i);
   assert.equal(logs.length, 1);
   await removeNicknamePatternById(rule.id);
+});
+
+test("nickname moderation checks usernames and defaults to BADNAME with review alert", async () => {
+  const result = await addNicknamePattern({
+    pattern: "femboy",
+    flags: "i",
+    renameTo: DEFAULT_NICKNAME_RENAME_SENTINEL
+  });
+  const rule = result.pattern;
+  const renamed = [];
+  const logs = [];
+  const member = {
+    id: "123456789012345678",
+    nickname: "SafeName",
+    displayName: "SafeName",
+    manageable: true,
+    roles: { cache: { has: () => false } },
+    user: {
+      id: "123456789012345678",
+      bot: false,
+      username: "femboy",
+      globalName: "Normal Global"
+    },
+    guild: { id: "guild-1" },
+    setNickname: async (name, reason) => {
+      renamed.push({ name, reason });
+    }
+  };
+
+  const handled = await maybeEnforceNicknameMember(member, {
+    sendLog: async (_guild, panel) => {
+      logs.push(panel);
+      return true;
+    },
+    now: 20_000
+  });
+
+  const expectedName = buildDefaultBadName(member);
+  assert.equal(handled, true);
+  assert.equal(renamed[0].name, expectedName);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].content, undefined);
+  assert.deepEqual(logs[0].allowedMentions, { parse: [] });
+  const logJson = logs[0].embed.toJSON();
+  assert.match(logJson.title, /Bad Name Guard/i);
+  assert.match(JSON.stringify(logJson.fields), /Username/i);
+  assert.match(JSON.stringify(logJson.fields), new RegExp(expectedName.replace("#", "\\#")));
+
+  await removeNicknamePatternById(rule.id);
+});
+
+test("nickname moderation still alerts when bad username already has target nickname", async () => {
+  const member = {
+    id: "222222222222229999",
+    manageable: true,
+    roles: { cache: { has: () => false } },
+    user: {
+      id: "222222222222229999",
+      bot: false,
+      username: "femboy",
+      globalName: "Normal Global"
+    },
+    guild: { id: "guild-1" },
+    setNickname: async () => {
+      throw new Error("already-applied target should not be renamed again");
+    }
+  };
+  member.nickname = buildDefaultBadName(member);
+  member.displayName = member.nickname;
+
+  const result = await addNicknamePattern({
+    pattern: "femboy",
+    flags: "i",
+    renameTo: DEFAULT_NICKNAME_RENAME_SENTINEL
+  });
+  const logs = [];
+
+  const handled = await maybeEnforceNicknameMember(member, {
+    sendLog: async (_guild, panel) => {
+      logs.push(panel);
+      return true;
+    },
+    now: 30_000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(logs.length, 1);
+  assert.match(JSON.stringify(logs[0].embed.toJSON().fields), /staff review only/i);
+
+  await removeNicknamePatternById(result.pattern.id);
 });
 
 test("staff impersonation helpers normalize homoglyphs and find close matches", () => {
@@ -1632,7 +1726,7 @@ test("moderation log view button shows captured and visible user context", async
   assert.equal(consumed, true);
   assert.equal(ui.replies.length, 1);
   const description = ui.replies[0].embeds[0].data.description;
-  assert.match(description, /User Message Context/i);
+  assert.match(ui.replies[0].embeds[0].data.title, /User Message Context/i);
   assert.match(description, /selling ue for 1 bucks/i);
   assert.match(description, /visible still here/i);
   assert.doesNotMatch(description, /Original Jump/i);

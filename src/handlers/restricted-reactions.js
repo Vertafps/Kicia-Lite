@@ -1,4 +1,4 @@
-const { buildPanel, buildRichPanel, WARN } = require("../embed");
+const { buildPanel, buildRichPanel, WARN, resolveAvatarURL } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const {
   listRestrictedEmojis,
@@ -87,6 +87,7 @@ function buildUserWarningPayload({ message, emojiDisplay }) {
 function buildRestrictedReactionLogPanel({
   message,
   targetMember,
+  reactingUser,
   reactingUserId,
   emojiDisplay,
   reactionRemoved,
@@ -98,6 +99,7 @@ function buildRestrictedReactionLogPanel({
     title: "Restricted Reaction Warning",
     color: WARN,
     description: "restricted emoji reaction removed and user warned in DM",
+    thumbnail: resolveAvatarURL(reactingUser),
     fields: [
       { name: "User", value: `<@${reactingUserId}>`, inline: true },
       { name: "Emoji", value: emojiDisplay, inline: true },
@@ -149,6 +151,7 @@ async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
     message,
     targetMember,
     reactingUserId: user.id,
+    reactingUser: user,
     emojiDisplay: matchedEmoji.display,
     reactionRemoved,
     dmSent

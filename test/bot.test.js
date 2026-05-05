@@ -13,6 +13,7 @@ const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/
 const { maybeHandleLockCommand, parseLockCommand } = require("../src/handlers/lockdown");
 const { isOwnerCommandMessage, isTestProMaxCommandMessage, maybeHandleStatusCommand, shouldAutoReplyStatus } = require("../src/handlers/status");
 const { buildCustomPresenceData, MAX_PRESENCE_STATE_LENGTH } = require("../src/presence-state");
+const { DEFAULT_NICKNAME_RENAME_SENTINEL } = require("../src/nickname-policy");
 const { resetRuntimeStatus, getRuntimeStatus } = require("../src/runtime-status");
 
 const kb = normalizeKb({
@@ -772,7 +773,7 @@ test("lock status reports per-channel permission state without changing channels
   assert.equal(handled, true);
   assert.equal(general.getEditCalls(), 0);
   assert.equal(support.getEditCalls(), 0);
-  assert.match(message.replies[0].embeds[0].data.description, /channel lock status/i);
+  assert.match(message.replies[0].embeds[0].data.title, /channel lock status/i);
   assert.match(message.replies[0].embeds[0].data.description, /general chat.*locked/is);
   assert.match(message.replies[0].embeds[0].data.description, /community support chat.*neutral/is);
 });
@@ -1245,7 +1246,7 @@ test("nickname command accepts simple literal add syntax", () => {
     action: "add",
     pattern: "femboy",
     flags: "i",
-    renameTo: "Kicia User",
+    renameTo: DEFAULT_NICKNAME_RENAME_SENTINEL,
     literal: "femboy"
   });
   assert.deepEqual(parseNickMessage("$nick add fem.boy -> clean name"), {
@@ -1406,7 +1407,7 @@ test("owner scam audit command shows recent classifier decisions", async () => {
   });
 
   assert.equal(handled, true);
-  assert.match(replyPayload.embeds[0].data.description, /Scam Audit/i);
+  assert.match(replyPayload.embeds[0].data.title, /Scam Audit/i);
   assert.match(replyPayload.embeds[0].data.description, /local_true/i);
   assert.match(replyPayload.embeds[0].data.description, /local-kicia-intent-v2: TRUE/i);
   assert.match(replyPayload.embeds[0].data.description, /dms to buy kicia/i);
@@ -1472,7 +1473,7 @@ test("database command is owner-only", async () => {
 
   assert.equal(handled, true);
   assert.ok(replyPayload);
-  assert.match(replyPayload.embeds[0].data.description, /SQLite Database/i);
+  assert.match(replyPayload.embeds[0].data.title, /SQLite Database/i);
   assert.match(replyPayload.embeds[0].data.description, /Restricted Emoji Rows:\*\* 1/i);
   assert.match(replyPayload.embeds[0].data.description, /Trusted Link Rows:\*\* 2/i);
   assert.match(replyPayload.embeds[0].data.description, /Daily User Rows:\*\* 2/i);

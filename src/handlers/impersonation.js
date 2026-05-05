@@ -5,7 +5,7 @@ const {
   OWNER_USER_IDS,
   STAFF_ROLE_IDS
 } = require("../config");
-const { WARN, buildRichPanel } = require("../embed");
+const { WARN, buildRichPanel, resolveAvatarURL } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { hasAnyRole } = require("../permissions");
 const { similarity } = require("../prohibited-commerce");
@@ -90,6 +90,7 @@ function buildImpersonationPanel(member, match) {
   return buildRichPanel({
     title: "Potential Staff Impersonation",
     color: WARN,
+    thumbnail: resolveAvatarURL(member),
     fields: [
       {
         name: "Joining Member",

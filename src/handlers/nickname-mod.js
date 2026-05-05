@@ -5,9 +5,14 @@ const {
   NICKMOD_RENAME_PREFIX,
   buildNicknameModerationButtonRows
 } = require("../components");
-const { WARN, buildRichPanel } = require("../embed");
+const { WARN, buildRichPanel, resolveAvatarURL } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { canUseEmojiCommands, hasModerationBypassMember } = require("../permissions");
+const {
+  formatNicknameRenameTarget,
+  normalizeNicknameText,
+  resolveNicknameRenameTarget
+} = require("../nickname-policy");
 const {
   listNicknamePatterns,
   recordDailyModerationEvent
@@ -19,13 +24,39 @@ const NICK_CACHE_CLEANUP_MS = 5 * 60 * 1000;
 const nicknameCache = new Map();
 
 function getMemberNick(member) {
-  return String(
+  return normalizeNicknameText(
     member?.nickname ||
     member?.displayName ||
     member?.user?.globalName ||
     member?.user?.username ||
     ""
   ).trim();
+}
+
+function getMemberNameCandidates(member) {
+  const rawCandidates = [
+    { label: "Server Nickname", value: member?.nickname },
+    { label: "Global Name", value: member?.user?.globalName },
+    { label: "Username", value: member?.user?.username },
+    { label: "Display Name", value: member?.displayName }
+  ];
+  const seen = new Set();
+  const candidates = [];
+  for (const candidate of rawCandidates) {
+    const value = normalizeNicknameText(candidate.value);
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({ ...candidate, value });
+  }
+  return candidates;
+}
+
+function getMemberNameSignature(member) {
+  return getMemberNameCandidates(member)
+    .map((candidate) => `${candidate.label}:${candidate.value}`)
+    .join("|");
 }
 
 function getNicknameCacheKey(member) {
@@ -56,24 +87,47 @@ function compileNicknamePattern(entry) {
 function findNicknameMatch(nick, patterns) {
   for (const entry of patterns) {
     const regex = compileNicknamePattern(entry);
-    if (regex?.test(nick)) return entry;
+    if (!regex) continue;
+    regex.lastIndex = 0;
+    if (regex.test(nick)) return entry;
   }
   return null;
 }
 
-function buildNicknameLogPanel({ member, oldNick, rule }) {
+function findMemberNameMatch(member, patterns) {
+  for (const candidate of getMemberNameCandidates(member)) {
+    const rule = findNicknameMatch(candidate.value, patterns);
+    if (rule) return { rule, candidate };
+  }
+  return null;
+}
+
+function inlineCode(value, max = 120) {
+  const cleaned = normalizeNicknameText(value).replace(/`/g, "'");
+  const clipped = cleaned.length > max ? `${cleaned.slice(0, Math.max(0, max - 3))}...` : cleaned;
+  return `\`${clipped || "(empty)"}\``;
+}
+
+function buildNicknameLogPanel({ member, oldNick, rule, candidate, renameTo, renamed }) {
   return {
     embed: buildRichPanel({
-      title: "Nickname Renamed",
+      title: "Bad Name Guard",
       color: WARN,
+      description: "Review this member if the account name still needs manual cleanup.",
+      thumbnail: resolveAvatarURL(member),
       fields: [
         { name: "Member", value: `<@${member.id}>`, inline: true },
-        { name: "Old Nickname", value: `\`${oldNick || "(empty)"}\``, inline: true },
-        { name: "New Nickname", value: `\`${rule.renameTo}\``, inline: true },
-        { name: "Matched Rule", value: `/${rule.pattern}/${rule.flags} - id #${rule.id}`, inline: false }
+        { name: "Matched Field", value: candidate?.label || "Name", inline: true },
+        { name: "Matched Value", value: inlineCode(candidate?.value), inline: true },
+        { name: "Old Display", value: inlineCode(oldNick), inline: true },
+        { name: "Applied Nickname", value: inlineCode(renameTo), inline: true },
+        { name: "Action", value: renamed ? "Server nickname changed automatically." : "Target nickname was already applied; staff review only.", inline: false },
+        { name: "Rule", value: `#${rule.id} /${rule.pattern}/${rule.flags} -> ${formatNicknameRenameTarget(rule.renameTo)}`, inline: false },
+        { name: "Staff Action", value: "Use the button below if this needs a cleaner manual nickname.", inline: false }
       ]
     }),
-    components: buildNicknameModerationButtonRows(member.id)
+    components: buildNicknameModerationButtonRows(member.id),
+    allowedMentions: { parse: [] }
   };
 }
 
@@ -90,31 +144,44 @@ async function maybeEnforceNicknameMember(member, { sendLog = sendLogPanel, now 
   if (member.manageable === false || typeof member.setNickname !== "function") return false;
   if (hasModerationBypassMember(member, member.id || member.user?.id)) return false;
 
-  const nick = getMemberNick(member);
-  if (!nick) return false;
+  const signature = getMemberNameSignature(member);
+  if (!signature) return false;
 
   const key = getNicknameCacheKey(member);
   if (key) {
     const cached = nicknameCache.get(key);
-    if (cached?.nick === nick && cached.expiresAt > now) return false;
-    nicknameCache.set(key, { nick, expiresAt: now + NICK_CACHE_TTL_MS });
+    if (cached?.signature === signature && cached.expiresAt > now) return false;
+    nicknameCache.set(key, { signature, expiresAt: now + NICK_CACHE_TTL_MS });
   }
 
   try {
     const patterns = await listNicknamePatterns();
     if (!patterns.length) return false;
-    const match = findNicknameMatch(nick, patterns);
-    if (!match || nick === match.renameTo) return false;
+    const match = findMemberNameMatch(member, patterns);
+    if (!match) return false;
 
-    await member.setNickname(match.renameTo, `nickname moderation rule #${match.id}`);
+    const oldNick = getMemberNick(member);
+    const renameTo = resolveNicknameRenameTarget(match.rule.renameTo, member);
+    if (!renameTo) return false;
+
+    const matchedCurrentDisplay = normalizeNicknameText(match.candidate?.value).toLowerCase() === oldNick.toLowerCase();
+    const shouldRename = oldNick !== renameTo;
+    if (!shouldRename && matchedCurrentDisplay) return false;
+
+    if (shouldRename) {
+      await member.setNickname(renameTo, `nickname moderation rule #${match.rule.id}`);
+    }
     await recordNicknameModerationStat();
     await sendLog(member.guild, buildNicknameLogPanel({
       member,
-      oldNick: nick,
-      rule: match
+      oldNick,
+      rule: match.rule,
+      candidate: match.candidate,
+      renameTo,
+      renamed: shouldRename
     })).catch(() => null);
     if (key) {
-      nicknameCache.set(key, { nick: match.renameTo, expiresAt: now + NICK_CACHE_TTL_MS });
+      nicknameCache.set(key, { signature: getMemberNameSignature(member), expiresAt: now + NICK_CACHE_TTL_MS });
     }
     return true;
   } catch (err) {
@@ -266,6 +333,7 @@ async function handleNicknameModal(interaction, userId, { sendLog = sendLogPanel
   await sendLog(interaction.guild, buildRichPanel({
     title: "Manual Nickname Change",
     color: WARN,
+    thumbnail: resolveAvatarURL(member),
     fields: [
       { name: "Member", value: `<@${member.id}>`, inline: true },
       { name: "Old Nickname", value: `\`${oldNick || "(empty)"}\``, inline: true },

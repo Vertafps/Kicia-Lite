@@ -263,7 +263,7 @@ test("daily stats embeds show top users and silent staff without counting mods",
   assert.match(staffDescription, /Staff Share of Server Messages/i);
   assert.match(staffDescription, /no staff messages this window/i);
   assert.doesNotMatch(staffDescription, /Mod Beta/i);
-  assert.match(moderationDescription, /Daily Moderation/i);
+  assert.match(report.embeds[2].data.title, /Daily Moderation/i);
   assert.match(moderationDescription, /Link Guard:\*\* 1 total/i);
   assert.match(moderationDescription, /Suspicious Alerts:\*\* 1 total/i);
   assert.match(moderationDescription, /False Info Alerts:\*\* 1/i);

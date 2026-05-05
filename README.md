@@ -57,7 +57,7 @@ Staff and higher:
 
 - `$allowlink <url>` / `$removelink <url>` manages dynamic trusted links.
 - `$emoji <emoji>` / `$emoji remove <emoji>` manages restricted reactions.
-- `$nick` / `$nick add /pattern/i -> name` / `$nick remove <id>` manages nickname rename rules.
+- `$nick` / `$nick add <word>` / `$nick add <word> -> <name>` / `$nick add /pattern/i -> name` / `$nick remove <id>` manages nickname and username rename rules.
 
 ## State
 

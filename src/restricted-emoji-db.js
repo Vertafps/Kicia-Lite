@@ -9,6 +9,7 @@ const {
   sanitizePresenceState,
   validatePresenceState
 } = require("./presence-state");
+const { formatNicknameRenameTarget } = require("./nickname-policy");
 const { recordRuntimeEvent } = require("./runtime-health");
 
 const CUSTOM_EMOJI_RE = /^<(a?):([A-Za-z0-9_]+):(\d+)>$/;
@@ -416,13 +417,14 @@ function mapNicknamePatternRow(row) {
   const pattern = String(row.pattern || "");
   const flags = String(row.flags || "i");
   const renameTo = String(row.rename_to || "");
+  const displayRenameTo = formatNicknameRenameTarget(renameTo);
   return {
     id: Number(row.id || 0),
     pattern,
     flags,
     renameTo,
     createdAt: Number(row.created_at || 0),
-    display: `/${pattern}/${flags} -> ${renameTo}`
+    display: `/${pattern}/${flags} -> ${displayRenameTo}`
   };
 }
 

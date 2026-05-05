@@ -32,9 +32,13 @@ const {
   applyConfiguredPresenceState,
   validatePresenceState
 } = require("../presence-state");
+const {
+  DEFAULT_NICKNAME_RENAME_SENTINEL,
+  formatNicknameRenameTarget
+} = require("../nickname-policy");
 const { safeReply } = require("../utils/respond");
 
-const DEFAULT_NICKNAME_RENAME = "Kicia User";
+const DEFAULT_NICKNAME_RENAME = DEFAULT_NICKNAME_RENAME_SENTINEL;
 
 function escapeRegexLiteral(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -613,10 +617,11 @@ async function handleNickCommand(message, command, {
 
     const result = await addPattern(validation);
     const patterns = await listPatterns();
+    const display = result.pattern?.display || `/${validation.pattern}/${validation.flags} -> ${formatNicknameRenameTarget(validation.renameTo)}`;
     await replyWithCommandPanel(message, {
       header: "Nickname Moderation",
       body: [
-        result.added ? `added ${result.pattern.display}` : `that rule already exists: ${result.pattern.display}`,
+        result.added ? `added ${display}` : `that rule already exists: ${display}`,
         `**Count:** ${patterns.length}`
       ].join("\n"),
       color: result.added ? SUCCESS : WARN
@@ -629,7 +634,7 @@ async function handleNickCommand(message, command, {
     body: [
       "**Usage:**",
       "`$nick`",
-      "`$nick add femboy`",
+      "`$nick add femboy` -> default BADNAME number",
       "`$nick add femboy -> Kicia User`",
       "`$nick add /^!.*/i -> wawa`",
       "`$nick remove <id>`"

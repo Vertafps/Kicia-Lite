@@ -26,7 +26,7 @@ const {
   buildModerationLogButtonRows
 } = require("../components");
 const { formatDuration } = require("../duration");
-const { buildPanel, DANGER, INFO, SUCCESS, WARN } = require("../embed");
+const { buildPanel, DANGER, INFO, SUCCESS, WARN, resolveAvatarURL } = require("../embed");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
@@ -1657,6 +1657,7 @@ function buildSignalAlertPanel(message, signals) {
 
   return {
     header: buildPrimaryAlertHeader(signals),
+    thumbnail: resolveAvatarURL(message.author),
     body: [
       "hey, i found something worth checking",
       `**User:** <@${message.author?.id}>`,
@@ -1679,6 +1680,7 @@ function buildSellingDmPayload({ message, signals, state, durationMs }) {
     embeds: [
       buildPanel({
         header: isProhibitedSale ? "Prohibited Sale Timeout" : "Scam/Trade Timeout",
+        thumbnail: resolveAvatarURL(message.author),
         body: [
           isProhibitedSale
             ? `i timed you out for ${formatDuration(durationMs)} because your recent message looked like prohibited-goods sale behavior`
@@ -1745,6 +1747,7 @@ function buildSellingLogPanel({
     header: isProhibitedSale
       ? state.action === "timeout" ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
       : state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
+    thumbnail: resolveAvatarURL(message.author),
     body: [
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
@@ -1792,6 +1795,7 @@ function buildScamAiClearedLogPanel({ message, candidateSignal, aiResult }) {
   const link = buildMessageUrl(message);
   return {
     header: "Scam AI Cleared",
+    thumbnail: resolveAvatarURL(message.author),
     body: [
       "scam/trade prefilter asked for a verdict and the classifier returned false",
       `**User:** <@${message.author?.id}>`,
@@ -1842,6 +1846,7 @@ function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
     embeds: [
       buildPanel({
         header: isTimeout ? "Link Timeout" : "Link Warning",
+        thumbnail: resolveAvatarURL(message.author),
         body: [
           isTimeout
             ? `i timed you out for ${formatDuration(durationMs)} because that link looked high-risk`
@@ -1876,6 +1881,7 @@ function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult
         : signal.action === "warn"
           ? "Blocked Link Warning"
           : "Link Review",
+    thumbnail: resolveAvatarURL(message.author),
     body: [
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
@@ -1908,6 +1914,7 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
     embeds: [
       buildPanel({
         header: isTimeout ? "Suspicious Message Timeout" : "Suspicious Message Warning",
+        thumbnail: resolveAvatarURL(message.author),
         body: [
           isTimeout
             ? highConfidence
@@ -1943,6 +1950,7 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
         : state.action === "warn"
           ? "Suspicious Message Warning"
           : "Suspicious Message Alert",
+    thumbnail: resolveAvatarURL(message.author),
     body: [
       `**User:** <@${message.author?.id}>`,
       `**Channel:** <#${message.channelId}>`,
@@ -1963,6 +1971,7 @@ function buildRaidAlertPanel(message, raidAlert) {
 
   return {
     header: "Raid Alert",
+    thumbnail: resolveAvatarURL(message.author),
     body: [
       "hey, this looks like a raid wave or copy-paste spam",
       `**Channel:** <#${message.channelId}>`,

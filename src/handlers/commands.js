@@ -34,6 +34,12 @@ const {
 } = require("../presence-state");
 const { safeReply } = require("../utils/respond");
 
+const DEFAULT_NICKNAME_RENAME = "Kicia User";
+
+function escapeRegexLiteral(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function isCommandsListMessage(content) {
   const normalized = String(content || "").trim().toLowerCase();
   return normalized === "$cmd" || normalized === "$commands";
@@ -130,6 +136,22 @@ function parseNickMessage(content) {
       pattern: addMatch[1].replace(/\\\//g, "/"),
       flags: addMatch[2] || "i",
       renameTo: addMatch[3].trim()
+    };
+  }
+
+  const simpleAddMatch = trimmed.match(/^\$nick\s+add\s+(.+)$/i);
+  if (simpleAddMatch) {
+    const raw = simpleAddMatch[1].trim();
+    const arrowIndex = raw.indexOf("->");
+    const literal = (arrowIndex >= 0 ? raw.slice(0, arrowIndex) : raw).trim();
+    const renameTo = (arrowIndex >= 0 ? raw.slice(arrowIndex + 2) : DEFAULT_NICKNAME_RENAME).trim();
+    if (!literal) return { action: "help" };
+    return {
+      action: "add",
+      pattern: escapeRegexLiteral(literal),
+      flags: "i",
+      renameTo: renameTo || DEFAULT_NICKNAME_RENAME,
+      literal
     };
   }
 
@@ -309,6 +331,8 @@ function buildCommandsBody() {
     "`$emoji <emoji>` add a restricted emoji",
     "`$emoji remove <emoji>` remove a restricted emoji",
     "`$nick` list nickname patterns",
+    "`$nick add <word>` add a simple nickname rule",
+    "`$nick add <word> -> <name>` add a simple nickname rule with a custom rename",
     "`$nick add /^!.*/i -> wawa` rename members matching pattern",
     "`$nick remove <id>` remove a nickname pattern by id"
   ].join("\n");
@@ -580,7 +604,7 @@ async function handleNickCommand(message, command, {
         header: "Nickname Pattern Rejected",
         body: [
           validation.error,
-          "**Usage:** `$nick add /^!.*/i -> wawa`"
+          "**Usage:** `$nick add femboy`, `$nick add femboy -> Kicia User`, or `$nick add /^!.*/i -> wawa`"
         ].join("\n"),
         color: DANGER
       });
@@ -605,6 +629,8 @@ async function handleNickCommand(message, command, {
     body: [
       "**Usage:**",
       "`$nick`",
+      "`$nick add femboy`",
+      "`$nick add femboy -> Kicia User`",
       "`$nick add /^!.*/i -> wawa`",
       "`$nick remove <id>`"
     ].join("\n"),

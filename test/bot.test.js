@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const { ActivityType, PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 
 const { isNoResponseChannel, isNoResponseMessage } = require("../src/channel-policy");
-const { maybeHandleControlCommand } = require("../src/handlers/commands");
+const { maybeHandleControlCommand, parseNickMessage } = require("../src/handlers/commands");
 const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
@@ -1238,6 +1238,23 @@ test("emoji command is available to staff roles", async () => {
   assert.equal(handled, true);
   assert.ok(replyPayload);
   assert.match(replyPayload.embeds[0].data.description, /added/i);
+});
+
+test("nickname command accepts simple literal add syntax", () => {
+  assert.deepEqual(parseNickMessage("$nick add femboy"), {
+    action: "add",
+    pattern: "femboy",
+    flags: "i",
+    renameTo: "Kicia User",
+    literal: "femboy"
+  });
+  assert.deepEqual(parseNickMessage("$nick add fem.boy -> clean name"), {
+    action: "add",
+    pattern: "fem\\.boy",
+    flags: "i",
+    renameTo: "clean name",
+    literal: "fem.boy"
+  });
 });
 
 test("staff allowlink command adds and removes trusted links", async () => {

@@ -613,7 +613,7 @@ test("obfuscated trade wording is caught without remote AI", async () => {
   assert.match(fixture.logs[0].body, /local-kicia-policy-v3: TRUE/i);
 });
 
-test("premium users get lower scam-trade confidence without bypassing moderation", async () => {
+test("premium users use the same scam-trade confidence thresholds as everyone else", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("wh0 wana trde k3ys", {
     roleIds: ["1484218502805061662"]
@@ -631,8 +631,8 @@ test("premium users get lower scam-trade confidence without bypassing moderation
 
   assert.equal(handled, true);
   assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.timeouts[0].durationMs, 60 * 60 * 1000);
-  assert.match(fixture.logs[0].body, /premium member confidence dampened/i);
+  assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
+  assert.doesNotMatch(fixture.logs[0].body, /premium member confidence dampened|premium role dampening/i);
 });
 
 test("nickname moderation stores safe regex rules and renames matching members", async () => {

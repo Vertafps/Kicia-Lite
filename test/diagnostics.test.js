@@ -36,6 +36,7 @@ test("jarvis moderation guard lines show false info and suspicious alert coverag
   assert.match(body, /last 5 messages plus per-message reply context/i);
   assert.match(body, /local Kicia policy \+ Naive Bayes classifier/i);
   assert.match(body, /Gemini fallback optional\/off|Gemini gemini-2\.5-flash-lite handles borderline cases/i);
+  assert.doesNotMatch(body, /premium role dampening|premium member confidence dampened/i);
   assert.match(body, /AI cache 10m/i);
   assert.match(body, /local AI gap 12s/i);
   assert.match(body, /remote AI failure cooldown 2m/i);

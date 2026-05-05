@@ -18,7 +18,6 @@ const {
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_TIMEOUT_MS,
-  PREMIUM_ROLE_IDS,
   ENABLE_GUILD_MEMBER_EVENTS,
   GEMINI_API_KEY,
   GEMINI_SCAM_CACHE_MS,
@@ -196,7 +195,6 @@ function buildModerationGuardLines() {
       `remote AI failure cooldown ${formatDuration(GEMINI_SCAM_FAILURE_COOLDOWN_MS)};`,
       `API timeout ${formatDuration(GEMINI_SCAM_TIMEOUT_MS)};`,
       `confirmed confidence ladder ${sellingTierText || `>${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`};`,
-      `premium role dampening ${PREMIUM_ROLE_IDS.length ? `${PREMIUM_ROLE_IDS.length} role(s), -8 confidence on scam/trade only` : "off"};`,
       `repeat fallback ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
       `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
       `repeat timeout ${formatDuration(SELLING_TIMEOUT_MS)}`

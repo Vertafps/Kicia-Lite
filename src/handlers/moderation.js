@@ -17,8 +17,7 @@ const {
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
-  SELLING_TIMEOUT_MS,
-  PREMIUM_ROLE_IDS
+  SELLING_TIMEOUT_MS
 } = require("../config");
 const {
   MODLOG_REVERT_PREFIX,
@@ -98,7 +97,6 @@ const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|tra
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me)\b/;
 const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone)\b/;
 const WANT_OFFER_RE = /\b(?:who|anyone|somebody|someone|any1|some1)\s+(?:wants?|wanna|wana|want|need)\b|\b(?:wanna|wana)\s+(?:buy|trade|swap)\b/;
-const PREMIUM_SELLING_CONFIDENCE_DISCOUNT = 8;
 const MODERATION_ACTION_REVIEW_MAX_MS = 12 * 60 * 60 * 1000;
 const MODERATION_CONTEXT_VIEW_LIMIT = 8;
 const MODERATION_DELETE_CONTEXT_LIMIT = 3;
@@ -453,23 +451,6 @@ function hasApproxToken(tokens, terms, threshold = 0.78) {
     token.length >= 3 &&
     terms.some((term) => similarity(token, term) >= threshold)
   );
-}
-
-function hasPremiumMemberRole(member) {
-  return (PREMIUM_ROLE_IDS || []).some((roleId) => member?.roles?.cache?.has?.(roleId));
-}
-
-function applyPremiumSellingDiscount(message, signals) {
-  if (!hasPremiumMemberRole(message?.member)) return signals;
-  return (signals || []).map((signal) => {
-    if (signal.type !== "selling" || signal.subtype === "prohibited_sale") return signal;
-    const confidence = Math.max(1, Number(signal.confidence || 0) - PREMIUM_SELLING_CONFIDENCE_DISCOUNT);
-    return {
-      ...signal,
-      confidence,
-      reason: `${signal.reason} (premium member confidence dampened)`
-    };
-  });
 }
 
 function isSellPriceFollowUp(content) {
@@ -2138,7 +2119,6 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   now = Date.now()
 } = {}) {
   if (!signals.length) return [];
-  signals = applyPremiumSellingDiscount(message, signals);
 
   const strongest = signals.reduce(
     (best, signal) => (!best || (signal.confidence || 0) > (best.confidence || 0) ? signal : best),

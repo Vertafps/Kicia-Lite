@@ -471,6 +471,62 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("selling is against rules"), null);
 });
 
+test("selling detection catches current unicode and separator bypass corpus", () => {
+  const samples = [
+    "sttelling figs for robux",
+    "s()e||1ñg cönfîgzz dm",
+    "dm 4 figs shop",
+    "s(3||1ng çønfïgz",
+    "ડꫀꪶꪶⅈꪀᧁ ꪖᥴᥴꪮꪊꪀ𝕥ડ",
+    "Sꫀׁׅܻᥣׁׅ֪ᥣׁׅ֪ꪱׁׅꪀׁׅᧁׁ ɑׁׅ֮ᝯׁᝯׁᨵׁׅυׁׅꪀׁׅtׁׅ꯱ׁׅ֒",
+    "ѕєℓℓιηg α¢¢συηтѕ",
+    "ѕ𝚎׀׀Ꭵᥒց ѕс𝗋Ꭵр𝓉",
+    "T.r.a.d.i.n.g. .k.i.c.i.a. .p.r.e.m",
+    "T.ra.d.i.n.g.ggggg .a.c.cc.c.c.coun.t.s.s..s for...r.r.r.r.r config.g.",
+    "🅢🅔🅛🅛🅘🅝🅖 🅐🅒🅒🅞🅤🅝🅣🅢",
+    "Trding for prem",
+    "Ц⁠п⁠п⁠а⁠м⁠е⁠d⁠ ⁠е⁠п⁠н⁠а⁠п⁠с⁠е⁠м⁠е⁠п⁠т⁠ѕ⁠ ⁠f⁠о⁠r⁠ ⁠к⁠і⁠с⁠і⁠а⁠ ⁠р⁠r⁠е⁠м⁠і⁠ц⁠м⁠",
+    "🆂🅴🅻🅻🅸🅽🅶 🅰🅲🅲🅾🆄🅽🆃🆂",
+    "Trding cfk for Kiciahook Premium",
+    "TRDING UE FOR KCIA",
+    "SèIIng akkounts",
+    "Sel-lin-g kicka",
+    "Sellin akkount",
+    "14ad1ng 4or kicia prem",
+    "Se??ing ackount",
+    "𝐓𝗋αᑯ𝗂𐓣𝗀 𝗄𝗂𝖼𝗂αɦⱺⱺ𝗄 ρ𝗋𝖾ꭑ𝗂υꭑ",
+    "Tɿɒbinϱ ʞiɔiɒʜooʞ pɿǝmiυm",
+    "【T】【r】【a】【d】【i】【n】【g】　【k】【i】【c】【i】【a】【h】【o】【o】【k】　【p】【r】【e】【m】【i】【u】【m】",
+    "🆃🆁🅰🅳🅸🅽🅶 🅺🅸🅲🅸🅰🅷🅾🅾🅺 🅿🆁🅴🅼🅸🆄🅼",
+    "Hvh configs in dm§",
+    "Hvh configs in discord paid",
+    "Check dm for paid cfg",
+    "giving out configs dms",
+    "$ËŁĻÏÑĠ ÆCČŒUNŤŞ",
+    "Sælling Kiciahook Premium",
+    "Trædink Kiciahook Premium for ue",
+    "Premium configs for Money in Dm",
+    "Premium Configs for 💸 in bio",
+    "Premium configs for 🤑"
+  ];
+
+  for (const sample of samples) {
+    const signal = detectSellingSignal(sample);
+    assert.ok(signal, `expected selling signal for ${sample}`);
+    assert.ok(signal.confidence > 70, `expected enforceable confidence for ${sample}`);
+  }
+});
+
+test("free robux profile bait is suspicious without broad robux false positives", () => {
+  const signal = detectSuspiciousSignal("𝐅𝐫𝐞𝐞 𝐫𝐨𝐛𝐮𝐱 𝐢𝐧 𝐦𝐲 𝐛𝐢𝐨");
+  assert.ok(signal);
+  assert.equal(signal.label, "free-robux-bio");
+  assert.ok(signal.confidence > 90);
+
+  assert.equal(detectSellingSignal("support says free robux scams are fake"), null);
+  assert.equal(detectSuspiciousSignal("support says free robux scams are fake"), null);
+});
+
 test("unicode normalizer folds mixed-script and zero-width bypass text", () => {
   const forms = buildNormalizedTextForms("Ѕ⁠е⁠l⁠l⁠і⁠п⁠g⁠ ⁠с⁠о⁠п⁠f⁠і⁠g⁠ѕ⁠ ⁠f⁠о⁠r⁠ ⁠к⁠і⁠с⁠і⁠а⁠ ⁠р⁠r⁠е⁠м⁠");
   assert.equal(forms.normalized, "selling configs for kicia prem");

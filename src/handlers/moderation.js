@@ -24,6 +24,11 @@ const {
   MODLOG_VIEW_PREFIX,
   buildModerationLogButtonRows
 } = require("../components");
+const {
+  detectContentFilterSignal,
+  formatContentFilterMatches,
+  shouldRunToxicityShadowReview
+} = require("../content-filter");
 const { formatDuration } = require("../duration");
 const { buildPanel, DANGER, INFO, SUCCESS, WARN, resolveAvatarURL } = require("../embed");
 const { fetchKb } = require("../kb");
@@ -36,6 +41,7 @@ const {
   deleteModerationAction,
   getModerationAction,
   isModerationWhitelistedUser,
+  listContentFilterRules,
   listTrustedLinks,
   recordDailyModerationEvent,
   recordModerationAction,
@@ -51,6 +57,7 @@ const {
   isSafePurchaseMethodQuestion
 } = require("../scam-local-classifier");
 const { cleanText, foldConfusableText, normalizeText } = require("../text");
+const { maybeClassifyToxicityShadow } = require("../toxicity-shadow");
 const { safeReply, safeSend } = require("../utils/respond");
 
 const raidBuckets = new Map();
@@ -215,6 +222,13 @@ const SELLING_PUBLIC_REPLIES = [
   "this deal tried to sneak in wearing a fake mustache...",
   "marketplace cosplay detected...",
   "the scam/trade scanner did a backflip..."
+];
+const PROHIBITED_SALE_PUBLIC_REPLIES = [
+  "unsafe sale removed",
+  "that sale does not belong here",
+  "marketplace lane closed",
+  "prohibited-sale guard caught that",
+  "that listing is out of bounds"
 ];
 const ROASTING_PATTERNS = [
   /\b(?:bro|blud|vro|lil bro)\s+(?:got\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
@@ -606,7 +620,7 @@ function detectSellingSignal(content) {
       condensed,
       hasExplicitOffer,
       hasBroadSellIntent,
-      hasItemSignal: hasEffectiveItemSignal,
+      hasItemSignal: hasEffectiveItemSignal || hasShortContextItem,
       hasMarketSignal
     }),
     reason: hasEffectiveItemSignal || hasMarketSignal
@@ -1121,8 +1135,12 @@ function buildSuspiciousPublicReply(state) {
   return `${line} (${hit}/${SUSPICIOUS_TIMEOUT_THRESHOLD})`;
 }
 
-function buildSellingPublicReply() {
-  return pickPublicReplyLine(SELLING_PUBLIC_REPLIES);
+function buildSellingPublicReply(signals = []) {
+  return pickPublicReplyLine(
+    hasProhibitedSaleSignal(signals)
+      ? PROHIBITED_SALE_PUBLIC_REPLIES
+      : SELLING_PUBLIC_REPLIES
+  );
 }
 
 function buildRoastingPublicReply() {
@@ -1667,6 +1685,7 @@ function observeRaidMessage(message, now = Date.now()) {
 function buildPrimaryAlertHeader(signals) {
   if (signals.some((signal) => signal.type === "blocked_link")) return "Blocked Link Alert";
   if (signals.some((signal) => signal.type === "selling")) return "Scam/Trade Alert";
+  if (signals.some((signal) => signal.type === "content_filter")) return "Content Filter Alert";
   if (signals.some((signal) => signal.type === "suspicious")) return "Suspicious Message Alert";
   return "Fake Info Alert";
 }
@@ -1692,6 +1711,21 @@ function buildSignalAlertPanel(message, signals) {
 
 function hasProhibitedSaleSignal(signals) {
   return (signals || []).some((signal) => signal.subtype === "prohibited_sale");
+}
+
+function getSellingActionType(signals) {
+  return hasProhibitedSaleSignal(signals) ? "prohibited_sale" : "scam_trade";
+}
+
+function getSellingTimeoutReason(signals) {
+  return hasProhibitedSaleSignal(signals)
+    ? "prohibited sale behavior in chat"
+    : "scam/trade behavior in chat";
+}
+
+function getSellingModerationStatKey(signals, action) {
+  const prefix = hasProhibitedSaleSignal(signals) ? "prohibited_sale" : "selling";
+  return action === "timeout" ? `${prefix}_timeout` : `${prefix}_alert`;
 }
 
 function buildSellingDmPayload({ message, signals, state, durationMs }) {
@@ -1830,8 +1864,8 @@ function buildScamAiClearedLogPanel({ message, candidateSignal, aiResult }) {
   };
 }
 
-async function replyToSellingMessage(message) {
-  return tryReplyModerationMessage(message, buildSellingPublicReply(), "scam-trade");
+async function replyToSellingMessage(message, signals = []) {
+  return tryReplyModerationMessage(message, buildSellingPublicReply(signals), "scam-trade");
 }
 
 function buildFakeInfoPublicReply(signals = []) {
@@ -1986,6 +2020,52 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
   };
 }
 
+function buildContentFilterLogPanel({ message, signals, deleteResult, publicReplySent = false, toxicityShadow = null }) {
+  const link = deleteResult?.queued ? null : buildMessageUrl(message);
+  const confidence = getMaxSignalConfidence(signals);
+  const reasons = formatSignalReasons(signals);
+  const shadowLine = toxicityShadow?.attempted
+    ? `**Toxicity Shadow:** ${toxicityShadow.model || "model"} ${toxicityShadow.label || "unknown"} ${toxicityShadow.confidence || 0}%${toxicityShadow.skipped ? ` (${toxicityShadow.skipped})` : ""}`
+    : null;
+
+  return {
+    header: "Content Filter Delete",
+    thumbnail: resolveAvatarURL(message.author),
+    body: [
+      `**User:** <@${message.author?.id}>`,
+      `**Channel:** <#${message.channelId}>`,
+      link ? `**Jump:** [Open message](${link})` : null,
+      `**Action:** delete ${formatDeleteSummary(deleteResult)} | reply ${publicReplySent ? "sent" : "not sent"}`,
+      `**Confidence:** ${confidence}%`,
+      `**Why:**\n${reasons}`,
+      `**Matches:**\n${signals.map(formatContentFilterMatches).join("\n")}`,
+      shadowLine,
+      `**Evidence:** ${trimExcerpt(message.content)}`
+    ].filter(Boolean).join("\n\n"),
+    color: DANGER
+  };
+}
+
+function buildToxicityShadowReviewPanel({ message, result, forms }) {
+  const link = buildMessageUrl(message);
+  return {
+    header: "Toxicity Shadow Review",
+    thumbnail: resolveAvatarURL(message.author),
+    body: [
+      "shadow model scored this message high, but deterministic rules did not act",
+      `**User:** <@${message.author?.id}>`,
+      `**Channel:** <#${message.channelId}>`,
+      link ? `**Jump:** [Open message](${link})` : null,
+      `**Model:** ${result.model || "toxicity model"}`,
+      `**Score:** ${result.label || "unknown"} ${result.confidence || 0}%`,
+      `**Mixed Scripts:** ${forms?.scriptMix?.hasMixedScripts ? forms.scriptMix.usedScripts.join(", ") : "no"}`,
+      `**Normalized:** ${trimExcerpt(forms?.normalized || "", 220)}`,
+      `**Evidence:** ${trimExcerpt(message.content)}`
+    ].filter(Boolean).join("\n\n"),
+    color: WARN
+  };
+}
+
 function buildRaidAlertPanel(message, raidAlert) {
   const link = raidAlert.sampleUrl || buildMessageUrl(message);
 
@@ -2003,13 +2083,18 @@ function buildRaidAlertPanel(message, raidAlert) {
   };
 }
 
-function collectContentSignals(content, { kb, runtimeStatus }) {
+function collectContentSignals(content, { kb, runtimeStatus, contentFilterRules = [] } = {}) {
   const signals = [];
   const prohibitedCommerceSignal = detectProhibitedCommerceSignal([content]);
   if (prohibitedCommerceSignal) signals.push(prohibitedCommerceSignal);
 
   const sellingSignal = detectSellingSignal(content);
   if (sellingSignal) signals.push(sellingSignal);
+
+  const contentFilterSignal = detectContentFilterSignal(content, {
+    rules: contentFilterRules
+  });
+  if (contentFilterSignal) signals.push(contentFilterSignal);
 
   const suspiciousSignal = detectSuspiciousSignal(content);
   if (suspiciousSignal) signals.push(suspiciousSignal);
@@ -2096,7 +2181,7 @@ async function handleSellingMessage(message, signals, {
   const state = rememberSellingMessage(message, signals, now);
   const effectiveTimeoutMs = Number(state.durationMs || 0) > 0 ? Number(state.durationMs) : timeoutMs;
   const publicReplySent = replyPublic
-    ? await replyToSellingMessage(message)
+    ? await replyToSellingMessage(message, signals)
     : false;
   const deletePlan = buildDeletePlanSummary(recentMessages, message, true);
   let timeoutResult = {
@@ -2106,7 +2191,7 @@ async function handleSellingMessage(message, signals, {
   let dmSent = false;
 
   if (state.action === "timeout") {
-    timeoutResult = await tryTimeoutMessageMember(message.member, effectiveTimeoutMs, "scam/trade behavior in chat");
+    timeoutResult = await tryTimeoutMessageMember(message.member, effectiveTimeoutMs, getSellingTimeoutReason(signals));
     dmSent = await safeSend(message.author, buildSellingDmPayload({
       message,
       signals,
@@ -2118,7 +2203,7 @@ async function handleSellingMessage(message, signals, {
     }
   }
 
-  await recordModerationStat(state.action === "timeout" ? "selling_timeout" : "selling_alert", now);
+  await recordModerationStat(getSellingModerationStatKey(signals, state.action), now);
   const panel = buildSellingLogPanel({
     message,
     signals,
@@ -2130,7 +2215,7 @@ async function handleSellingMessage(message, signals, {
     recentMessages
   });
   await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
-    actionType: "scam_trade",
+    actionType: getSellingActionType(signals),
     actionLabel: panel.header,
     timeoutMs: effectiveTimeoutMs,
     timeoutApplied: timeoutResult.applied,
@@ -2149,6 +2234,48 @@ async function handleSellingMessage(message, signals, {
     ...state,
     deleteResult,
     publicReplySent
+  };
+}
+
+async function handleContentFilterMessage(message, signals, {
+  sendLog = sendLogPanel,
+  now = Date.now(),
+  toxicityShadow = null
+} = {}) {
+  const publicReplySent = await tryReplyModerationMessage(
+    message,
+    "badie wordi detected, message removed.",
+    "content-filter"
+  );
+  const deletePlan = buildDeletePlanSummary([], message, true);
+  await recordModerationStat("content_filter_delete", now);
+  const panel = buildContentFilterLogPanel({
+    message,
+    signals,
+    deleteResult: deletePlan,
+    publicReplySent,
+    toxicityShadow
+  });
+  await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
+    actionType: "content_filter",
+    actionLabel: panel.header,
+    timeoutMs: 0,
+    timeoutApplied: false,
+    deleteApplied: true,
+    dmSent: false,
+    reasons: formatSignalReasonsForStorage(signals),
+    recentMessages: [],
+    now
+  });
+  const deleteResult = await deleteRecentUserMessagesAfterLog([], message, {
+    enabled: true,
+    scope: "content-filter-delete"
+  });
+
+  return {
+    action: "delete",
+    publicReplySent,
+    deleteResult
   };
 }
 
@@ -2441,6 +2568,7 @@ async function maybeHandleModerationWatch(message, {
   runtimeStatus,
   fetchKbFn = fetchKb,
   classifyScam = classifyScamContextWithGemini,
+  classifyToxicityShadow = maybeClassifyToxicityShadow,
   checkThreatIntel,
   sendLog = sendLogPanel,
   now = Date.now()
@@ -2459,6 +2587,10 @@ async function maybeHandleModerationWatch(message, {
     if (!resolvedKb && (hasLink || mightContainFakeInfo(message.content))) {
       resolvedKb = await fetchKbFn().catch(() => null);
     }
+    const contentFilterRules = await listContentFilterRules().catch((err) => {
+      recordRuntimeEvent("warn", "content-filter-rule-list", err?.message || err);
+      return [];
+    });
 
     if (hasLink && resolvedKb) {
       const trustedLinks = await listTrustedLinks().catch((err) => {
@@ -2486,10 +2618,25 @@ async function maybeHandleModerationWatch(message, {
 
     const signals = collectContentSignals(message.content, {
       kb: resolvedKb,
-      runtimeStatus: runtimeStatus || getRuntimeStatus()
+      runtimeStatus: runtimeStatus || getRuntimeStatus(),
+      contentFilterRules
     });
     const suspiciousSignals = signals.filter((signal) => signal.type === "suspicious");
     const contentSignals = signals.filter((signal) => signal.type !== "suspicious");
+    const contentFilterSignals = contentSignals.filter((signal) => signal.type === "content_filter");
+    const shadowCandidate = shouldRunToxicityShadowReview(message.content, {
+      contentFilterSignal: contentFilterSignals[0] || null
+    });
+    const toxicityShadow = await classifyToxicityShadow(message.content, {
+      candidate: shadowCandidate.shouldRun
+    }).catch((err) => {
+      recordRuntimeEvent("warn", "toxicity-shadow-classify", err?.message || err);
+      return {
+        attempted: true,
+        skipped: "error",
+        error: err?.message || String(err)
+      };
+    });
 
     if (!contentSignals.some((signal) => signal.type === "selling")) {
       const contextualSellingSignal = detectContextualSellingSignal(recentMessages, repliedToMessage);
@@ -2500,7 +2647,9 @@ async function maybeHandleModerationWatch(message, {
 
     let publicReplySent = false;
     const sellingSignals = contentSignals.filter((signal) => signal.type === "selling");
-    const otherContentSignals = contentSignals.filter((signal) => signal.type !== "selling");
+    const otherContentSignals = contentSignals.filter((signal) =>
+      signal.type !== "selling" && signal.type !== "content_filter"
+    );
 
     const confirmedSellingSignals = sellingSignals.length
       ? await confirmScamTradeSignals(message, sellingSignals, scamContext, {
@@ -2519,6 +2668,19 @@ async function maybeHandleModerationWatch(message, {
       });
       clearRecentUserMessagesFor(message);
       publicReplySent = publicReplySent || state.publicReplySent;
+      if (contentFilterSignals.length) {
+        await sendLog(message.guild, buildSignalAlertPanel(message, contentFilterSignals)).catch(() => null);
+      }
+    }
+
+    if (contentFilterSignals.length && !confirmedSellingSignals.length) {
+      const state = await handleContentFilterMessage(message, contentFilterSignals, {
+        sendLog,
+        now,
+        toxicityShadow
+      });
+      publicReplySent = publicReplySent || state.publicReplySent;
+      return true;
     }
 
     if (otherContentSignals.length) {
@@ -2533,6 +2695,20 @@ async function maybeHandleModerationWatch(message, {
           await recordModerationStat(`${eventType}_alert`, now);
         }
       }
+    }
+
+    if (
+      !contentFilterSignals.length &&
+      toxicityShadow?.attempted &&
+      !toxicityShadow.skipped &&
+      Number(toxicityShadow.confidence || 0) >= 85
+    ) {
+      await sendLog(message.guild, buildToxicityShadowReviewPanel({
+        message,
+        result: toxicityShadow,
+        forms: shadowCandidate.forms
+      })).catch(() => null);
+      await recordModerationStat("toxicity_shadow_review", now);
     }
 
     if (suspiciousSignals.length) {

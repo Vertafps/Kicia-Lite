@@ -16,6 +16,9 @@ const {
   listModerationWhitelistedUsers,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
+  listContentFilterRules,
+  addContentFilterRule,
+  removeContentFilterRuleById,
   listNicknamePatterns,
   addNicknamePattern,
   removeNicknamePatternById,
@@ -24,6 +27,8 @@ const {
   setChannelSetting,
   resetChannelSetting,
   listScamDecisionAudit,
+  labelScamDecisionAudit,
+  normalizeScamAuditLabel,
   getBotPresenceState,
   setBotPresenceState,
   resetBotPresenceState
@@ -34,6 +39,12 @@ const {
   normalizeChannelSlotKey,
   parseChannelIdInput
 } = require("../channel-config");
+const {
+  KNOWN_BAD_WORD_CATEGORIES,
+  detectContentFilterSignal,
+  listDefaultContentFilterRules,
+  validateBadWordRuleInput
+} = require("../content-filter");
 const { normalizeUrlCandidate } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const {
@@ -45,6 +56,7 @@ const {
   DEFAULT_NICKNAME_RENAME_SENTINEL,
   formatNicknameRenameTarget
 } = require("../nickname-policy");
+const { buildNormalizedTextForms } = require("../text");
 const { safeReply } = require("../utils/respond");
 
 const DEFAULT_NICKNAME_RENAME = DEFAULT_NICKNAME_RENAME_SENTINEL;
@@ -65,10 +77,20 @@ function isDatabaseMessage(content) {
 
 function parseScamAuditMessage(content) {
   const trimmed = String(content || "").trim();
+  const labelMatch = trimmed.match(/^\$(?:scamaudit|audit)\s+label\s+(\d+)\s+(\S+)(?:\s+([\s\S]+))?$/i);
+  if (labelMatch) {
+    return {
+      action: "label",
+      id: Number(labelMatch[1]),
+      label: labelMatch[2],
+      note: String(labelMatch[3] || "").trim()
+    };
+  }
+
   const match = trimmed.match(/^\$(?:scamaudit|audit)(?:\s+(\d{1,2}))?$/i);
   if (!match) return null;
   const limit = Math.min(25, Math.max(1, Math.round(Number(match[1]) || 10)));
-  return { limit };
+  return { action: "list", limit };
 }
 
 function parseStateMessage(content) {
@@ -218,6 +240,52 @@ function parseNickMessage(content) {
   };
 }
 
+function parseBadWordMessage(content) {
+  const trimmed = String(content || "").trim();
+  if (!/^\$badword(?:\s|$)/i.test(trimmed)) return null;
+  if (/^\$badword$/i.test(trimmed)) {
+    return {
+      action: "list"
+    };
+  }
+
+  const removeMatch = trimmed.match(/^\$badword\s+(?:remove|delete|del)\s+(\d+)$/i);
+  if (removeMatch) {
+    return {
+      action: "remove",
+      id: Number(removeMatch[1])
+    };
+  }
+
+  const testMatch = trimmed.match(/^\$badword\s+test\s+([\s\S]+)$/i);
+  if (testMatch) {
+    return {
+      action: "test",
+      text: testMatch[1].trim()
+    };
+  }
+
+  const addMatch = trimmed.match(/^\$badword\s+add\s+([\s\S]+)$/i);
+  if (addMatch) {
+    const raw = addMatch[1].trim();
+    const tokens = raw.split(/\s+/);
+    const maybeCategory = tokens.length > 1
+      ? tokens[tokens.length - 1].toLowerCase().replace(/[\s-]+/g, "_")
+      : "";
+    const category = KNOWN_BAD_WORD_CATEGORIES.has(maybeCategory) ? maybeCategory : "custom";
+    const term = category === "custom" ? raw : tokens.slice(0, -1).join(" ");
+    return {
+      action: "add",
+      term,
+      category
+    };
+  }
+
+  return {
+    action: "help"
+  };
+}
+
 function parseTrustedLinkMessage(content) {
   const trimmed = String(content || "").trim();
   if (/^\$allowlink$/i.test(trimmed)) {
@@ -303,6 +371,23 @@ function formatNicknamePatternList(patterns) {
     .join("\n");
 }
 
+function formatBadWordRuleList(rules) {
+  if (!Array.isArray(rules) || !rules.length) return "none yet";
+  return rules
+    .slice(0, 25)
+    .map((entry) => `- #${entry.id} \`${entry.term}\` (${entry.category})`)
+    .join("\n");
+}
+
+function formatBadWordTestResult(signal) {
+  if (!signal) return "no match";
+  return [
+    `**Action:** ${signal.action}`,
+    `**Confidence:** ${signal.confidence}%`,
+    `**Why:**\n${(signal.reasons || [signal.reason]).map((reason) => `- ${reason}`).join("\n")}`
+  ].join("\n");
+}
+
 function formatTrustedLinkList(links) {
   if (!Array.isArray(links) || !links.length) return "none yet";
   return links.map((link) => `- ${link.url}`).join("\n");
@@ -346,8 +431,9 @@ function formatScamAuditList(records) {
       const ai = formatAuditVerdict("ai", entry.ai);
       const verdicts = [local, ai].filter(Boolean).join(" | ") || "no classifier verdict";
       const result = entry.handled ? "acted" : "cleared";
+      const reviewLabel = entry.review?.label ? ` | label: \`${entry.review.label}\`` : "";
       return [
-        `- ${when} **${result}** \`${entry.action}\` ${user}${channel}`,
+        `- ${when} **${result}** \`${entry.action}\` #${entry.id}${reviewLabel} ${user}${channel}`,
         `  ${verdicts}`,
         `  ${trimCommandExcerpt(entry.messageContent)}`
       ].join("\n");
@@ -378,6 +464,7 @@ function buildCommandsBody() {
     "`$role <@user|userid> <roleid>` assign a role to one member",
     "`$db` / `$database` inspect the SQLite moderation database",
     "`$scamaudit` inspect recent scam/trade classifier decisions",
+    "`$scamaudit label <id> <tp|fp|missed|safe|unsure> [note]` label detector outcomes",
     "`$whitelist` list manual moderation whitelist users",
     "`$whitelist <user>` exempt a user from message moderation tracking",
     "`$whitelist remove <user>` remove a manual moderation whitelist user",
@@ -395,7 +482,11 @@ function buildCommandsBody() {
     "`$nick add <word>` add a simple nickname rule",
     "`$nick add <word> -> <name>` add a simple nickname rule with a custom rename",
     "`$nick add /^!.*/i -> wawa` rename members matching pattern",
-    "`$nick remove <id>` remove a nickname pattern by id"
+    "`$nick remove <id>` remove a nickname pattern by id",
+    "`$badword` list custom content-filter rules",
+    "`$badword add <term> [category]` add a literal content-filter rule",
+    "`$badword remove <id>` disable a custom content-filter rule",
+    "`$badword test <text>` show normalization and matches without deleting"
   ].join("\n");
 }
 
@@ -430,6 +521,7 @@ async function handleDatabaseCommand(message, {
       `**Restricted Emoji Rows:** ${snapshot.tableCounts.restrictedEmojis}`,
       `**Trusted Link Rows:** ${snapshot.tableCounts.trustedLinks || 0}`,
       `**Manual Whitelist Rows:** ${snapshot.tableCounts.moderationWhitelist || 0}`,
+      `**Content Filter Rules:** ${snapshot.tableCounts.contentFilterRules || 0}`,
       `**Daily User Rows:** ${snapshot.tableCounts.dailyUsers}`,
       `**Daily Channel Rows:** ${snapshot.tableCounts.dailyChannels}`,
       `**Daily Staff Rows:** ${snapshot.tableCounts.dailyStaff}`,
@@ -447,8 +539,54 @@ async function handleDatabaseCommand(message, {
 }
 
 async function handleScamAuditCommand(message, command, {
-  listAudit = listScamDecisionAudit
+  listAudit = listScamDecisionAudit,
+  labelAudit = labelScamDecisionAudit
 } = {}) {
+  if (command.action === "label") {
+    const normalizedLabel = normalizeScamAuditLabel(command.label);
+    if (!normalizedLabel) {
+      await replyWithCommandPanel(message, {
+        header: "Scam Audit Label",
+        body: [
+          "unknown label",
+          "**Usage:** `$scamaudit label <id> <tp|fp|missed|safe|unsure> [note]`"
+        ].join("\n"),
+        color: WARN
+      });
+      return true;
+    }
+
+    const result = await labelAudit({
+      id: command.id,
+      label: normalizedLabel,
+      note: command.note,
+      reviewedBy: message.author?.id || null
+    });
+    if (!result.updated) {
+      await replyWithCommandPanel(message, {
+        header: "Scam Audit Label",
+        body: result.reason === "not_found"
+          ? `no audit row found for id \`${command.id}\``
+          : "could not label that audit row",
+        color: WARN
+      });
+      return true;
+    }
+
+    await replyWithCommandPanel(message, {
+      header: "Scam Audit Labeled",
+      body: [
+        `**Audit ID:** #${result.record.id}`,
+        `**Label:** \`${result.record.review.label}\``,
+        result.record.review.note ? `**Note:** ${trimCommandExcerpt(result.record.review.note, 180)}` : null,
+        `**Action:** \`${result.record.action}\``,
+        `**Message:** ${trimCommandExcerpt(result.record.messageContent, 180)}`
+      ].filter(Boolean).join("\n"),
+      color: SUCCESS
+    });
+    return true;
+  }
+
   const records = await listAudit({ limit: command.limit });
   await replyWithCommandPanel(message, {
     header: "Scam Audit",
@@ -900,6 +1038,109 @@ async function handleNickCommand(message, command, {
   return true;
 }
 
+async function handleBadWordCommand(message, command, {
+  listRules = listContentFilterRules,
+  addRule = addContentFilterRule,
+  removeRule = removeContentFilterRuleById
+} = {}) {
+  if (command.action === "list") {
+    const rules = await listRules({ includeDisabled: false });
+    const defaultRules = listDefaultContentFilterRules();
+    await replyWithCommandPanel(message, {
+      header: "Content Filter Rules",
+      body: [
+        `**Default Rules:** ${defaultRules.length}`,
+        `**Custom Rules:** ${rules.length}`,
+        formatBadWordRuleList(rules),
+        "",
+        "**Usage:** `$badword add <term> [hate_slur|adult_content|adult_promo|custom]`, `$badword remove <id>`, `$badword test <text>`"
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (command.action === "remove") {
+    const result = await removeRule(command.id);
+    const rules = await listRules({ includeDisabled: false });
+    await replyWithCommandPanel(message, {
+      header: "Content Filter Rules",
+      body: [
+        result.removed ? `disabled rule #${command.id}` : `no enabled custom rule found for #${command.id}`,
+        `**Custom Rules:** ${rules.length}`
+      ].join("\n"),
+      color: result.removed ? SUCCESS : WARN
+    });
+    return true;
+  }
+
+  if (command.action === "add") {
+    const validation = validateBadWordRuleInput(command);
+    if (!validation.ok) {
+      await replyWithCommandPanel(message, {
+        header: "Content Filter Rule Rejected",
+        body: [
+          validation.error,
+          "**Usage:** `$badword add <term> [hate_slur|adult_content|adult_promo|custom]`"
+        ].join("\n"),
+        color: DANGER
+      });
+      return true;
+    }
+
+    const result = await addRule({
+      term: validation.term,
+      category: validation.category,
+      normalizedKey: validation.normalizedKey,
+      createdBy: message.author?.id || null
+    });
+    const rules = await listRules({ includeDisabled: false });
+    await replyWithCommandPanel(message, {
+      header: "Content Filter Rules",
+      body: [
+        result.added
+          ? `added #${result.rule.id} \`${result.rule.term}\` (${result.rule.category})`
+          : `that custom rule already exists: #${result.rule.id} \`${result.rule.term}\` (${result.rule.category})`,
+        `**Custom Rules:** ${rules.length}`
+      ].join("\n"),
+      color: result.added ? SUCCESS : WARN
+    });
+    return true;
+  }
+
+  if (command.action === "test") {
+    const rules = await listRules({ includeDisabled: false });
+    const forms = buildNormalizedTextForms(command.text);
+    const signal = detectContentFilterSignal(command.text, { rules });
+    await replyWithCommandPanel(message, {
+      header: "Content Filter Test",
+      body: [
+        `**Input:** ${trimCommandExcerpt(command.text, 180)}`,
+        `**Normalized:** \`${trimCommandExcerpt(forms.normalized, 240)}\``,
+        `**Compact:** \`${trimCommandExcerpt(forms.compact, 240)}\``,
+        `**Collapsed:** \`${trimCommandExcerpt(forms.collapsed, 240)}\``,
+        `**Mixed Scripts:** ${forms.scriptMix.hasMixedScripts ? forms.scriptMix.usedScripts.join(", ") : "no"}`,
+        formatBadWordTestResult(signal)
+      ].join("\n"),
+      color: signal ? WARN : SUCCESS
+    });
+    return true;
+  }
+
+  await replyWithCommandPanel(message, {
+    header: "Content Filter Rules",
+    body: [
+      "**Usage:**",
+      "`$badword`",
+      "`$badword add <term> [hate_slur|adult_content|adult_promo|custom]`",
+      "`$badword remove <id>`",
+      "`$badword test <text>`"
+    ].join("\n"),
+    color: INFO
+  });
+  return true;
+}
+
 async function handleWhitelistCommand(message, command, {
   listWhitelist = listModerationWhitelistedUsers,
   addWhitelistUser = addModerationWhitelistedUser,
@@ -1073,6 +1314,12 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleNickCommand(message, nickCommand, deps);
   }
 
+  const badWordCommand = parseBadWordMessage(message.content);
+  if (badWordCommand) {
+    if (!canUseEmojiCommands(message)) return true;
+    return handleBadWordCommand(message, badWordCommand, deps);
+  }
+
   if (isCommandsListMessage(message.content)) {
     if (!canUseOwnerCommands(message)) return true;
     return handleCommandsList(message);
@@ -1094,11 +1341,13 @@ module.exports = {
   parseSetChannelMessage,
   parseEmojiMessage,
   parseNickMessage,
+  parseBadWordMessage,
   parseTrustedLinkMessage,
   parseWhitelistMessage,
   parseUserIdInput,
   handleStateCommand,
   handleSetChannelCommand,
   handleNickCommand,
+  handleBadWordCommand,
   maybeHandleControlCommand
 };

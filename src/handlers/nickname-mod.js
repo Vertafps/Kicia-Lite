@@ -9,7 +9,9 @@ const { WARN, buildRichPanel, resolveAvatarURL } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { canUseEmojiCommands, hasModerationBypassMember } = require("../permissions");
 const {
+  compactNicknameMatchText,
   formatNicknameRenameTarget,
+  normalizeNicknameMatchText,
   normalizeNicknameText,
   resolveNicknameRenameTarget
 } = require("../nickname-policy");
@@ -48,7 +50,12 @@ function getMemberNameCandidates(member) {
     const key = value.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    candidates.push({ ...candidate, value });
+    candidates.push({
+      ...candidate,
+      value,
+      normalized: normalizeNicknameMatchText(value),
+      compact: compactNicknameMatchText(value)
+    });
   }
   return candidates;
 }
@@ -84,22 +91,201 @@ function compileNicknamePattern(entry) {
   }
 }
 
-function findNicknameMatch(nick, patterns) {
+function resetRegex(regex) {
+  regex.lastIndex = 0;
+  return regex;
+}
+
+function unescapeRegexLiteral(pattern) {
+  const source = String(pattern || "");
+  let output = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "\\") {
+      index += 1;
+      if (index < source.length) output += source[index];
+      continue;
+    }
+    if (/[\^$.*+?()[\]{}|]/.test(char)) return null;
+    output += char;
+  }
+  return output.trim() || null;
+}
+
+function collapseRepeats(value) {
+  return String(value || "").replace(/(.)\1{2,}/g, "$1$1");
+}
+
+function levenshteinDistance(left, right) {
+  const a = collapseRepeats(left);
+  const b = collapseRepeats(right);
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  const current = Array.from({ length: b.length + 1 }, () => 0);
+  for (let i = 1; i <= a.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost
+      );
+    }
+    for (let j = 0; j <= b.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+  return previous[b.length];
+}
+
+function jaroWinkler(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+
+  const matchDistance = Math.max(Math.floor(Math.max(a.length, b.length) / 2) - 1, 0);
+  const aMatches = Array.from({ length: a.length }, () => false);
+  const bMatches = Array.from({ length: b.length }, () => false);
+  let matches = 0;
+
+  for (let i = 0; i < a.length; i += 1) {
+    const start = Math.max(0, i - matchDistance);
+    const end = Math.min(i + matchDistance + 1, b.length);
+    for (let j = start; j < end; j += 1) {
+      if (bMatches[j] || a[i] !== b[j]) continue;
+      aMatches[i] = true;
+      bMatches[j] = true;
+      matches += 1;
+      break;
+    }
+  }
+
+  if (!matches) return 0;
+
+  let bIndex = 0;
+  let transpositions = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    if (!aMatches[i]) continue;
+    while (!bMatches[bIndex]) bIndex += 1;
+    if (a[i] !== b[bIndex]) transpositions += 1;
+    bIndex += 1;
+  }
+
+  const jaro = (
+    matches / a.length +
+    matches / b.length +
+    (matches - (transpositions / 2)) / matches
+  ) / 3;
+  let prefix = 0;
+  while (prefix < Math.min(4, a.length, b.length) && a[prefix] === b[prefix]) {
+    prefix += 1;
+  }
+  return jaro + (prefix * 0.1 * (1 - jaro));
+}
+
+function fuzzyLiteralMatches(candidateCompact, literalCompact) {
+  const candidate = String(candidateCompact || "");
+  const literal = String(literalCompact || "");
+  if (!candidate || !literal) return false;
+  if (candidate.includes(literal) || literal.includes(candidate)) return true;
+  if (literal.length < 5 || candidate.length < 5) return false;
+  if (candidate[0] !== literal[0]) return false;
+
+  const ratio = Math.min(candidate.length, literal.length) / Math.max(candidate.length, literal.length);
+  if (ratio < 0.65) return false;
+
+  const maxDistance = literal.length >= 8 ? 2 : 1;
+  if (levenshteinDistance(candidate, literal) <= maxDistance) return true;
+  return jaroWinkler(candidate, literal) >= 0.9;
+}
+
+function getPatternLiteral(entry) {
+  const literal = unescapeRegexLiteral(entry?.pattern);
+  if (!literal) return null;
+  return {
+    raw: literal,
+    normalized: normalizeNicknameMatchText(literal),
+    compact: compactNicknameMatchText(literal)
+  };
+}
+
+function getNicknameMatchVariants(nick) {
+  const raw = normalizeNicknameText(nick);
+  const normalized = normalizeNicknameMatchText(raw);
+  const compact = compactNicknameMatchText(raw);
+  const variants = [raw, normalized, compact].filter(Boolean);
+  return [...new Set(variants)];
+}
+
+function findNicknameMatchDetail(nick, patterns) {
+  const variants = getNicknameMatchVariants(nick);
   for (const entry of patterns) {
     const regex = compileNicknamePattern(entry);
-    if (!regex) continue;
-    regex.lastIndex = 0;
-    if (regex.test(nick)) return entry;
+    if (regex) {
+      for (const variant of variants) {
+        if (resetRegex(regex).test(variant)) {
+          return {
+            rule: entry,
+            kind: variant === variants[0] ? "regex" : "normalized_regex",
+            score: 1
+          };
+        }
+      }
+    }
+
+    const literal = getPatternLiteral(entry);
+    if (!literal?.compact) continue;
+    const compactVariants = [
+      compactNicknameMatchText(nick),
+      ...normalizeNicknameMatchText(nick).split(/\s+/).map(compactNicknameMatchText)
+    ].filter(Boolean);
+
+    for (const candidate of [...new Set(compactVariants)]) {
+      if (fuzzyLiteralMatches(candidate, literal.compact)) {
+        return {
+          rule: entry,
+          kind: candidate === literal.compact ? "literal" : "fuzzy_literal",
+          score: candidate === literal.compact ? 1 : Math.max(
+            1 - (levenshteinDistance(candidate, literal.compact) / Math.max(candidate.length, literal.compact.length)),
+            jaroWinkler(candidate, literal.compact)
+          )
+        };
+      }
+    }
   }
   return null;
 }
 
+function findNicknameMatch(nick, patterns) {
+  return findNicknameMatchDetail(nick, patterns)?.rule || null;
+}
+
 function findMemberNameMatch(member, patterns) {
   for (const candidate of getMemberNameCandidates(member)) {
-    const rule = findNicknameMatch(candidate.value, patterns);
-    if (rule) return { rule, candidate };
+    const match = findNicknameMatchDetail(candidate.value, patterns);
+    if (match?.rule) {
+      return {
+        rule: match.rule,
+        candidate: {
+          ...candidate,
+          matchKind: match.kind,
+          matchScore: match.score
+        }
+      };
+    }
   }
   return null;
+}
+
+function getNicknamePatternSignature(patterns) {
+  return (patterns || [])
+    .map((entry) => `${entry.id}:${entry.pattern}/${entry.flags}->${entry.renameTo}`)
+    .join("|");
 }
 
 function inlineCode(value, max = 120) {
@@ -119,6 +305,7 @@ function buildNicknameLogPanel({ member, oldNick, rule, candidate, renameTo, ren
         { name: "Member", value: `<@${member.id}>`, inline: true },
         { name: "Matched Field", value: candidate?.label || "Name", inline: true },
         { name: "Matched Value", value: inlineCode(candidate?.value), inline: true },
+        { name: "Match Type", value: candidate?.matchKind || "regex", inline: true },
         { name: "Old Display", value: inlineCode(oldNick), inline: true },
         { name: "Applied Nickname", value: inlineCode(renameTo), inline: true },
         { name: "Action", value: renamed ? "Server nickname changed automatically." : "Target nickname was already applied; staff review only.", inline: false },
@@ -147,16 +334,24 @@ async function maybeEnforceNicknameMember(member, { sendLog = sendLogPanel, now 
   const signature = getMemberNameSignature(member);
   if (!signature) return false;
 
-  const key = getNicknameCacheKey(member);
-  if (key) {
-    const cached = nicknameCache.get(key);
-    if (cached?.signature === signature && cached.expiresAt > now) return false;
-    nicknameCache.set(key, { signature, expiresAt: now + NICK_CACHE_TTL_MS });
-  }
-
   try {
     const patterns = await listNicknamePatterns();
     if (!patterns.length) return false;
+    const patternSignature = getNicknamePatternSignature(patterns);
+
+    const key = getNicknameCacheKey(member);
+    if (key) {
+      const cached = nicknameCache.get(key);
+      if (
+        cached?.signature === signature &&
+        cached?.patternSignature === patternSignature &&
+        cached.expiresAt > now
+      ) {
+        return false;
+      }
+      nicknameCache.set(key, { signature, patternSignature, expiresAt: now + NICK_CACHE_TTL_MS });
+    }
+
     const match = findMemberNameMatch(member, patterns);
     if (!match) return false;
 
@@ -181,7 +376,11 @@ async function maybeEnforceNicknameMember(member, { sendLog = sendLogPanel, now 
       renamed: shouldRename
     })).catch(() => null);
     if (key) {
-      nicknameCache.set(key, { signature: getMemberNameSignature(member), expiresAt: now + NICK_CACHE_TTL_MS });
+      nicknameCache.set(key, {
+        signature: getMemberNameSignature(member),
+        patternSignature,
+        expiresAt: now + NICK_CACHE_TTL_MS
+      });
     }
     return true;
   } catch (err) {

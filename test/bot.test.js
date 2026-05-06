@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const { ActivityType, PermissionFlagsBits, PermissionsBitField } = require("discord.js");
 
 const { isNoResponseChannel, isNoResponseMessage } = require("../src/channel-policy");
-const { maybeHandleControlCommand, parseNickMessage } = require("../src/handlers/commands");
+const { maybeHandleControlCommand, parseBadWordMessage, parseNickMessage } = require("../src/handlers/commands");
 const {
   getConfiguredChannelId,
   resetChannelConfigCache,
@@ -1383,6 +1383,142 @@ test("nickname command accepts simple literal add syntax", () => {
   });
 });
 
+test("badword command parses literal add, remove, and test syntax", () => {
+  assert.deepEqual(parseBadWordMessage("$badword"), {
+    action: "list"
+  });
+  assert.deepEqual(parseBadWordMessage("$badword add femboy adult_content"), {
+    action: "add",
+    term: "femboy",
+    category: "adult_content"
+  });
+  assert.deepEqual(parseBadWordMessage("$badword remove 12"), {
+    action: "remove",
+    id: 12
+  });
+  assert.deepEqual(parseBadWordMessage("$badword test şëx ćàm in bîò"), {
+    action: "test",
+    text: "şëx ćàm in bîò"
+  });
+});
+
+test("staff badword command adds, lists, tests, and removes literal rules", async () => {
+  let replyPayload = null;
+  const rules = [];
+  const message = {
+    content: "$badword add femboy adult_content",
+    author: { id: "staff-user" },
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleId === "1298767464678559794"
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  };
+  const deps = {
+    listRules: async () => rules.filter((rule) => rule.enabled !== false),
+    addRule: async ({ term, category, normalizedKey, createdBy }) => {
+      const rule = {
+        id: 1,
+        term,
+        category,
+        normalizedKey,
+        createdBy,
+        enabled: true
+      };
+      rules.push(rule);
+      return { added: true, rule };
+    },
+    removeRule: async (id) => {
+      const rule = rules.find((entry) => entry.id === id);
+      if (!rule) return { removed: false, rule: null };
+      rule.enabled = false;
+      return { removed: true, rule };
+    }
+  };
+
+  let handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(rules[0].term, "femboy");
+  assert.equal(rules[0].category, "adult_content");
+  assert.equal(rules[0].createdBy, "staff-user");
+  assert.match(replyPayload.embeds[0].data.description, /added #1/i);
+
+  message.content = "$badword";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /femboy/i);
+
+  message.content = "$badword test femboy text";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.title, /Content Filter Test/i);
+  assert.match(replyPayload.embeds[0].data.description, /adult_content|adult content/i);
+
+  message.content = "$badword remove 1";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(rules[0].enabled, false);
+  assert.match(replyPayload.embeds[0].data.description, /disabled rule #1/i);
+});
+
+test("badword command rejects non-staff and regex-like rules", async () => {
+  let replyPayload = null;
+  let addCalls = 0;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$badword add femboy",
+    author: { id: "regular-user" },
+    member: {
+      roles: {
+        cache: {
+          has: () => false
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    addRule: async () => {
+      addCalls += 1;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(addCalls, 0);
+  assert.equal(replyPayload, null);
+
+  const staffMessage = {
+    content: "$badword add /bad/i",
+    author: { id: "staff-user" },
+    member: {
+      roles: {
+        cache: {
+          has: (roleId) => roleId === "1298767464678559794"
+        }
+      }
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  };
+
+  const rejected = await maybeHandleControlCommand(staffMessage, {
+    addRule: async () => {
+      addCalls += 1;
+    }
+  });
+
+  assert.equal(rejected, true);
+  assert.equal(addCalls, 0);
+  assert.match(replyPayload.embeds[0].data.description, /regex is not accepted/i);
+});
+
 test("staff allowlink command adds and removes trusted links", async () => {
   let replyPayload = null;
   const links = [];
@@ -1536,6 +1672,43 @@ test("owner scam audit command shows recent classifier decisions", async () => {
   assert.match(replyPayload.embeds[0].data.description, /local_true/i);
   assert.match(replyPayload.embeds[0].data.description, /local-kicia-intent-v2: TRUE/i);
   assert.match(replyPayload.embeds[0].data.description, /dms to buy kicia/i);
+});
+
+test("owner scam audit command labels classifier decisions", async () => {
+  let replyPayload = null;
+  let labelCall = null;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$scamaudit label 42 fp over-triggered on a support question",
+    author: { id: "847703912932311091" },
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    labelAudit: async (input) => {
+      labelCall = input;
+      return {
+        updated: true,
+        record: {
+          id: input.id,
+          action: "ai_true",
+          messageContent: "can i trade kicia config here?",
+          review: {
+            label: "false_positive",
+            note: input.note
+          }
+        }
+      };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(labelCall.id, 42);
+  assert.equal(labelCall.label, "false_positive");
+  assert.equal(labelCall.reviewedBy, "847703912932311091");
+  assert.match(replyPayload.embeds[0].data.title, /Scam Audit Labeled/i);
+  assert.match(replyPayload.embeds[0].data.description, /false_positive/i);
+  assert.match(replyPayload.embeds[0].data.description, /over-triggered/i);
 });
 
 test("allowlink command ignores non-staff users", async () => {

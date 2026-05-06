@@ -253,7 +253,11 @@ function createSchema(db) {
       ai_error TEXT,
       message_content TEXT,
       reply_content TEXT,
-      recent_messages_json TEXT
+      recent_messages_json TEXT,
+      review_label TEXT,
+      review_note TEXT,
+      reviewed_by TEXT,
+      reviewed_at INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS scam_decision_audit_created_idx
@@ -293,10 +297,35 @@ function createSchema(db) {
 
     CREATE UNIQUE INDEX IF NOT EXISTS nickname_patterns_pattern_flags_idx
       ON nickname_patterns (pattern, flags);
+
+    CREATE TABLE IF NOT EXISTS content_filter_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      term TEXT NOT NULL,
+      normalized_key TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'custom',
+      created_at INTEGER NOT NULL,
+      created_by TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS content_filter_rules_key_category_idx
+      ON content_filter_rules (normalized_key, category);
   `);
 
   try {
     db.exec("ALTER TABLE moderation_actions ADD COLUMN recent_messages_json TEXT;");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN review_label TEXT;");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN review_note TEXT;");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN reviewed_by TEXT;");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN reviewed_at INTEGER;");
   } catch {}
 }
 
@@ -453,12 +482,60 @@ function mapNicknamePatternRow(row) {
   };
 }
 
+function normalizeContentFilterRuleKey(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function mapContentFilterRuleRow(row) {
+  return {
+    id: Number(row.id || 0),
+    term: String(row.term || ""),
+    normalizedKey: String(row.normalized_key || ""),
+    category: String(row.category || "custom"),
+    createdAt: Number(row.created_at || 0),
+    createdBy: row.created_by ? String(row.created_by) : null,
+    enabled: Boolean(row.enabled)
+  };
+}
+
 function mapAuditVerdict(value) {
   const normalized = String(value || "").toLowerCase();
   if (normalized === "true") return true;
   if (normalized === "false") return false;
   if (normalized === "borderline") return null;
   return undefined;
+}
+
+const SCAM_AUDIT_LABELS = new Map([
+  ["tp", "true_positive"],
+  ["true", "true_positive"],
+  ["true_positive", "true_positive"],
+  ["hit", "true_positive"],
+  ["correct", "true_positive"],
+  ["fp", "false_positive"],
+  ["false", "false_positive"],
+  ["false_positive", "false_positive"],
+  ["wrong", "false_positive"],
+  ["miss", "missed"],
+  ["missed", "missed"],
+  ["fn", "missed"],
+  ["false_negative", "missed"],
+  ["safe", "safe"],
+  ["clean", "safe"],
+  ["ok", "safe"],
+  ["unsure", "unsure"],
+  ["unknown", "unsure"],
+  ["context", "unsure"]
+]);
+
+function normalizeScamAuditLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return SCAM_AUDIT_LABELS.get(normalized) || null;
 }
 
 function mapScamDecisionAuditRow(row) {
@@ -502,7 +579,13 @@ function mapScamDecisionAuditRow(row) {
     },
     messageContent: row.message_content ? String(row.message_content) : "",
     replyContent: row.reply_content ? String(row.reply_content) : "",
-    recentMessages
+    recentMessages,
+    review: {
+      label: row.review_label ? String(row.review_label) : null,
+      note: row.review_note ? String(row.review_note) : "",
+      reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
+      reviewedAt: row.reviewed_at ? Number(row.reviewed_at) : null
+    }
   };
 }
 
@@ -1136,6 +1219,164 @@ async function removeNicknamePatternById(id) {
   };
 }
 
+async function listContentFilterRules({ includeDisabled = false, limit = 100 } = {}) {
+  const db = await getDatabase();
+  const safeLimit = Math.min(250, Math.max(1, Math.round(Number(limit) || 100)));
+  return getRows(
+    db,
+    `
+      SELECT id, term, normalized_key, category, created_at, created_by, enabled
+      FROM content_filter_rules
+      ${includeDisabled ? "" : "WHERE enabled = 1"}
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `,
+    [safeLimit]
+  ).map(mapContentFilterRuleRow);
+}
+
+async function addContentFilterRule({
+  term,
+  category = "custom",
+  normalizedKey = null,
+  createdBy = null,
+  createdAt = Date.now()
+} = {}) {
+  const safeTerm = String(term || "").replace(/\s+/g, " ").trim();
+  const safeCategory = String(category || "custom").trim().toLowerCase().replace(/[\s-]+/g, "_") || "custom";
+  const safeKey = String(normalizedKey || normalizeContentFilterRuleKey(safeTerm)).trim();
+  if (!safeTerm || !safeKey) {
+    throw new Error("Missing content filter rule term");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT id, term, normalized_key, category, created_at, created_by, enabled
+      FROM content_filter_rules
+      WHERE normalized_key = ? AND category = ?
+      LIMIT 1
+    `,
+    [safeKey, safeCategory]
+  )[0];
+
+  if (existing) {
+    if (!Number(existing.enabled)) {
+      db.run(
+        `
+          UPDATE content_filter_rules
+          SET term = ?,
+              created_by = ?,
+              created_at = ?,
+              enabled = 1
+          WHERE id = ?
+        `,
+        [
+          safeTerm,
+          createdBy ? String(createdBy) : null,
+          Math.max(1, Math.round(Number(createdAt) || Date.now())),
+          Number(existing.id)
+        ]
+      );
+      schedulePersist(db, { immediate: true });
+      const restored = getRows(
+        db,
+        `
+          SELECT id, term, normalized_key, category, created_at, created_by, enabled
+          FROM content_filter_rules
+          WHERE id = ?
+          LIMIT 1
+        `,
+        [Number(existing.id)]
+      )[0];
+      return {
+        added: true,
+        restored: true,
+        rule: mapContentFilterRuleRow(restored)
+      };
+    }
+
+    return {
+      added: false,
+      restored: false,
+      rule: mapContentFilterRuleRow(existing)
+    };
+  }
+
+  const now = Math.max(1, Math.round(Number(createdAt) || Date.now()));
+  db.run(
+    `
+      INSERT INTO content_filter_rules (
+        term,
+        normalized_key,
+        category,
+        created_at,
+        created_by,
+        enabled
+      ) VALUES (?, ?, ?, ?, ?, 1)
+    `,
+    [
+      safeTerm,
+      safeKey,
+      safeCategory,
+      now,
+      createdBy ? String(createdBy) : null
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+  const inserted = getRows(
+    db,
+    `
+      SELECT id, term, normalized_key, category, created_at, created_by, enabled
+      FROM content_filter_rules
+      WHERE normalized_key = ? AND category = ?
+      LIMIT 1
+    `,
+    [safeKey, safeCategory]
+  )[0];
+
+  return {
+    added: true,
+    restored: false,
+    rule: mapContentFilterRuleRow(inserted)
+  };
+}
+
+async function removeContentFilterRuleById(id) {
+  const normalizedId = Math.max(0, Math.round(Number(id) || 0));
+  if (!normalizedId) {
+    throw new Error("Missing content filter rule id");
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT id, term, normalized_key, category, created_at, created_by, enabled
+      FROM content_filter_rules
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [normalizedId]
+  )[0];
+
+  if (!existing || !Number(existing.enabled)) {
+    return {
+      removed: false,
+      rule: existing ? mapContentFilterRuleRow(existing) : null
+    };
+  }
+
+  db.run("UPDATE content_filter_rules SET enabled = 0 WHERE id = ?", [normalizedId]);
+  schedulePersist(db, { immediate: true });
+
+  return {
+    removed: true,
+    rule: mapContentFilterRuleRow(existing)
+  };
+}
+
 function trimAuditText(value, max = 900) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text || text.length <= max) return text;
@@ -1230,8 +1471,9 @@ async function recordScamDecisionAudit(record = {}) {
   return true;
 }
 
-async function listScamDecisionAudit({ limit = 10 } = {}) {
-  const safeLimit = Math.min(25, Math.max(1, Math.round(Number(limit) || 10)));
+async function listScamDecisionAudit({ limit = 10, labeledOnly = false } = {}) {
+  const maxLimit = labeledOnly ? 1000 : 25;
+  const safeLimit = Math.min(maxLimit, Math.max(1, Math.round(Number(limit) || 10)));
   const db = await getDatabase();
   return getRows(
     db,
@@ -1260,13 +1502,151 @@ async function listScamDecisionAudit({ limit = 10 } = {}) {
         ai_error,
         message_content,
         reply_content,
-        recent_messages_json
+        recent_messages_json,
+        review_label,
+        review_note,
+        reviewed_by,
+        reviewed_at
       FROM scam_decision_audit
+      ${labeledOnly ? "WHERE review_label IS NOT NULL AND review_label != ''" : ""}
       ORDER BY created_at DESC, id DESC
       LIMIT ?
     `,
     [safeLimit]
   ).map(mapScamDecisionAuditRow);
+}
+
+async function labelScamDecisionAudit({
+  id,
+  label,
+  reviewedBy = null,
+  note = "",
+  reviewedAt = Date.now()
+} = {}) {
+  const normalizedId = Math.max(1, Math.round(Number(id) || 0));
+  const normalizedLabel = normalizeScamAuditLabel(label);
+  if (!normalizedId || !normalizedLabel) {
+    return {
+      updated: false,
+      reason: "invalid_label",
+      record: null,
+      label: normalizedLabel
+    };
+  }
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    `
+      SELECT
+        id,
+        created_at,
+        guild_id,
+        channel_id,
+        message_id,
+        user_id,
+        action,
+        handled,
+        candidate_reason,
+        candidate_confidence,
+        local_verdict,
+        local_answer,
+        local_model,
+        local_reason,
+        local_confidence,
+        local_score,
+        ai_verdict,
+        ai_answer,
+        ai_model,
+        ai_skipped,
+        ai_error,
+        message_content,
+        reply_content,
+        recent_messages_json,
+        review_label,
+        review_note,
+        reviewed_by,
+        reviewed_at
+      FROM scam_decision_audit
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [normalizedId]
+  )[0];
+
+  if (!existing) {
+    return {
+      updated: false,
+      reason: "not_found",
+      record: null,
+      label: normalizedLabel
+    };
+  }
+
+  db.run(
+    `
+      UPDATE scam_decision_audit
+      SET review_label = ?,
+          review_note = ?,
+          reviewed_by = ?,
+          reviewed_at = ?
+      WHERE id = ?
+    `,
+    [
+      normalizedLabel,
+      trimAuditText(note, 300) || null,
+      reviewedBy ? String(reviewedBy) : null,
+      Math.max(1, Math.round(Number(reviewedAt) || Date.now())),
+      normalizedId
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+
+  const record = getRows(
+    db,
+    `
+      SELECT
+        id,
+        created_at,
+        guild_id,
+        channel_id,
+        message_id,
+        user_id,
+        action,
+        handled,
+        candidate_reason,
+        candidate_confidence,
+        local_verdict,
+        local_answer,
+        local_model,
+        local_reason,
+        local_confidence,
+        local_score,
+        ai_verdict,
+        ai_answer,
+        ai_model,
+        ai_skipped,
+        ai_error,
+        message_content,
+        reply_content,
+        recent_messages_json,
+        review_label,
+        review_note,
+        reviewed_by,
+        reviewed_at
+      FROM scam_decision_audit
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [normalizedId]
+  )[0];
+
+  return {
+    updated: true,
+    reason: "updated",
+    record: mapScamDecisionAuditRow(record),
+    label: normalizedLabel
+  };
 }
 
 async function clearScamDecisionAudit() {
@@ -1621,6 +2001,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
   const trustedLinks = await listTrustedLinks();
   const moderationWhitelist = await listModerationWhitelistedUsers();
   const nicknamePatterns = await listNicknamePatterns();
+  const contentFilterRules = await listContentFilterRules({ includeDisabled: true });
   const emojiTimeoutMs = await getEmojiTimeoutMs();
   const dailyStats = await getDailyStatsSnapshot();
   const channelSettings = await listChannelSettings();
@@ -1632,6 +2013,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
     trustedLinks,
     moderationWhitelist,
     nicknamePatterns,
+    contentFilterRules,
     channelSettings,
     dailyStats,
     tableCounts: {
@@ -1640,6 +2022,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
       trustedLinks: Number(getScalarValue(db, "SELECT COUNT(*) FROM trusted_links") || 0),
       moderationWhitelist: Number(getScalarValue(db, "SELECT COUNT(*) FROM moderation_whitelist") || 0),
       nicknamePatterns: Number(getScalarValue(db, "SELECT COUNT(*) FROM nickname_patterns") || 0),
+      contentFilterRules: Number(getScalarValue(db, "SELECT COUNT(*) FROM content_filter_rules WHERE enabled = 1") || 0),
       dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
@@ -1700,11 +2083,16 @@ module.exports = {
   isModerationWhitelistedUser,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
+  listContentFilterRules,
+  addContentFilterRule,
+  removeContentFilterRuleById,
   listNicknamePatterns,
   addNicknamePattern,
   removeNicknamePatternById,
+  normalizeScamAuditLabel,
   recordScamDecisionAudit,
   listScamDecisionAudit,
+  labelScamDecisionAudit,
   clearScamDecisionAudit,
   clearScamDecisionAuditForTests,
   cleanupExpiredModerationActions,

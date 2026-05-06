@@ -1,6 +1,7 @@
 "use strict";
 
 const { detectProhibitedCommerce } = require("./prohibited-commerce");
+const { foldConfusableText } = require("./text");
 
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?/gi;
 const MONEY_RE = /(?:[$€£]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|dollars?|bucks?|rs|lkr|robux|rbx)\b)/gi;
@@ -191,8 +192,14 @@ const MONEY_TEST_RE = new RegExp(MONEY_RE.source, "i");
 const URL_TEST_RE = new RegExp(URL_RE.source, "i");
 
 function normalizeClassifierText(value) {
-  return String(value || "")
+  return foldConfusableText(value)
     .toLowerCase()
+    .replace(/[@4]/g, "a")
+    .replace(/3/g, "e")
+    .replace(/[1!|]/g, "l")
+    .replace(/0/g, "o")
+    .replace(/[5$]/g, "s")
+    .replace(/7/g, "t")
     .replace(URL_RE, " urltoken ")
     .replace(MONEY_RE, " moneytoken ")
     .replace(/[`*_~|>[\](){},.!?;:"'\\/@#$%^&+=-]+/g, " ")
@@ -432,6 +439,22 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
+  if (
+    CRYPTO_INVEST_RE.test(userText) &&
+    (
+      hasPrivateHandoff ||
+      URL_TEST_RE.test(rawUserText) ||
+      /\b(?:join|group|server|channel|profits?|returns?|guaranteed|100x|double|triple)\b/i.test(userText)
+    )
+  ) {
+    return localVerdict({
+      verdict: true,
+      confidence: 91,
+      score: 0.92,
+      reason: "Investment or signal-group scam pattern detected."
+    });
+  }
+
   if (CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText)) {
     return localVerdict({
       verdict: null,
@@ -620,6 +643,29 @@ function probabilityForScam(text) {
   return scamExp / (scamExp + safeExp);
 }
 
+function hasActionableLocalScamSurface(normalizedText) {
+  const text = String(normalizedText || "");
+  if (!text) return false;
+
+  const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(text) || SELF_PRIVATE_DEAL_RE.test(text);
+  const hasProtectedItem = PROTECTED_ITEM_RE.test(text) || SHORT_SERVER_ITEM_RE.test(text);
+  const hasKiciaTradeAsset = TRADE_WORD_RE.test(text) && KICIA_TRADE_ASSET_RE.test(text);
+  const hasMarketOffer = DIRECT_OFFER_RE.test(text) || BARTER_RE.test(text);
+  const hasCredentialOrPhish =
+    TOKEN_GRAB_RE.test(text) ||
+    ACCOUNT_PHISH_RE.test(text) ||
+    GIVEAWAY_PHISH_RE.test(text) ||
+    (CRYPTO_INVEST_RE.test(text) && /\bmoneytoken\b/.test(text));
+
+  return Boolean(
+    hasCredentialOrPhish ||
+    hasKiciaTradeAsset ||
+    (hasMarketOffer && hasProtectedItem) ||
+    (hasPrivateHandoff && (hasProtectedItem || DEICTIC_ITEM_RE.test(text))) ||
+    (/\bmoneytoken\b/.test(text) && hasMarketOffer && hasProtectedItem)
+  );
+}
+
 function buildContextText(context = {}) {
   if (Array.isArray(context.messageContexts) && context.messageContexts.length) {
     return context.messageContexts
@@ -673,15 +719,27 @@ function classifyScamContextLocally(context = {}, options = {}) {
     };
   }
 
-  if (score >= 0.93 || highRiskSignal) {
+  const actionableLocalSurface = hasActionableLocalScamSurface(normalized);
+  if ((score >= 0.93 && actionableLocalSurface) || highRiskSignal) {
     return {
       verdict: true,
       confidence: Math.max(92, Math.min(99, Math.round(score * 100))),
       score,
       reason: highRiskSignal
         ? "High-risk trade/private-sale language matched local scam patterns."
-        : "Local classifier matched scam/trade intent.",
+        : "Local classifier matched scam/trade intent with actionable market or credential surface.",
       stage: "naive_bayes",
+      model: MODEL_NAME
+    };
+  }
+
+  if (score >= 0.93 && !actionableLocalSurface) {
+    return {
+      verdict: null,
+      confidence: Math.max(90, Math.min(96, Math.round(score * 100))),
+      score,
+      reason: "Local classifier was high, but no actionable deal/credential surface was present.",
+      stage: "naive_bayes_guarded",
       model: MODEL_NAME
     };
   }

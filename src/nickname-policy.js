@@ -1,11 +1,30 @@
 const DEFAULT_NICKNAME_RENAME_SENTINEL = "__DEFAULT__";
 const DEFAULT_BADNAME_PREFIX = "BADNAME #";
+const { foldConfusableText } = require("./text");
 
 function normalizeNicknameText(value) {
   return String(value || "")
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeNicknameMatchText(value) {
+  return foldConfusableText(value)
+    .toLowerCase()
+    .replace(/[@4]/g, "a")
+    .replace(/3/g, "e")
+    .replace(/[1!|]/g, "l")
+    .replace(/0/g, "o")
+    .replace(/[5$]/g, "s")
+    .replace(/7/g, "t")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactNicknameMatchText(value) {
+  return normalizeNicknameMatchText(value).replace(/\s+/g, "");
 }
 
 function isDefaultNicknameRename(renameTo) {
@@ -37,8 +56,10 @@ module.exports = {
   DEFAULT_NICKNAME_RENAME_SENTINEL,
   DEFAULT_BADNAME_PREFIX,
   buildDefaultBadName,
+  compactNicknameMatchText,
   formatNicknameRenameTarget,
   isDefaultNicknameRename,
+  normalizeNicknameMatchText,
   normalizeNicknameText,
   resolveNicknameRenameTarget
 };

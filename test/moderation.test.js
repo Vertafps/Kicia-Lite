@@ -31,6 +31,9 @@ const {
   removeModerationWhitelistedUser,
   removeRestrictedEmojiByKey,
   removeTrustedLinkByKey,
+  listContentFilterRules,
+  addContentFilterRule,
+  removeContentFilterRuleById,
   cleanupExpiredModerationActions,
   resetBotPresenceState,
   resetChannelSetting,
@@ -83,6 +86,12 @@ const {
   DEFAULT_NICKNAME_RENAME_SENTINEL,
   buildDefaultBadName
 } = require("../src/nickname-policy");
+const {
+  detectContentFilterSignal
+} = require("../src/content-filter");
+const {
+  buildNormalizedTextForms
+} = require("../src/text");
 
 const HOMOGLYPH_CONFIG_PROMO = "\u0392u\u03a5 c\u03bf\u039d\u0393igs \u03b1\u03c4 spirahl.cc \u03c4hey \u03b1re \u03b9nsane!";
 
@@ -462,6 +471,51 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("selling is against rules"), null);
 });
 
+test("unicode normalizer folds mixed-script and zero-width bypass text", () => {
+  const forms = buildNormalizedTextForms("Ѕ⁠е⁠l⁠l⁠і⁠п⁠g⁠ ⁠с⁠о⁠п⁠f⁠і⁠g⁠ѕ⁠ ⁠f⁠о⁠r⁠ ⁠к⁠і⁠с⁠і⁠а⁠ ⁠р⁠r⁠е⁠м⁠");
+  assert.equal(forms.normalized, "selling configs for kicia prem");
+  assert.equal(forms.scriptMix.hasMixedScripts, true);
+  assert.equal(forms.scriptMix.hadDefaultIgnorable, true);
+
+  assert.equal(buildNormalizedTextForms("рorn сum аss").normalized, "porn cum ass");
+  assert.equal(buildNormalizedTextForms("т р с о а е б п к").normalized, "t p c o a e b n k");
+});
+
+test("content filter catches obfuscated adult promo and hate-slur variants", () => {
+  const samples = [
+    "şëx ćàm in bîò",
+    "sëḻḻīṉġ ħëṉṯäī in bïø",
+    "sezling ep0rń",
+    "s3x is f@gğy",
+    "ΝΙGGΞζ, ï ḻïķë hâíṟý aşß hółéş, .сumрornniggеr"
+  ];
+
+  for (const sample of samples) {
+    const signal = detectContentFilterSignal(sample);
+    assert.ok(signal, `expected content filter match for ${sample}`);
+    assert.equal(signal.action, "delete");
+    assert.ok(signal.confidence >= 88);
+  }
+});
+
+test("content filter avoids boundary false positives", () => {
+  const safeSamples = [
+    "class",
+    "classic",
+    "pass",
+    "assassin",
+    "assess",
+    "configuration",
+    "normal selling is not allowed",
+    "how do i buy kicia premium from the official store?",
+    "can support help with my configuration?"
+  ];
+
+  for (const sample of safeSamples) {
+    assert.equal(detectContentFilterSignal(sample), null, `unexpected match for ${sample}`);
+  }
+});
+
 test("local scam classifier protects official Kicia purchase questions", () => {
   assert.equal(isKiciaLegitPurchaseIntent(["buying kicia"]), true);
   assert.equal(isKiciaLegitPurchaseIntent(["where can i buy kicia premium"]), true);
@@ -536,6 +590,16 @@ test("local scam classifier follows KiciaHook safe and unsafe standards", () => 
   assert.equal(classifyScamContextLocally({
     userMessages: ["someone said dms to buy kicia is that allowed"]
   }).verdict, false);
+
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["join my signal group crypto profits"]
+  }).verdict, true);
+
+  const guardedUrgency = classifyScamContextLocally({
+    userMessages: ["limited time act now before expires"]
+  });
+  assert.equal(guardedUrgency.verdict, null);
+  assert.match(guardedUrgency.stage, /guarded/i);
 
   const genericSale = classifyScamContextLocally({
     userMessages: ["SELLING MARUANA", "$100"]
@@ -685,6 +749,119 @@ test("premium users use the same scam-trade confidence thresholds as everyone el
   assert.doesNotMatch(fixture.logs[0].body, /premium member confidence dampened|premium role dampening/i);
 });
 
+test("content filter deletes, replies, and logs obfuscated adult and slur text", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("şëx ćàm in bîò, sëḻḻīṉġ ħëṉṯäī in bïø");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: 5_000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.replies.length, 1);
+  assert.equal(fixture.replies[0].content, "badie wordi detected, message removed.");
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Content Filter Delete/i);
+  assert.match(fixture.logs[0].body, /adult promo|adult content/i);
+});
+
+test("content filter catches edited messages from clean text", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("hi");
+
+  const cleanHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: 1_000
+  });
+
+  fixture.message.content = "ΝΙGGΞζ, .сumрornniggеr";
+  const editedHandled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: 2_000
+  });
+
+  assert.equal(cleanHandled, false);
+  assert.equal(editedHandled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.match(fixture.logs[0].body, /hate slur/i);
+});
+
+test("scam trade action wins when bad-word signal is also present", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling kicia premium cheap, şëx ćàm in bîò");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    now: 3_000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.timeouts.length, 1);
+  assert.equal(fixture.deleted.length, 1);
+  assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
+  assert.match(fixture.logs[0].body, /scam\/trade/i);
+  assert.equal(fixture.logs.some((panel) => /Content Filter Alert/i.test(panel.header)), true);
+});
+
+test("toxicity shadow model logs high scores without deleting or timing out", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("Ηello mixed text");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyToxicityShadow: async (_content, options) => {
+      assert.equal(options.candidate, true);
+      return {
+        attempted: true,
+        model: "test-toxic-model",
+        label: "toxic",
+        confidence: 91,
+        score: 0.91
+      };
+    },
+    now: 4_000
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Toxicity Shadow Review/i);
+});
+
+test("toxicity shadow failures do not block moderation", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("Ηello mixed text");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyToxicityShadow: async () => {
+      throw new Error("model unavailable");
+    },
+    now: 4_500
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.timeouts.length, 0);
+});
+
 test("nickname moderation stores safe regex rules and renames matching members", async () => {
   const result = await addNicknamePattern({
     pattern: "^!.*",
@@ -771,6 +948,131 @@ test("nickname moderation checks usernames and defaults to BADNAME with review a
   assert.match(JSON.stringify(logJson.fields), new RegExp(expectedName.replace("#", "\\#")));
 
   await removeNicknamePatternById(rule.id);
+});
+
+test("nickname moderation checks normal usernames, nicknames, and fuzzy font variants", async () => {
+  const miss = await addNicknamePattern({
+    pattern: "nomatch",
+    flags: "i",
+    renameTo: "miss"
+  });
+  const result = await addNicknamePattern({
+    pattern: "example1",
+    flags: "i",
+    renameTo: "meaw"
+  });
+  const rule = result.pattern;
+  const renamed = [];
+  const logs = [];
+  const member = {
+    id: "333333333333333333",
+    nickname: null,
+    displayName: "example1",
+    manageable: true,
+    roles: { cache: { has: () => false } },
+    user: {
+      id: "333333333333333333",
+      bot: false,
+      username: "example1",
+      globalName: null
+    },
+    guild: { id: "guild-1" },
+    setNickname: async (name, reason) => {
+      renamed.push({ name, reason });
+    }
+  };
+
+  assert.ok(findNicknameMatch("exmaaaple1", [rule]));
+  assert.ok(findNicknameMatch("𝖊𝖝𝖆𝖒𝖕𝖑𝖊1", [rule]));
+  assert.equal(findNicknameMatch("sample1", [rule]), null);
+
+  const handled = await maybeEnforceNicknameMember(member, {
+    sendLog: async (_guild, panel) => {
+      logs.push(panel);
+      return true;
+    },
+    now: 40_000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(renamed[0].name, "meaw");
+  assert.match(JSON.stringify(logs[0].embed.toJSON().fields), /Display Name|Username/i);
+
+  const nickMember = {
+    ...member,
+    id: "333333333333333334",
+    nickname: "exmaaaple1",
+    displayName: "exmaaaple1",
+    user: {
+      id: "333333333333333334",
+      bot: false,
+      username: "hi123",
+      globalName: "hi123"
+    },
+    setNickname: async (name, reason) => {
+      renamed.push({ name, reason });
+    }
+  };
+  const nickHandled = await maybeEnforceNicknameMember(nickMember, {
+    sendLog: async (_guild, panel) => {
+      logs.push(panel);
+      return true;
+    },
+    now: 41_000
+  });
+
+  assert.equal(nickHandled, true);
+  assert.equal(renamed[1].name, "meaw");
+  assert.match(JSON.stringify(logs[1].embed.toJSON().fields), /Server Nickname/i);
+
+  await removeNicknamePatternById(rule.id);
+  await removeNicknamePatternById(miss.pattern.id);
+});
+
+test("nickname moderation cache notices newly added rules for the same name", async () => {
+  const miss = await addNicknamePattern({
+    pattern: "nomatch",
+    flags: "i",
+    renameTo: "miss"
+  });
+  const renamed = [];
+  const member = {
+    id: "444444444444444444",
+    displayName: "example1",
+    manageable: true,
+    roles: { cache: { has: () => false } },
+    user: {
+      id: "444444444444444444",
+      bot: false,
+      username: "example1"
+    },
+    guild: { id: "guild-1" },
+    setNickname: async (name, reason) => {
+      renamed.push({ name, reason });
+    }
+  };
+
+  const firstHandled = await maybeEnforceNicknameMember(member, {
+    sendLog: async () => true,
+    now: 50_000
+  });
+  assert.equal(firstHandled, false);
+
+  const hit = await addNicknamePattern({
+    pattern: "example1",
+    flags: "i",
+    renameTo: "meaw"
+  });
+  const secondHandled = await maybeEnforceNicknameMember(member, {
+    sendLog: async () => true,
+    now: 51_000
+  });
+
+  assert.equal(secondHandled, true);
+  assert.equal(renamed[0].name, "meaw");
+
+  await removeNicknamePatternById(hit.pattern.id);
+  await removeNicknamePatternById(miss.pattern.id);
 });
 
 test("nickname moderation still alerts when bad username already has target nickname", async () => {
@@ -1309,6 +1611,9 @@ test("prohibited priced sale split across messages times out without scam AI", a
   assert.match(second.logs[0].header, /Prohibited Sale Timeout/i);
   assert.match(second.logs[0].body, /SELLING MARUANA/i);
   assert.match(second.logs[0].body, /\$100/i);
+  const action = await getModerationAction(getActionIdFromPanel(second.logs[0], MODLOG_REVERT_PREFIX), { now: 2_000 });
+  assert.equal(action.actionType, "prohibited_sale");
+  assert.match(second.timeouts[0].reason, /prohibited sale/i);
 });
 
 test("official Kicia purchase questions do not call scam AI", async () => {
@@ -2241,6 +2546,34 @@ test("trusted link database adds and removes links", async () => {
 
   const linksAfterRemove = await listTrustedLinks();
   assert.equal(linksAfterRemove.length, 0);
+});
+
+test("content filter rule database adds, lists, disables, and snapshots custom rules", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+
+  const added = await addContentFilterRule({
+    term: "custom bad term",
+    category: "custom",
+    normalizedKey: "custombadterm",
+    createdBy: "staff-user"
+  });
+  assert.equal(added.added, true);
+  assert.equal(added.rule.createdBy, "staff-user");
+
+  const rulesAfterAdd = await listContentFilterRules();
+  assert.equal(rulesAfterAdd.length, 1);
+  assert.equal(rulesAfterAdd[0].term, "custom bad term");
+
+  const snapshotAfterAdd = await getRestrictedEmojiDatabaseSnapshot();
+  assert.equal(snapshotAfterAdd.tableCounts.contentFilterRules, 1);
+
+  const removed = await removeContentFilterRuleById(added.rule.id);
+  assert.equal(removed.removed, true);
+  assert.equal((await listContentFilterRules()).length, 0);
+
+  const withDisabled = await listContentFilterRules({ includeDisabled: true });
+  assert.equal(withDisabled.length, 1);
+  assert.equal(withDisabled[0].enabled, false);
 });
 
 test("bot presence state persists in app config and resets to default", async () => {

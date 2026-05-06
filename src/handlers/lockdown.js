@@ -1,8 +1,6 @@
 const { PermissionFlagsBits } = require("discord.js");
-const {
-  CHANNEL_LOCK_ROLE_ID,
-  CHANNEL_LOCK_TARGETS
-} = require("../config");
+const { CHANNEL_LOCK_ROLE_ID } = require("../config");
+const { getChannelLockTargets } = require("../channel-config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { canUseLockCommands } = require("../permissions");
@@ -51,7 +49,7 @@ async function resolveTargetChannels(guild) {
   const failures = [];
   const seen = new Set();
 
-  for (const target of CHANNEL_LOCK_TARGETS) {
+  for (const target of getChannelLockTargets()) {
     if (!target?.id || seen.has(target.id)) {
       failures.push({
         target,
@@ -300,7 +298,7 @@ async function maybeHandleLockCommand(message) {
     return true;
   }
 
-  if (resolved.failures.length || resolved.channels.length !== CHANNEL_LOCK_TARGETS.length) {
+  if (resolved.failures.length || resolved.channels.length !== getChannelLockTargets().length) {
     const panel = {
       header: "Channel Lock Blocked",
       body: [

@@ -1,4 +1,4 @@
-const { BRAND } = require("./config");
+const { getDocsJumpUrl, getStatusJumpUrl, getTicketJumpUrl } = require("./channel-config");
 const { findExecutorMatch, tryIssueMatch } = require("./kb");
 const { detectStatusPrompt } = require("./status-prompts");
 const { normalizeText } = require("./text");
@@ -6,7 +6,6 @@ const { normalizeText } = require("./text");
 const STATUS_UP_REPLY = "status says it's up rn";
 const STATUS_DOWN_REPLY = "status says it's down rn";
 const DOWN_NOTE = "btw, kiciahook is down rn, so that might be why";
-const STATUS_CHANNEL_REPLY = `status updates are posted in the [status channel](${BRAND.STATUS_JUMP_URL})`;
 const STATUS_COMMAND_REPLY = "you can also use `$status` anytime";
 const DOCS_HEADERS = [
   "\u{1F4DA} Found It Ez",
@@ -115,6 +114,10 @@ function detectStatusQuestion(text) {
   return detectStatusPrompt(text);
 }
 
+function getStatusChannelReply() {
+  return `status updates are posted in the [status channel](${getStatusJumpUrl()})`;
+}
+
 function buildStatusReplyBody(runtimeStatus = "UP") {
   const statusLine = runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY;
   const detailLine = runtimeStatus === "DOWN"
@@ -123,7 +126,7 @@ function buildStatusReplyBody(runtimeStatus = "UP") {
   return [
     `**Current:** ${statusLine}`,
     detailLine,
-    `**Updates:** ${STATUS_CHANNEL_REPLY}`,
+    `**Updates:** ${getStatusChannelReply()}`,
     `**Quick Check:** ${STATUS_COMMAND_REPLY}`
   ].join("\n");
 }
@@ -385,7 +388,7 @@ function buildExecutorListReply(kb, options = {}) {
       kind: "executor_list",
       header: "\u{1F9E9} Executor Picks",
       body: `not seeing a ${typeLabel}supported executor listed in the documentation rn`,
-      buttons: [{ label: "Open Supported Executors", url: BRAND.DOCS_JUMP_URL }],
+      buttons: [{ label: "Open Supported Executors", url: getDocsJumpUrl() }],
       color: "info"
     };
   }
@@ -401,7 +404,7 @@ function buildExecutorListReply(kb, options = {}) {
     kind: "executor_list",
     header: "\u{1F9E9} Executor Picks",
     body: `${intro}\n\n${lines.join("\n")}`,
-    buttons: [{ label: "Open Supported Executors", url: BRAND.DOCS_JUMP_URL }],
+    buttons: [{ label: "Open Supported Executors", url: getDocsJumpUrl() }],
     color: "success"
   };
 }
@@ -453,7 +456,7 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
       kind: "executor_unknown",
       header: "\u2753 Couldn't Find That Executor",
       body: bodyLines.join("\n\n"),
-      buttons: [{ label: "Open Supported Executors", url: BRAND.DOCS_JUMP_URL }],
+      buttons: [{ label: "Open Supported Executors", url: getDocsJumpUrl() }],
       color: "info"
     };
   }
@@ -493,7 +496,7 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
     tipLevel: "##",
     buttons: [
       firstLink ? { label: `Open ${executor.name}`, url: firstLink.url } : null,
-      { label: "Supported Executors", url: BRAND.DOCS_JUMP_URL }
+      { label: "Supported Executors", url: getDocsJumpUrl() }
     ].filter(Boolean),
     color
   };
@@ -557,7 +560,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
       kind: "status",
       header: "\u{1F4E1} KiciaHook Status",
       body: buildStatusReplyBody(runtimeStatus),
-      buttons: [{ label: "Open Status Channel", url: BRAND.STATUS_JUMP_URL }],
+      buttons: [{ label: "Open Status Channel", url: getStatusJumpUrl() }],
       color: runtimeStatus === "DOWN" ? "warn" : "success"
     };
   }
@@ -603,10 +606,10 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         kind: "docs",
         header: pickVariant(DOCS_HEADERS, safeIssueMatch.title || normalized),
         body: issueBody ? `### ${safeIssueMatch.title}\n\n${issueBody}` : `**${safeIssueMatch.title}**`,
-        tip: `## \u{1F4D8} [Full docs](${BRAND.DOCS_JUMP_URL})`,
+        tip: `## \u{1F4D8} [Full docs](${getDocsJumpUrl()})`,
         tipStyle: "heading",
         tipLevel: "##",
-        buttons: [{ label: "Open Full Docs", url: BRAND.DOCS_JUMP_URL }],
+        buttons: [{ label: "Open Full Docs", url: getDocsJumpUrl() }],
         color: "success"
       },
       runtimeStatus
@@ -622,10 +625,10 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         ? pickVariant(SUPPORT_ONLY_HEADERS, safeIssueMatch?.title || normalized)
         : pickVariant(FALLBACK_HEADERS, normalized),
       body: supportOnly
-        ? `Hit the **[ticket panel](${BRAND.TICKET_JUMP_URL})** and staff will sort it out.`
-        : `Open a ticket here: **[ticket panel](${BRAND.TICKET_JUMP_URL})**.`,
+        ? `Hit the **[ticket panel](${getTicketJumpUrl()})** and staff will sort it out.`
+        : `Open a ticket here: **[ticket panel](${getTicketJumpUrl()})**.`,
       tip: "Drop screenshots and what you've already tried.",
-      buttons: [{ label: "Open Ticket Panel", url: BRAND.TICKET_JUMP_URL }],
+      buttons: [{ label: "Open Ticket Panel", url: getTicketJumpUrl() }],
       color: supportOnly ? "warn" : "info"
     },
     runtimeStatus
@@ -639,9 +642,12 @@ module.exports = {
   getTranscriptLines,
   hasExecutorIntent,
   buildStatusReplyBody,
+  getStatusChannelReply,
   STATUS_UP_REPLY,
   STATUS_DOWN_REPLY,
-  STATUS_CHANNEL_REPLY,
+  get STATUS_CHANNEL_REPLY() {
+    return getStatusChannelReply();
+  },
   STATUS_COMMAND_REPLY,
   DOWN_NOTE
 };

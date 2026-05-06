@@ -29,7 +29,8 @@ const { maybeHandleStatusCommand } = require("./handlers/status");
 const {
   cleanupExpiredModerationActions,
   flushRestrictedEmojiDatabaseNow,
-  getBotPresenceState
+  getBotPresenceState,
+  hydrateChannelSettings
 } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { safeReply } = require("./utils/respond");
@@ -181,6 +182,14 @@ async function applyReadyPresence(readyClient) {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready as ${readyClient.user.tag}`);
+  try {
+    const channelSettings = await hydrateChannelSettings();
+    const customCount = channelSettings.filter((entry) => entry.source === "custom").length;
+    console.log(`Channel config loaded: ${customCount} custom override${customCount === 1 ? "" : "s"}`);
+  } catch (err) {
+    console.warn("Channel config hydrate failed:", err.message);
+    recordRuntimeEvent("warn", "channel-config", err?.message || err);
+  }
   await applyReadyPresence(readyClient);
   try {
     await fetchKb();

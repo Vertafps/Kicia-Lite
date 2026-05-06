@@ -1,13 +1,11 @@
-const { NO_RESPONSE_CHANNEL_IDS } = require("./config");
-
-const noResponseChannelIds = new Set(NO_RESPONSE_CHANNEL_IDS);
+const { getNoResponseChannelIds } = require("./channel-config");
 
 function getMessageChannelId(message) {
   return message?.channelId || message?.channel?.id || null;
 }
 
 function isNoResponseChannel(channelId) {
-  return !!channelId && noResponseChannelIds.has(String(channelId));
+  return !!channelId && new Set(getNoResponseChannelIds()).has(String(channelId));
 }
 
 function isNoResponseMessage(message) {

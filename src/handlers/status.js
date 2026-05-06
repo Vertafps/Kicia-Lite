@@ -1,4 +1,5 @@
-const { BRAND, CHANNEL_LOCK_ROLE_ID } = require("../config");
+const { CHANNEL_LOCK_ROLE_ID } = require("../config");
+const { getStatusJumpUrl } = require("../channel-config");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { buildLinkButtonRows } = require("../components");
 const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
@@ -75,7 +76,7 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
 
   await safeReply(message, {
     embeds: [buildStatusEmbed(getRuntimeStatus())],
-    components: buildLinkButtonRows([{ label: "Open Status Channel", url: BRAND.STATUS_JUMP_URL }]),
+    components: buildLinkButtonRows([{ label: "Open Status Channel", url: getStatusJumpUrl() }]),
     allowedMentions: { repliedUser: false }
   });
 

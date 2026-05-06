@@ -1,6 +1,7 @@
 const { buildPanel, SUCCESS, DANGER, WARN, INFO } = require("../embed");
 const { buildLinkButtonRows } = require("../components");
 const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
+const { getTicketJumpUrl } = require("../channel-config");
 const { fetchKb } = require("../kb");
 const { classifyTranscript } = require("../router");
 const { getRuntimeStatus } = require("../runtime-status");
@@ -84,14 +85,14 @@ async function handleGuildPing(message) {
 async function replyWithError(message) {
   const errorEmbed = buildPanel({
     header: "\u26A0\uFE0F Docs Lookup Is Down Right Now",
-    body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${BRAND.TICKET_JUMP_URL})** instead.`,
+    body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${getTicketJumpUrl()})** instead.`,
     color: DANGER
   });
 
   try {
     await safeReply(message, {
       embeds: [errorEmbed],
-      components: buildLinkButtonRows([{ label: "Open Ticket Panel", url: BRAND.TICKET_JUMP_URL }]),
+      components: buildLinkButtonRows([{ label: "Open Ticket Panel", url: getTicketJumpUrl() }]),
       allowedMentions: { repliedUser: false }
     });
   } catch {

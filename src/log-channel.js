@@ -1,14 +1,15 @@
-const { LOG_CHANNEL_ID } = require("./config");
+const { getLogChannelId } = require("./channel-config");
 const { buildPanel } = require("./embed");
 
 async function resolveLogChannel(guild) {
   if (!guild?.channels) return null;
+  const logChannelId = getLogChannelId();
 
-  const cached = guild.channels.cache?.get(LOG_CHANNEL_ID);
+  const cached = guild.channels.cache?.get(logChannelId);
   if (cached?.send) return cached;
 
   if (typeof guild.channels.fetch === "function") {
-    const fetched = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const fetched = await guild.channels.fetch(logChannelId).catch(() => null);
     if (fetched?.send) return fetched;
   }
 
@@ -33,7 +34,9 @@ async function sendLogPanel(guild, panel) {
 }
 
 module.exports = {
-  LOG_CHANNEL_ID,
+  get LOG_CHANNEL_ID() {
+    return getLogChannelId();
+  },
   resolveLogChannel,
   sendLogPanel
 };

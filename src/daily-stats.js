@@ -1,10 +1,10 @@
 const {
-  DAILY_STATS_CHANNEL_ID,
   DAILY_STATS_UTC_OFFSET_MINUTES,
   DAILY_STATS_REPORT_HOUR_LOCAL,
   DAILY_STATS_REPORT_MINUTE_LOCAL,
   STAFF_ROLE_IDS
 } = require("./config");
+const { getDailyStatsChannelId } = require("./channel-config");
 const { formatDuration } = require("./duration");
 const { buildPanel, INFO, SUCCESS, WARN } = require("./embed");
 const { isStaffOnlyTrackedMember } = require("./permissions");
@@ -121,12 +121,13 @@ function getModerationCounts(snapshot) {
 
 async function resolveDailyStatsChannel(guild) {
   if (!guild?.channels) return null;
+  const dailyStatsChannelId = getDailyStatsChannelId();
 
-  const cached = guild.channels.cache?.get(DAILY_STATS_CHANNEL_ID);
+  const cached = guild.channels.cache?.get(dailyStatsChannelId);
   if (cached?.send) return cached;
 
   if (typeof guild.channels.fetch === "function") {
-    const fetched = await guild.channels.fetch(DAILY_STATS_CHANNEL_ID).catch(() => null);
+    const fetched = await guild.channels.fetch(dailyStatsChannelId).catch(() => null);
     if (fetched?.send) return fetched;
   }
 
@@ -423,7 +424,7 @@ async function runDailyStatsReport(client, { now = Date.now() } = {}) {
     return true;
   }
 
-  recordRuntimeEvent("warn", "daily-stats-channel", `missing channel ${DAILY_STATS_CHANNEL_ID}`);
+  recordRuntimeEvent("warn", "daily-stats-channel", `missing channel ${getDailyStatsChannelId()}`);
   return false;
 }
 

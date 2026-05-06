@@ -3,6 +3,17 @@ const path = require("path");
 const crypto = require("crypto");
 const initSqlJs = require("sql.js");
 const { BOT_PRESENCE_TEXT, DEFAULT_EMOJI_TIMEOUT_MS } = require("./config");
+const {
+  CHANNEL_CONFIG_SLOTS,
+  getChannelSlotDefinition,
+  getStoredChannelConfigKey,
+  hydrateChannelConfigCache,
+  listChannelConfigSlots,
+  normalizeChannelId,
+  resetCachedChannelSlot,
+  resetChannelConfigCache,
+  setCachedChannelSlot
+} = require("./channel-config");
 const { clampDurationMs } = require("./duration");
 const {
   BOT_PRESENCE_STATE_KEY,
@@ -326,6 +337,20 @@ function setAppConfigValue(db, key, value, { immediate = false } = {}) {
   schedulePersist(db, { immediate });
 }
 
+function deleteAppConfigValue(db, key, { immediate = false } = {}) {
+  db.run("DELETE FROM app_config WHERE key = ?", [key]);
+  schedulePersist(db, { immediate });
+}
+
+function hydrateChannelConfigFromDatabase(db) {
+  const values = {};
+  for (const slot of CHANNEL_CONFIG_SLOTS) {
+    const stored = getAppConfigValue(db, getStoredChannelConfigKey(slot.key));
+    if (stored) values[slot.key] = stored;
+  }
+  hydrateChannelConfigCache(values);
+}
+
 function ensureDefaultConfig(db) {
   db.run("INSERT OR IGNORE INTO app_config (key, value) VALUES (?, ?)", [
     "emoji_timeout_ms",
@@ -530,6 +555,7 @@ async function loadDatabase() {
     currentDb = db;
     createSchema(db);
     ensureDefaultConfig(db);
+    hydrateChannelConfigFromDatabase(db);
     writeDatabaseFile(db);
     databaseDirty = false;
     return db;
@@ -546,6 +572,7 @@ async function loadDatabase() {
     currentDb = db;
     createSchema(db);
     ensureDefaultConfig(db);
+    hydrateChannelConfigFromDatabase(db);
     writeDatabaseFile(db);
     databaseDirty = false;
     return db;
@@ -638,6 +665,39 @@ async function resetBotPresenceState() {
   const db = await getDatabase();
   setAppConfigValue(db, BOT_PRESENCE_STATE_KEY, BOT_PRESENCE_TEXT, { immediate: true });
   return BOT_PRESENCE_TEXT;
+}
+
+async function hydrateChannelSettings() {
+  const db = await getDatabase();
+  hydrateChannelConfigFromDatabase(db);
+  return listChannelConfigSlots();
+}
+
+async function listChannelSettings() {
+  const db = await getDatabase();
+  hydrateChannelConfigFromDatabase(db);
+  return listChannelConfigSlots();
+}
+
+async function setChannelSetting(slotKey, channelId) {
+  const slot = getChannelSlotDefinition(slotKey);
+  const id = normalizeChannelId(channelId);
+  if (!slot || !id) return null;
+
+  const db = await getDatabase();
+  setAppConfigValue(db, getStoredChannelConfigKey(slot.key), id, { immediate: true });
+  setCachedChannelSlot(slot.key, id);
+  return listChannelConfigSlots().find((entry) => entry.key === slot.key) || null;
+}
+
+async function resetChannelSetting(slotKey) {
+  const slot = getChannelSlotDefinition(slotKey);
+  if (!slot) return null;
+
+  const db = await getDatabase();
+  deleteAppConfigValue(db, getStoredChannelConfigKey(slot.key), { immediate: true });
+  resetCachedChannelSlot(slot.key);
+  return listChannelConfigSlots().find((entry) => entry.key === slot.key) || null;
 }
 
 async function getDailyStatsWindowStartedAt() {
@@ -1563,6 +1623,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
   const nicknamePatterns = await listNicknamePatterns();
   const emojiTimeoutMs = await getEmojiTimeoutMs();
   const dailyStats = await getDailyStatsSnapshot();
+  const channelSettings = await listChannelSettings();
 
   return {
     path: databasePath,
@@ -1571,6 +1632,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
     trustedLinks,
     moderationWhitelist,
     nicknamePatterns,
+    channelSettings,
     dailyStats,
     tableCounts: {
       appConfig: Number(getScalarValue(db, "SELECT COUNT(*) FROM app_config") || 0),
@@ -1601,6 +1663,7 @@ async function resetRestrictedEmojiDatabaseForTests(filePath = DEFAULT_DATABASE_
   dbPromise = null;
   currentDb = null;
   databasePath = filePath;
+  resetChannelConfigCache();
 
   try {
     fs.rmSync(databasePath, { force: true });
@@ -1620,6 +1683,10 @@ module.exports = {
   getBotPresenceState,
   setBotPresenceState,
   resetBotPresenceState,
+  hydrateChannelSettings,
+  listChannelSettings,
+  setChannelSetting,
+  resetChannelSetting,
   getDailyStatsWindowStartedAt,
   ensureDailyStatsWindowStartedAt,
   setDailyStatsWindowStartedAt,

@@ -1,6 +1,5 @@
 const { domainToASCII, domainToUnicode } = require("node:url");
 const {
-  BRAND,
   FISHFISH_API_BASE_URL,
   GOOGLE_SAFE_BROWSING_API_KEY,
   GOOGLE_WEB_RISK_API_KEY,
@@ -11,15 +10,16 @@ const {
   TRUSTED_LINK_URLS,
   VIRUSTOTAL_API_KEY
 } = require("./config");
+const { getBrandJumpUrls, getChannelConfigVersion } = require("./channel-config");
 const { isEditDistanceAtMost, normalizeText } = require("./text");
 const { fetchWithTimeout } = require("./utils/fetch");
 
-const STATIC_ALLOWED_URLS = [
-  BRAND.DOCS_JUMP_URL,
-  BRAND.TICKET_JUMP_URL,
-  BRAND.STATUS_JUMP_URL,
-  ...TRUSTED_LINK_URLS
-];
+function getStaticAllowedUrls() {
+  return [
+    ...getBrandJumpUrls(),
+    ...TRUSTED_LINK_URLS
+  ];
+}
 const URL_CANDIDATE_RE = /<?(?:hxxps?:\/\/[^\s<>"'`|]+|https?:\/\/[^\s<>"'`|]+|www\.[^\s<>"'`|]+|discord\.gg\/[^\s<>"'`|]+|discord(?:app)?\.com\/invite\/[^\s<>"'`|]+|(?:[\p{L}a-z0-9-]+\.)+(?:[\p{L}a-z]{2,}|xn--[a-z0-9-]{2,})\/[^\s<>"'`|]+)>?/giu;
 const MARKDOWN_LINK_RE = /\[([^\]\n]{1,160})\]\((<?(?:hxxps?:\/\/|https?:\/\/|www\.|discord\.gg\/|discord(?:app)?\.com\/invite\/|(?:[\p{L}a-z0-9-]+\.)+(?:[\p{L}a-z]{2,}|xn--[a-z0-9-]{2,})\/)[^)>\s]+>?)\)/giu;
 const BARE_DOMAIN_CANDIDATE_RE = /(?<![\w@.-])[\p{L}a-z0-9](?:[\p{L}a-z0-9-]{0,61}[\p{L}a-z0-9])?(?:\.|,|\s*\[\s*dot\s*\]\s*|\s*\(\s*dot\s*\)\s*|\s*\{\s*dot\s*\}\s*|\s+dot\s+)(?:[\p{L}a-z]{2,}|xn--[a-z0-9-]{2,})(?![\w.-])/giu;
@@ -451,11 +451,13 @@ function collectUrlsFromValue(value, target) {
 function buildAllowedLinkRules(kb, { trustedLinks = [] } = {}) {
   const hasDynamicTrustedLinks = Array.isArray(trustedLinks) && trustedLinks.length > 0;
   const trustedValues = Array.isArray(trustedLinks) ? trustedLinks.map((link) => link?.url || link) : [];
+  const staticAllowedUrls = getStaticAllowedUrls();
+  const channelConfigVersion = getChannelConfigVersion();
 
   if (!kb || typeof kb !== "object") {
     return {
       exactKeys: new Set([
-        ...STATIC_ALLOWED_URLS,
+        ...staticAllowedUrls,
         ...trustedValues
       ].map((url) => normalizeUrlCandidate(url)?.key).filter(Boolean)),
       rootHosts: new Set()
@@ -463,13 +465,13 @@ function buildAllowedLinkRules(kb, { trustedLinks = [] } = {}) {
   }
 
   const cached = hasDynamicTrustedLinks ? null : RULE_CACHE.get(kb);
-  if (cached) return cached;
+  if (cached?.channelConfigVersion === channelConfigVersion) return cached.rules;
 
   const exactKeys = new Set();
   const rootHosts = new Set();
   const foundUrls = [];
 
-  collectUrlsFromValue(STATIC_ALLOWED_URLS, foundUrls);
+  collectUrlsFromValue(staticAllowedUrls, foundUrls);
   collectUrlsFromValue(trustedValues, foundUrls);
   collectUrlsFromValue(kb, foundUrls);
 
@@ -482,7 +484,7 @@ function buildAllowedLinkRules(kb, { trustedLinks = [] } = {}) {
 
   const rules = { exactKeys, rootHosts };
   if (!hasDynamicTrustedLinks) {
-    RULE_CACHE.set(kb, rules);
+    RULE_CACHE.set(kb, { channelConfigVersion, rules });
   }
   return rules;
 }

@@ -1,11 +1,6 @@
 const { PermissionFlagsBits } = require("discord.js");
 const {
-  BRAND,
-  DAILY_STATS_CHANNEL_ID,
   LINK_MODERATION_TIMEOUT_MS,
-  LOG_CHANNEL_ID,
-  NO_RESPONSE_CHANNEL_IDS,
-  CHANNEL_LOCK_TARGETS,
   SUSPICIOUS_ALERT_WINDOW_MS,
   SUSPICIOUS_TIMEOUT_THRESHOLD,
   SUSPICIOUS_TIMEOUT_MS,
@@ -32,6 +27,13 @@ const {
   SCAM_PULSE_TIMEOUT_MS,
   VIRUSTOTAL_API_KEY
 } = require("./config");
+const {
+  getChannelLockTargets,
+  getDailyStatsChannelId,
+  getLogChannelId,
+  getNoResponseChannelIds,
+  getStatusJumpUrl
+} = require("./channel-config");
 const { formatDuration } = require("./duration");
 const { SUCCESS, WARN } = require("./embed");
 const { getScamPulseSnapshot } = require("./link-policy");
@@ -249,9 +251,14 @@ async function buildSecuritySection(message, channelLockRoleId) {
   const securityLines = [];
   let hasIssue = false;
 
-  const logChannel = await resolveGuildChannel(guild, LOG_CHANNEL_ID);
+  const logChannelId = getLogChannelId();
+  const dailyStatsChannelId = getDailyStatsChannelId();
+  const noResponseChannelIds = getNoResponseChannelIds();
+  const channelLockTargets = getChannelLockTargets();
+
+  const logChannel = await resolveGuildChannel(guild, logChannelId);
   if (!logChannel) {
-    securityLines.push(`**Logs Channel:** missing channel ${LOG_CHANNEL_ID}`);
+    securityLines.push(`**Logs Channel:** missing channel ${logChannelId}`);
     hasIssue = true;
   } else {
     const missing = getMissingPermissionLabels(logChannel, botMember, LOG_CHANNEL_PERMISSIONS);
@@ -261,9 +268,9 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
   }
 
-  const dailyStatsChannel = await resolveGuildChannel(guild, DAILY_STATS_CHANNEL_ID);
+  const dailyStatsChannel = await resolveGuildChannel(guild, dailyStatsChannelId);
   if (!dailyStatsChannel) {
-    securityLines.push(`**Daily Stats Channel:** missing channel ${DAILY_STATS_CHANNEL_ID}`);
+    securityLines.push(`**Daily Stats Channel:** missing channel ${dailyStatsChannelId}`);
     hasIssue = true;
   } else {
     const missing = getMissingPermissionLabels(dailyStatsChannel, botMember, LOG_CHANNEL_PERMISSIONS);
@@ -273,7 +280,7 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
   }
 
-  for (const channelId of NO_RESPONSE_CHANNEL_IDS) {
+  for (const channelId of noResponseChannelIds) {
     const channel = await resolveGuildChannel(guild, channelId);
     if (!channel) hasIssue = true;
     securityLines.push(
@@ -281,7 +288,7 @@ async function buildSecuritySection(message, channelLockRoleId) {
     );
   }
 
-  for (const target of CHANNEL_LOCK_TARGETS) {
+  for (const target of channelLockTargets) {
     const channel = await resolveGuildChannel(guild, target.id);
     if (!channel) {
       securityLines.push(`**Lock Target ${target.label}:** missing (${target.id})`);
@@ -338,7 +345,7 @@ async function buildSecuritySection(message, channelLockRoleId) {
     hasIssue = true;
   }
 
-  securityLines.push(`**Status Channel:** [Open](${BRAND.STATUS_JUMP_URL})`);
+  securityLines.push(`**Status Channel:** [Open](${getStatusJumpUrl(guild.id)})`);
 
   return {
     text: `## Security\n${securityLines.join("\n")}`,

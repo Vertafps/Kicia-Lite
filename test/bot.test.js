@@ -7,6 +7,11 @@ const { ActivityType, PermissionFlagsBits, PermissionsBitField } = require("disc
 
 const { isNoResponseChannel, isNoResponseMessage } = require("../src/channel-policy");
 const { maybeHandleControlCommand, parseNickMessage } = require("../src/handlers/commands");
+const {
+  getConfiguredChannelId,
+  resetChannelConfigCache,
+  setCachedChannelSlot
+} = require("../src/channel-config");
 const { normalizeKb } = require("../src/kb");
 const { classifyTranscript } = require("../src/router");
 const { getCooldownReaction, markGuildReply, resetCooldowns } = require("../src/handlers/cooldown");
@@ -311,6 +316,7 @@ function buildLockCommandMessage(content, {
 test.afterEach(() => {
   resetCooldowns();
   resetRuntimeStatus();
+  resetChannelConfigCache();
 });
 
 test("routes supported executor by canonical name", () => {
@@ -900,6 +906,13 @@ test("marks the configured general chat as no-response", () => {
   assert.equal(isNoResponseChannel("1489747706980339773"), false);
 });
 
+test("runtime general channel override updates no-response policy", () => {
+  setCachedChannelSlot("general", "222222222222222222");
+
+  assert.equal(isNoResponseChannel("1498745066339045406"), false);
+  assert.equal(isNoResponseChannel("222222222222222222"), true);
+});
+
 test("detects no-response messages only for guild traffic", () => {
   assert.equal(isNoResponseMessage({
     inGuild: () => true,
@@ -1189,6 +1202,118 @@ test("state command ignores non-owners and rejects overlong state", async () => 
   assert.match(replyPayload.embeds[0].data.description, /128 characters or less/i);
   assert.equal(setCalls, 0);
   assert.equal(applyCalls, 0);
+});
+
+test("owner set channels command lists, sets, audits, and resets channel slots", async () => {
+  const newGeneralId = "222222222222222222";
+  let replyPayload = null;
+  let logPanel = null;
+  let storedGeneral = {
+    key: "general",
+    label: "General Chat",
+    id: "1498745066339045406",
+    source: "default",
+    required: true,
+    uses: ["no-response guard", "lockdown target"]
+  };
+  const logs = {
+    key: "logs",
+    label: "Logs Channel",
+    id: "1497949003617140858",
+    source: "default",
+    required: true,
+    uses: ["moderation logs"]
+  };
+  const channelMap = new Map([
+    [storedGeneral.id, { id: storedGeneral.id }],
+    [newGeneralId, { id: newGeneralId }]
+  ]);
+  const message = {
+    content: "$set channels",
+    author: { id: "847703912932311091", username: "owner" },
+    member: { displayName: "Owner" },
+    guild: {
+      id: "guild-1",
+      channels: {
+        cache: {
+          get: (id) => channelMap.get(id) || null
+        },
+        fetch: async (id) => channelMap.get(id) || null
+      }
+    },
+    inGuild: () => true,
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  };
+  const deps = {
+    listChannels: async () => [storedGeneral, logs],
+    setChannel: async (slot, channelId) => {
+      assert.equal(slot, "general");
+      assert.equal(channelId, newGeneralId);
+      storedGeneral = { ...storedGeneral, id: channelId, source: "custom" };
+      return storedGeneral;
+    },
+    resetChannel: async (slot) => {
+      assert.equal(slot, "general");
+      storedGeneral = { ...storedGeneral, id: "1498745066339045406", source: "default" };
+      return storedGeneral;
+    },
+    sendLog: async (_guild, panel) => {
+      logPanel = panel;
+      return true;
+    }
+  };
+
+  let handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.match(replyPayload.embeds[0].data.description, /general/i);
+  assert.match(replyPayload.embeds[0].data.description, /logs/i);
+  assert.match(replyPayload.embeds[0].data.description, /missing/i);
+
+  message.content = `$set channel general <#${newGeneralId}>`;
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(storedGeneral.id, newGeneralId);
+  assert.match(replyPayload.embeds[0].data.description, new RegExp(newGeneralId));
+  assert.match(logPanel.header, /Channel Config Updated/i);
+  assert.match(logPanel.body, /general/i);
+
+  message.content = "$set channel general reset";
+  handled = await maybeHandleControlCommand(message, deps);
+  assert.equal(handled, true);
+  assert.equal(storedGeneral.source, "default");
+  assert.match(replyPayload.embeds[0].data.description, /default/i);
+});
+
+test("set channel command ignores non-owners", async () => {
+  let replyPayload = null;
+  let setCalls = 0;
+
+  const handled = await maybeHandleControlCommand({
+    content: "$set channel general <#222222222222222222>",
+    author: { id: "regular-user" },
+    member: {
+      roles: {
+        cache: {
+          has: () => false
+        }
+      }
+    },
+    guild: { id: "guild-1" },
+    inGuild: () => true,
+    reply: async (payload) => {
+      replyPayload = payload;
+    }
+  }, {
+    setChannel: async () => {
+      setCalls += 1;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(replyPayload, null);
+  assert.equal(setCalls, 0);
 });
 
 test("emoji command is available to owner role", async () => {

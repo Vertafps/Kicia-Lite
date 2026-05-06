@@ -20,11 +20,20 @@ const {
   addNicknamePattern,
   removeNicknamePatternById,
   getRestrictedEmojiDatabaseSnapshot,
+  listChannelSettings,
+  setChannelSetting,
+  resetChannelSetting,
   listScamDecisionAudit,
   getBotPresenceState,
   setBotPresenceState,
   resetBotPresenceState
 } = require("../restricted-emoji-db");
+const {
+  CHANNEL_CONFIG_SLOTS,
+  getChannelSlotDefinition,
+  normalizeChannelSlotKey,
+  parseChannelIdInput
+} = require("../channel-config");
 const { normalizeUrlCandidate } = require("../link-policy");
 const { sendLogPanel } = require("../log-channel");
 const {
@@ -84,6 +93,51 @@ function parseStateMessage(content) {
 
   return {
     action: "set",
+    value
+  };
+}
+
+function parseSetChannelMessage(content) {
+  const trimmed = String(content || "").trim();
+  if (/^\$set\s+channels?$/i.test(trimmed)) {
+    return {
+      action: "list"
+    };
+  }
+
+  const match = trimmed.match(/^\$set\s+channels?\s+(\S+)(?:\s+([\s\S]+))?$/i);
+  if (!match) return null;
+
+  const rawSlot = match[1];
+  const value = String(match[2] || "").trim();
+  const slot = normalizeChannelSlotKey(rawSlot);
+  if (!slot) {
+    return {
+      action: "invalid_slot",
+      slot: rawSlot,
+      value
+    };
+  }
+
+  if (!value) {
+    return {
+      action: "help",
+      slot,
+      value: ""
+    };
+  }
+
+  if (/^(?:reset|default)$/i.test(value)) {
+    return {
+      action: "reset",
+      slot,
+      value: ""
+    };
+  }
+
+  return {
+    action: "set",
+    slot,
     value
   };
 }
@@ -314,6 +368,9 @@ function buildCommandsBody() {
     "`$state` show the bot presence text",
     "`$state <message>` set the bot presence text",
     "`$state reset` restore the default bot presence text",
+    "`$set channels` inspect configured bot channels",
+    "`$set channel <slot> <#channel|channelid>` update a bot channel slot",
+    "`$set channel <slot> reset` restore a channel slot default",
     "`$fetch` refresh the KB cache",
     "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
     "`$testpromax` run the extended diagnostics sweep",
@@ -369,6 +426,7 @@ async function handleDatabaseCommand(message, {
     body: [
       `**Path:** \`${relativePath}\``,
       `**Config Rows:** ${snapshot.tableCounts.appConfig}`,
+      `**Channel Config:** ${(snapshot.channelSettings || []).filter((entry) => entry.source === "custom").length}/${(snapshot.channelSettings || []).length} custom`,
       `**Restricted Emoji Rows:** ${snapshot.tableCounts.restrictedEmojis}`,
       `**Trusted Link Rows:** ${snapshot.tableCounts.trustedLinks || 0}`,
       `**Manual Whitelist Rows:** ${snapshot.tableCounts.moderationWhitelist || 0}`,
@@ -417,6 +475,80 @@ function buildStateAuditPanel({ message, state, action, applied }) {
       `**Applied Now:** ${applied ? "yes" : "pending"}`
     ].join("\n"),
     color: SUCCESS
+  };
+}
+
+function formatSetChannelUsage() {
+  return [
+    "**Usage:**",
+    "`$set channels`",
+    "`$set channel general <#channel|channelid>`",
+    "`$set channel support <#channel|channelid>`",
+    "`$set channel logs <#channel|channelid>`",
+    "`$set channel <slot> reset`",
+    `**Slots:** ${CHANNEL_CONFIG_SLOTS.map((slot) => slot.key).join(", ")}`
+  ].join("\n");
+}
+
+function formatConfiguredChannelLine(entry, status = "unchecked") {
+  const target = entry.id ? `<#${entry.id}> \`${entry.id}\`` : "`unset`";
+  const source = entry.source === "custom" ? "custom" : "default";
+  const uses = (entry.uses || []).join(", ");
+  return `- **${entry.key}:** ${target} - ${status} - ${source}${uses ? ` - ${uses}` : ""}`;
+}
+
+async function resolveGuildChannel(guild, channelId) {
+  if (!guild?.channels || !channelId) return null;
+  const cached = guild.channels.cache?.get?.(channelId);
+  if (cached) return cached;
+  if (typeof guild.channels.fetch === "function") {
+    return guild.channels.fetch(channelId).catch(() => null);
+  }
+  return null;
+}
+
+async function getChannelSettingStatuses(guild, settings, resolveChannel = resolveGuildChannel) {
+  const rows = [];
+  for (const entry of settings) {
+    if (!entry.id) {
+      rows.push({ entry, status: entry.required ? "not set" : "unset" });
+      continue;
+    }
+
+    const channel = await resolveChannel(guild, entry.id);
+    rows.push({
+      entry,
+      status: channel ? "ok" : "missing"
+    });
+  }
+  return rows;
+}
+
+function buildChannelsPanel(rows) {
+  const missing = rows.filter((row) => row.status !== "ok");
+  return {
+    header: missing.length ? "Channel Setup Needs Attention" : "Channel Setup",
+    body: [
+      `**Missing / Unset:** ${missing.length}`,
+      rows.map((row) => formatConfiguredChannelLine(row.entry, row.status)).join("\n"),
+      "",
+      formatSetChannelUsage()
+    ].join("\n"),
+    color: missing.length ? WARN : SUCCESS
+  };
+}
+
+function buildChannelAuditPanel({ message, entry, action }) {
+  return {
+    header: action === "reset" ? "Channel Config Reset" : "Channel Config Updated",
+    body: [
+      `**Actor:** ${message.author?.id ? `<@${message.author.id}>` : getCommandActorLabel(message)}`,
+      `**Action:** ${action}`,
+      `**Slot:** ${entry.key}`,
+      `**Channel:** ${entry.id ? `<#${entry.id}> (${entry.id})` : "unset"}`,
+      `**Source:** ${entry.source}`
+    ].join("\n"),
+    color: action === "reset" ? WARN : SUCCESS
   };
 }
 
@@ -477,6 +609,130 @@ async function handleStateCommand(message, command, {
     })).catch(() => null);
   }
 
+  return true;
+}
+
+async function handleSetChannelCommand(message, command, {
+  listChannels = listChannelSettings,
+  setChannel = setChannelSetting,
+  resetChannel = resetChannelSetting,
+  resolveChannel = resolveGuildChannel,
+  sendLog = sendLogPanel
+} = {}) {
+  if (!message.inGuild?.() || !message.guild) {
+    await replyWithCommandPanel(message, {
+      header: "Server Only",
+      body: "channel setup commands only work inside the server",
+      color: WARN
+    });
+    return true;
+  }
+
+  if (command.action === "list") {
+    const settings = await listChannels();
+    const rows = await getChannelSettingStatuses(message.guild, settings, resolveChannel);
+    await replyWithCommandPanel(message, buildChannelsPanel(rows));
+    return true;
+  }
+
+  if (command.action === "invalid_slot") {
+    await replyWithCommandPanel(message, {
+      header: "Unknown Channel Slot",
+      body: [
+        `I do not know the slot \`${command.slot}\`.`,
+        formatSetChannelUsage()
+      ].join("\n\n"),
+      color: DANGER
+    });
+    return true;
+  }
+
+  if (command.action === "help") {
+    const slot = getChannelSlotDefinition(command.slot);
+    await replyWithCommandPanel(message, {
+      header: "Channel Setup",
+      body: [
+        slot ? `**Slot:** ${slot.key} - ${slot.label}` : null,
+        formatSetChannelUsage()
+      ].filter(Boolean).join("\n\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (command.action === "reset") {
+    const entry = await resetChannel(command.slot);
+    if (!entry) {
+      await replyWithCommandPanel(message, {
+        header: "Unknown Channel Slot",
+        body: formatSetChannelUsage(),
+        color: DANGER
+      });
+      return true;
+    }
+
+    const rows = await getChannelSettingStatuses(message.guild, [entry], resolveChannel);
+    await replyWithCommandPanel(message, {
+      header: "Channel Config Reset",
+      body: [
+        formatConfiguredChannelLine(entry, rows[0]?.status || "unchecked"),
+        "",
+        "`$set channels` shows the full setup panel."
+      ].join("\n"),
+      color: WARN
+    });
+
+    await sendLog(message.guild, buildChannelAuditPanel({ message, entry, action: "reset" })).catch(() => null);
+    return true;
+  }
+
+  const channelId = parseChannelIdInput(command.value);
+  if (!channelId) {
+    await replyWithCommandPanel(message, {
+      header: "Channel Rejected",
+      body: [
+        "send a channel mention, raw channel id, or Discord channel link",
+        formatSetChannelUsage()
+      ].join("\n\n"),
+      color: DANGER
+    });
+    return true;
+  }
+
+  const channel = await resolveChannel(message.guild, channelId);
+  if (!channel) {
+    await replyWithCommandPanel(message, {
+      header: "Channel Not Found",
+      body: [
+        `I could not find \`${channelId}\` in this server, so I did not save it.`,
+        "Use a channel from this server."
+      ].join("\n"),
+      color: DANGER
+    });
+    return true;
+  }
+
+  const entry = await setChannel(command.slot, channel.id || channelId);
+  if (!entry) {
+    await replyWithCommandPanel(message, {
+      header: "Channel Rejected",
+      body: formatSetChannelUsage(),
+      color: DANGER
+    });
+    return true;
+  }
+
+  await replyWithCommandPanel(message, {
+    header: "Channel Config Updated",
+    body: [
+      formatConfiguredChannelLine(entry, "ok"),
+      "",
+      "`$set channels` shows the full setup panel."
+    ].join("\n"),
+    color: SUCCESS
+  });
+
+  await sendLog(message.guild, buildChannelAuditPanel({ message, entry, action: "set" })).catch(() => null);
   return true;
 }
 
@@ -781,6 +1037,12 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleStateCommand(message, stateCommand, deps);
   }
 
+  const setChannelCommand = parseSetChannelMessage(message.content);
+  if (setChannelCommand) {
+    if (!canUseOwnerCommands(message)) return true;
+    return handleSetChannelCommand(message, setChannelCommand, deps);
+  }
+
   const whitelistCommand = parseWhitelistMessage(message.content);
   if (whitelistCommand) {
     if (!canUseOwnerCommands(message)) return true;
@@ -829,12 +1091,14 @@ module.exports = {
   isDatabaseMessage,
   parseScamAuditMessage,
   parseStateMessage,
+  parseSetChannelMessage,
   parseEmojiMessage,
   parseNickMessage,
   parseTrustedLinkMessage,
   parseWhitelistMessage,
   parseUserIdInput,
   handleStateCommand,
+  handleSetChannelCommand,
   handleNickCommand,
   maybeHandleControlCommand
 };

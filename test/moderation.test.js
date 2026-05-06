@@ -25,6 +25,7 @@ const {
   listModerationWhitelistedUsers,
   listTrustedLinks,
   listNicknamePatterns,
+  listChannelSettings,
   parseEmojiInput,
   removeNicknamePatternById,
   removeModerationWhitelistedUser,
@@ -32,9 +33,13 @@ const {
   removeTrustedLinkByKey,
   cleanupExpiredModerationActions,
   resetBotPresenceState,
+  resetChannelSetting,
   setBotPresenceState,
+  setChannelSetting,
+  hydrateChannelSettings,
   resetRestrictedEmojiDatabaseForTests
 } = require("../src/restricted-emoji-db");
+const { getConfiguredChannelId, resetChannelConfigCache } = require("../src/channel-config");
 const {
   detectBlockedLinkSignalAsync,
   extractUrlsFromText,
@@ -410,6 +415,7 @@ function buildRestrictedReactionFixture({
 
 test.afterEach(() => {
   resetModerationState();
+  resetChannelConfigCache();
 });
 
 test.before(async () => {
@@ -2252,6 +2258,32 @@ test("bot presence state persists in app config and resets to default", async ()
   const reset = await resetBotPresenceState();
   assert.equal(reset, "Monitoring ;)");
   assert.equal(await getBotPresenceState(), "Monitoring ;)");
+});
+
+test("channel settings persist in app config and hydrate runtime cache", async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+
+  const defaultGeneral = getConfiguredChannelId("general");
+  assert.equal(defaultGeneral, "1498745066339045406");
+
+  const updated = await setChannelSetting("general", "222222222222222222");
+  assert.equal(updated.key, "general");
+  assert.equal(updated.id, "222222222222222222");
+  assert.equal(updated.source, "custom");
+  assert.equal(getConfiguredChannelId("general"), "222222222222222222");
+
+  resetChannelConfigCache();
+  assert.equal(getConfiguredChannelId("general"), defaultGeneral);
+
+  await hydrateChannelSettings();
+  assert.equal(getConfiguredChannelId("general"), "222222222222222222");
+
+  const settings = await listChannelSettings();
+  assert.equal(settings.find((entry) => entry.key === "general")?.source, "custom");
+
+  const reset = await resetChannelSetting("general");
+  assert.equal(reset.id, defaultGeneral);
+  assert.equal(reset.source, "default");
 });
 
 test("manual moderation whitelist persists and skips message guards", async () => {

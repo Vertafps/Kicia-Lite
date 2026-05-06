@@ -461,6 +461,17 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("SELLING MARUANA $100"), null);
   assert.equal(detectSellingSignal("figs are underrated"), null);
   assert.equal(detectSellingSignal("selling figs"), null);
+  assert.equal(detectSellingSignal("how to block account selling posts"), null);
+  assert.equal(detectSellingSignal("premium configs should never be sold"), null);
+  assert.equal(detectSellingSignal("report anyone selling scripts"), null);
+  assert.equal(detectSellingSignal("r_epo.rt anYonE sELlinG. Scri.pts"), null);
+  assert.equal(detectSellingSignal("not seling a_c·counts, aski·ng how to secure mi·ne"), null);
+  assert.equal(detectSellingSignal("i am trading cards after school"), null);
+  assert.equal(detectSellingSignal("How do parental controls work for robux"), null);
+  assert.equal(detectSellingSignal("how do parent-al contr-ols work for robux"), null);
+  assert.equal(detectScamTradeCandidateContext(["how to block account selling posts"]), null);
+  assert.equal(detectScamTradeCandidateContext(["i saw someone say free robux in bio and reported it"]), null);
+  assert.equal(detectSuspiciousSignal("i saw someone say free robux in bio and reported it"), null);
   assert.ok(detectProhibitedCommerceSignal(["SELLING MARUANA $100"]));
   assert.equal(detectSellingSignal("how to buy kicia"), null);
   assert.equal(detectSellingSignal("where do i buy kicia premium"), null);
@@ -525,6 +536,68 @@ test("free robux profile bait is suspicious without broad robux false positives"
 
   assert.equal(detectSellingSignal("support says free robux scams are fake"), null);
   assert.equal(detectSuspiciousSignal("support says free robux scams are fake"), null);
+});
+
+test("scam trade guard ignores support and gameplay false-positive contexts", async () => {
+  const examples = [
+    [
+      "Can I get some help rq pls?",
+      "bro why is kicia freezing up when I load it on rivals",
+      "is it detected or sum?",
+      "dm me rq"
+    ],
+    [
+      "if they using bad config and u are on good ping yea",
+      "i once beat ue he was on 1 bar i was on 3 😄",
+      "every other exec says that btw",
+      "why do i smell a ue glazer in chat"
+    ],
+    [
+      "Yooo",
+      "They releasing it this week",
+      "Stfu",
+      "If luarmor is leaked how tf am I playing 5 acc"
+    ],
+    [
+      "ffa is goofy ahh and doesnt give any levels",
+      "Above 100?",
+      "bc before i got acc to lv 50 in ffa in just 20 minutes (3 match)"
+    ]
+  ];
+
+  assert.equal(detectSellingSignal("dont use kicia i got banned 2 times btw"), null);
+  assert.equal(detectScamTradeCandidateContext(["dont use kicia i got banned 2 times btw"]), null);
+
+  for (const [exampleIndex, messages] of examples.entries()) {
+    resetModerationState();
+    let aiCalls = 0;
+    const fixtures = [];
+
+    for (const [messageIndex, content] of messages.entries()) {
+      const fixture = buildModerationMessage(content, {
+        userId: `safe-fp-user-${exampleIndex}`,
+        messageId: `safe-fp-${exampleIndex}-${messageIndex}`
+      });
+      fixtures.push(fixture);
+      await maybeHandleModerationWatch(fixture.message, {
+        kb,
+        runtimeStatus: "UP",
+        sendLog: fixture.sendLog,
+        classifyScam: async () => {
+          aiCalls += 1;
+          throw new Error("safe support/gameplay context should not call scam AI");
+        },
+        now: 10_000 + exampleIndex * 10_000 + messageIndex * 1_000
+      });
+    }
+
+    assert.equal(detectScamTradeCandidateContext(messages), null, `unexpected context signal for ${messages.join(" | ")}`);
+    assert.equal(detectContextualSellingSignal(messages), null, `unexpected contextual signal for ${messages.join(" | ")}`);
+    assert.equal(aiCalls, 0);
+    assert.equal(fixtures.flatMap((fixture) => fixture.timeouts).length, 0);
+    assert.equal(fixtures.flatMap((fixture) => fixture.deleted).length, 0);
+    assert.equal(fixtures.flatMap((fixture) => fixture.logs).length, 0);
+  }
 });
 
 test("unicode normalizer folds mixed-script and zero-width bypass text", () => {

@@ -469,7 +469,11 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("i am trading cards after school"), null);
   assert.equal(detectSellingSignal("How do parental controls work for robux"), null);
   assert.equal(detectSellingSignal("how do parent-al contr-ols work for robux"), null);
+  assert.equal(detectSellingSignal("does someone have configs for ue"), null);
+  assert.equal(detectSellingSignal("im so glad kiciahook comes in 10 days instead of today"), null);
   assert.equal(detectScamTradeCandidateContext(["how to block account selling posts"]), null);
+  assert.equal(detectScamTradeCandidateContext(["hey", "does someone have configs for ue"]), null);
+  assert.equal(detectScamTradeCandidateContext(["im so glad kiciahook comes in 10 days instead of today"]), null);
   assert.equal(detectScamTradeCandidateContext(["i saw someone say free robux in bio and reported it"]), null);
   assert.equal(detectSuspiciousSignal("i saw someone say free robux in bio and reported it"), null);
   assert.ok(detectProhibitedCommerceSignal(["SELLING MARUANA $100"]));

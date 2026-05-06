@@ -11,8 +11,7 @@ async function safeReact(message, emoji) {
 
 async function safeReply(message, payload, { fallbackToChannel = true } = {}) {
   try {
-    await message.reply(payload);
-    return true;
+    return await message.reply(payload) || true;
   } catch (replyErr) {
     const channelId = message?.channelId || message?.channel?.id;
     if (!fallbackToChannel || !message?.channel?.send || isNoResponseChannel(channelId)) {
@@ -20,8 +19,7 @@ async function safeReply(message, payload, { fallbackToChannel = true } = {}) {
     }
   }
 
-  await message.channel.send(payload);
-  return true;
+  return await message.channel.send(payload) || true;
 }
 
 async function safeSend(target, payload) {
@@ -34,9 +32,9 @@ async function safeSend(target, payload) {
 }
 
 async function safeEdit(message, payload) {
+  if (typeof message?.edit !== "function") return false;
   try {
-    await message?.edit?.(payload);
-    return true;
+    return await message.edit(payload) || true;
   } catch {
     return false;
   }

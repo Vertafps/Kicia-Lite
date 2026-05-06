@@ -265,14 +265,19 @@ function buildLockCommandMessage(content, {
   authorId = "mod-user",
   roleIds = ["1484221158390890496"],
   displayName = "Kernel",
-  channels = []
+  channels = [],
+  channelId = "1498745066339045406",
+  failReplyWhenLocked = false
 } = {}) {
   const channelMap = new Map(channels.map((channel) => [channel.id, channel]));
   const reactions = [];
   const replies = [];
+  const invocationChannel = channelMap.get(channelId) || null;
 
   return {
     content,
+    channelId,
+    channel: invocationChannel,
     author: {
       id: authorId,
       username: displayName.toLowerCase(),
@@ -302,7 +307,17 @@ function buildLockCommandMessage(content, {
       reactions.push(emoji);
     },
     reply: async (payload) => {
-      replies.push(payload);
+      if (failReplyWhenLocked && invocationChannel?.getSendMessagesState?.() === false) {
+        throw new Error("missing send messages");
+      }
+      const replyRecord = { ...payload };
+      replies.push(replyRecord);
+      return {
+        edit: async (nextPayload) => {
+          Object.assign(replyRecord, nextPayload);
+          return replyRecord;
+        }
+      };
     },
     get reactions() {
       return reactions;
@@ -674,6 +689,31 @@ test("lock command disables send messages for the member role in both channels",
   assert.match(message.replies[0].embeds[0].data.description, /locked channels/i);
   assert.match(message.replies[0].embeds[0].data.description, /1498745066339045406/);
   assert.match(message.replies[0].embeds[0].data.description, /1489747706980339773/);
+});
+
+test("lock command keeps the confirmation visible when the command channel gets locked", async () => {
+  const general = buildMockLockChannel("1498745066339045406", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const support = buildMockLockChannel("1489747706980339773", {
+    sendMessagesState: true,
+    botPermissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles]
+  });
+  const message = buildLockCommandMessage("$lock", {
+    channels: [general, support],
+    channelId: general.id,
+    failReplyWhenLocked: true
+  });
+
+  const handled = await maybeHandleLockCommand(message);
+
+  assert.equal(handled, true);
+  assert.equal(general.getSendMessagesState(), false);
+  assert.equal(support.getSendMessagesState(), false);
+  assert.equal(message.replies.length, 1);
+  assert.match(message.replies[0].embeds[0].data.title, /channels locked/i);
+  assert.match(message.replies[0].embeds[0].data.description, /locked channels/i);
 });
 
 test("$lock no longer toggles and stays locked when both channels are already locked", async () => {

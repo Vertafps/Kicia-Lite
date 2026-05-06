@@ -5,7 +5,7 @@ const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { canUseLockCommands } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
-const { safeReact, safeReply } = require("../utils/respond");
+const { safeEdit, safeReact, safeReply } = require("../utils/respond");
 
 const LOCK_REACTION = "\u274C";
 const CHANNEL_PERMISSION_BITS = [
@@ -162,10 +162,28 @@ function getPreflightIssues(guild, channels) {
 }
 
 async function replyWithPanel(message, panel) {
-  await safeReply(message, {
+  return safeReply(message, {
     embeds: [buildPanel(panel)],
     allowedMentions: { repliedUser: false }
   });
+}
+
+async function editPanelReply(sentMessage, panel) {
+  return safeEdit(sentMessage, {
+    embeds: [buildPanel(panel)],
+    allowedMentions: { repliedUser: false }
+  });
+}
+
+async function deliverFinalLockPanel(message, existingReply, panel, eventName) {
+  if (existingReply && await editPanelReply(existingReply, panel)) return true;
+  try {
+    await replyWithPanel(message, panel);
+    return true;
+  } catch (err) {
+    recordRuntimeEvent("warn", eventName, err?.message || err);
+    return false;
+  }
 }
 
 function getNextSendMessagesState(command) {
@@ -222,6 +240,25 @@ function buildLockAuditPanel({ command, actor, channels, failures = [], error = 
       error ? `**Error:** ${error}` : null
     ].filter(Boolean).join("\n\n"),
     color: error ? DANGER : command === "lock" ? WARN : command === "status" ? INFO : SUCCESS
+  };
+}
+
+function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor }) {
+  return {
+    header: success
+      ? command === "lock" ? "Channels Locked" : "Channels Unlocked"
+      : "Channel Lock Needs Review",
+    body: [
+      success
+        ? `${pastTenseLabel} channels: ${buildTargetChannelMentions(resolved.channels)}`
+        : "I applied the command, but the final state was not exactly what I expected.",
+      `**Changed:** ${result.changed.length}`,
+      `**Skipped:** ${result.skipped.length}`,
+      `**By:** ${actor}`,
+      "",
+      formatChannelStateLines(resolved.channels)
+    ].join("\n"),
+    color: success ? command === "lock" ? WARN : SUCCESS : DANGER
   };
 }
 
@@ -340,6 +377,7 @@ async function maybeHandleLockCommand(message) {
   const desiredState = getNextSendMessagesState(command);
   const actionLabel = command === "unlock" ? "unlock" : "lock";
   const pastTenseLabel = command === "unlock" ? "unlocked" : "locked";
+  let lockProgressReply = null;
 
   if (command === "lock" && aggregateState.allLocked) {
     await replyWithPanel(message, {
@@ -365,6 +403,23 @@ async function maybeHandleLockCommand(message) {
     return true;
   }
 
+  if (command === "lock") {
+    lockProgressReply = await replyWithPanel(message, {
+      header: "Locking Channels",
+      body: [
+        `Locking channels: ${buildTargetChannelMentions(resolved.channels)}`,
+        `**By:** ${actor}`,
+        "",
+        "Final result will update here.",
+        formatChannelStateLines(resolved.channels)
+      ].join("\n"),
+      color: WARN
+    }).catch((err) => {
+      recordRuntimeEvent("warn", "lock-progress-reply", err?.message || err);
+      return null;
+    });
+  }
+
   let result;
   const previousStates = new Map(
     resolved.channels.map((entry) => [entry.channel.id, getOverwriteSendMessagesState(entry.channel)])
@@ -385,14 +440,15 @@ async function maybeHandleLockCommand(message) {
       ? missingAfterFailure.map((issue) => `- ${issue}`).join("\n")
       : err?.message || "unknown permission overwrite failure";
 
-    await replyWithPanel(message, {
+    const failurePanel = {
       header: "Channel Lock Failed",
       body: [
         "I rolled back any partial channel changes.",
         errorBody
       ].join("\n\n"),
       color: DANGER
-    });
+    };
+    await deliverFinalLockPanel(message, lockProgressReply, failurePanel, "lock-failure-reply");
     await sendLockAuditLog(message, buildLockAuditPanel({
       command,
       actor,
@@ -407,22 +463,15 @@ async function maybeHandleLockCommand(message) {
     ? finalAggregateState.allLocked
     : finalAggregateState.allUnlocked;
 
-  await replyWithPanel(message, {
-    header: success
-      ? command === "lock" ? "Channels Locked" : "Channels Unlocked"
-      : "Channel Lock Needs Review",
-    body: [
-      success
-        ? `${pastTenseLabel} channels: ${buildTargetChannelMentions(resolved.channels)}`
-        : "I applied the command, but the final state was not exactly what I expected.",
-      `**Changed:** ${result.changed.length}`,
-      `**Skipped:** ${result.skipped.length}`,
-      `**By:** ${actor}`,
-      "",
-      formatChannelStateLines(resolved.channels)
-    ].join("\n"),
-    color: success ? command === "lock" ? WARN : SUCCESS : DANGER
+  const resultPanel = buildLockResultPanel({
+    command,
+    success,
+    pastTenseLabel,
+    resolved,
+    result,
+    actor
   });
+  await deliverFinalLockPanel(message, lockProgressReply, resultPanel, "lock-result-reply");
 
   await sendLockAuditLog(message, buildLockAuditPanel({
     command,

@@ -144,8 +144,9 @@ const SELL_CONDENSED_ITEM_RE = /(?:a+c+c+(?:o+u+n+t+)?)|(?:a+k+k+o+u+n+t+)|(?:a+
 const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?(?:selling|trading|buying)\b|^(?:sell|trade|buy)\b|^(?:wts|wtb)\b|^for sale\b/;
 const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|trading is|buying is|rules say|rule says|scammer|scamming is|report scam|avoid scam)\b/;
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me|bio|profile)\b/;
-const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone)\b/;
+const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone|does someone|does somebody|do any1|do someone|do somebody)\b/;
 const WANT_OFFER_RE = /\b(?:who|anyone|somebody|someone|any1|some1)\s+(?:wants?|wanna|wana|want|need)\b|\b(?:wanna|wana)\s+(?:buy|trade|swap)\b/;
+const RESOURCE_AVAILABILITY_QUESTION_RE = /^(?:hey\s+)?(?:does|do)\s+(?:someone|somebody|anyone|anybody|some1|any1)\s+(?:have|has|got)\b|^(?:hey\s+)?(?:who|anyone|anybody|someone|somebody|some1|any1)\s+(?:has|have|got)\b/;
 const SAFE_SUPPORT_CONTEXT_RE = /\b(?:help|support|ticket|docs?|documented|issue|problem|bug|fix|freez(?:e|ing)|crash(?:ing|ed)?|load(?:ing)?|detected|detect|ban(?:ned)?|not\s+working|working|work|login|locked|settings?|renew|using|use)\b/;
 const SAFE_GAMEPLAY_CONTEXT_RE = /\b(?:rivals|ffa|match(?:es)?|levels?|lvl|ping|bars?|beat|playing|play|glazer|chat|goofy|loadout)\b/;
 const ACTIONABLE_DEAL_LANGUAGE_RE = /\b(?:sell|selling|seller|sold|buy\s+(?:my|from\s+me)|from\s+me|trade|trading|swap|exchange|wts|wtb|for\s+sale|taking\s+offers|cheap|paid|money|paypal|cashapp|crypto|shop|store|middleman|mm)\b/;
@@ -715,6 +716,7 @@ function detectSellingSignal(content) {
     SELL_PRICE_RE.test(rawLower);
   const hasPriceSignal = /\$\s*\d/.test(content) || SELL_MONEY_EMOJI_RE.test(content) || SELL_PRICE_RE.test(rawLower);
   const hasQuestionTone = hasQuestionPunctuation(content) || MARKET_QUESTION_RE.test(spaced);
+  const hasAvailabilityQuestion = RESOURCE_AVAILABILITY_QUESTION_RE.test(spaced);
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(spaced);
   const hasWantOffer = WANT_OFFER_RE.test(spaced);
   const hasConfigAlias = hasSuspiciousConfigAlias(spaced, {
@@ -775,7 +777,7 @@ function detectSellingSignal(content) {
   if (!hasExplicitOffer && !hasEffectiveItemSignal && !hasMarketSignal && !hasBarterLikeItemSignal) {
     return null;
   }
-  if (hasQuestionTone && !hasWantOffer && !hasPrivateHandoff && !SELL_PRICE_RE.test(rawLower)) {
+  if ((hasQuestionTone || hasAvailabilityQuestion) && !hasWantOffer && !hasPrivateHandoff && !SELL_PRICE_RE.test(rawLower)) {
     return null;
   }
   if (
@@ -852,6 +854,7 @@ function getScamTradeTextFeatures(text) {
     /\bfor\b/.test(spaced) &&
     (hasProtectedItemSignal || hasShortItemSignal) &&
     (/\b(?:kicia|kiciahook|premium|prem|prm|robux|ue|config|cfg|account|money)\b/.test(spaced) || SELL_MONEY_EMOJI_RE.test(text));
+  const hasAvailabilityQuestion = RESOURCE_AVAILABILITY_QUESTION_RE.test(spaced);
   return {
     rawLower,
     spaced,
@@ -869,6 +872,7 @@ function getScamTradeTextFeatures(text) {
     hasPrivateOfferSignal,
     hasBarterSignal,
     hasProtectedItemForItemSignal,
+    hasAvailabilityQuestion,
     hasJoinedObfuscatedDeal: hasObfuscatedIntent && hasCondensedIntent && hasProtectedItemSignal,
     hasDeicticDealSignal,
     hasQuestionTone: hasQuestionPunctuation(text) || MARKET_QUESTION_RE.test(spaced),
@@ -892,6 +896,14 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
   const combined = texts.join("\n");
   const combinedFeatures = getScamTradeTextFeatures(combined);
   if (combinedFeatures.hasAnti) return null;
+  if (
+    combinedFeatures.hasAvailabilityQuestion &&
+    !combinedFeatures.hasActionableDealLanguage &&
+    !combinedFeatures.hasPrivateHandoff &&
+    !combinedFeatures.hasPriceSignal
+  ) {
+    return null;
+  }
   if (
     combinedFeatures.hasSafeContext &&
     !combinedFeatures.hasActionableDealLanguage &&

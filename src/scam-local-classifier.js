@@ -169,6 +169,8 @@ const SHORT_SERVER_ITEM_RE = /\b(?:ue)\b/i;
 const DEICTIC_ITEM_RE = /\b(?:this|ts|that|it|one|thing|stuff|something)\b/i;
 const DIRECT_OFFER_RE =
   /\b(?:selling|sell|sold|wts|wtb|buying|buy my|buy from me|taking offers|for sale|offer|offers|giving|give|offering|reseller|middleman|mm)\b/i;
+const DIRECT_SOLICITATION_QUESTION_RE =
+  /\b(?:do|would)\s+(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b|\b(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b/i;
 const TRADE_WORD_RE = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i;
 const BARTER_RE =
   /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offering)\b.{0,80}\bfor\b/i;
@@ -393,7 +395,8 @@ function extractPolicyIntent(context = {}, options = {}) {
   const hasKiciaTradeAsset = TRADE_WORD_RE.test(userText) && KICIA_TRADE_ASSET_RE.test(userText);
   const hasDeicticItem = DEICTIC_ITEM_RE.test(userText);
   const hasKicia = KICIA_BRAND_RE.test(userText);
-  const hasOfferTone = /\b(?:you|u)\s+want\b/i.test(userText) || /\b(?:want|need)\s+(?:it|this|one)\b/i.test(userText);
+  const hasDirectSolicitationQuestion = DIRECT_SOLICITATION_QUESTION_RE.test(userText);
+  const hasOfferTone = hasDirectSolicitationQuestion || /\b(?:you|u)\s+want\b/i.test(userText) || /\b(?:want|need)\s+(?:it|this|one)\b/i.test(userText);
   const hasPurchaseOrPrice = /\b(?:buy|buying|purchase|price|prices|pay|payment|get|sell|selling|offer|offers)\b/i.test(userText);
   const hasDirectOffer = DIRECT_OFFER_RE.test(userText);
   const hasBarter = BARTER_RE.test(userText);
@@ -575,7 +578,7 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
-  if (hasDirectOffer && hasProtectedItem && !(hasQuestionTone && !hasPrivateHandoff)) {
+  if (hasDirectOffer && hasProtectedItem && !(hasQuestionTone && !hasPrivateHandoff && !hasDirectSolicitationQuestion)) {
     return localVerdict({
       verdict: true,
       confidence: 94,

@@ -80,6 +80,8 @@ const SELL_OFFER_PATTERNS = [
   /\b(?:i am|im|i m)\s+giving\b/,
   /\bfor sale\b/,
   /\bdm (?:me )?(?:to buy|for prices?|for price|if you want to buy)\b/,
+  /\b(?:do|would)\s+(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\s+(?:my|this|these|the)\b/,
+  /\b(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\s+(?:my|this|these|the)\b/,
   /\bbuy (?:my|from me)\b/,
   /\bgiving (?:out )?(?:my )?(?:accounts?|configs?|cfgs?|scripts?|keys?|premium|robux)\b/,
   /\boffering (?:my )?(?:accounts?|configs?|cfgs?|scripts?|keys?|premium|robux)\b/,
@@ -145,7 +147,7 @@ const SELL_STRONG_INTENT_RE = /^(?:(?:i am|im|i m)\s+)?(?:selling|trading|buying
 const SELL_CONTEXT_NEGATIVE_RE = /\b(?:against rules?|not allowed|selling is|trading is|buying is|rules say|rule says|scammer|scamming is|report scam|avoid scam)\b/;
 const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me|bio|profile)\b/;
 const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowed|do you|does anyone|does someone|does somebody|do any1|do someone|do somebody)\b/;
-const WANT_OFFER_RE = /\b(?:who|anyone|somebody|someone|any1|some1)\s+(?:wants?|wanna|wana|want|need)\b|\b(?:wanna|wana)\s+(?:buy|trade|swap)\b/;
+const WANT_OFFER_RE = /\b(?:who|anyone|somebody|someone|any1|some1)\s+(?:wants?|wanna|wana|want|need)\b|\b(?:wanna|wana)\s+(?:buy|trade|swap)\b|\b(?:do|would)\s+(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b|\b(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b/;
 const RESOURCE_AVAILABILITY_QUESTION_RE = /^(?:hey\s+)?(?:does|do)\s+(?:someone|somebody|anyone|anybody|some1|any1)\s+(?:have|has|got)\b|^(?:hey\s+)?(?:who|anyone|anybody|someone|somebody|some1|any1)\s+(?:has|have|got)\b/;
 const SAFE_SUPPORT_CONTEXT_RE = /\b(?:help|support|ticket|docs?|documented|issue|problem|bug|fix|freez(?:e|ing)|crash(?:ing|ed)?|load(?:ing)?|detected|detect|ban(?:ned)?|not\s+working|working|work|login|locked|settings?|renew|using|use)\b/;
 const SAFE_GAMEPLAY_CONTEXT_RE = /\b(?:rivals|ffa|match(?:es)?|levels?|lvl|ping|bars?|beat|playing|play|glazer|chat|goofy|loadout)\b/;
@@ -850,6 +852,7 @@ function getScamTradeTextFeatures(text) {
   const hasBarterSignal =
     /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offer|offering)\b.{0,80}\bfor\b/.test(spaced);
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(spaced);
+  const hasAvailabilityQuestion = RESOURCE_AVAILABILITY_QUESTION_RE.test(spaced);
   const hasOfferTone =
     /\b(?:you|u)\s+want\b/.test(spaced) ||
     /\b(?:want|need)\s+(?:it|this|one)\b/.test(spaced) ||
@@ -862,11 +865,17 @@ function getScamTradeTextFeatures(text) {
     hasPrivateHandoff &&
     (hasOfferTone || /\b(?:paid|money|shop|store|for|in)\b/.test(spaced)) &&
     (hasProtectedItemSignal || hasShortItemSignal || hasDeicticDealSignal);
+  const hasPrivateResourceRequestSignal =
+    hasPrivateHandoff &&
+    (hasProtectedItemSignal || hasShortItemSignal) &&
+    (
+      hasAvailabilityQuestion ||
+      /\b(?:send|drop|share|slide|give|need|want|looking\s+for|has|have|got)\b/.test(spaced)
+    );
   const hasProtectedItemForItemSignal =
     /\bfor\b/.test(spaced) &&
     (hasProtectedItemSignal || hasShortItemSignal) &&
     (/\b(?:kicia|kiciahook|premium|prem|prm|robux|ue|config|cfg|account|money)\b/.test(spaced) || SELL_MONEY_EMOJI_RE.test(text));
-  const hasAvailabilityQuestion = RESOURCE_AVAILABILITY_QUESTION_RE.test(spaced);
   return {
     rawLower,
     spaced,
@@ -882,6 +891,7 @@ function getScamTradeTextFeatures(text) {
     hasPrivateHandoff,
     hasPrivatePurchaseSignal,
     hasPrivateOfferSignal,
+    hasPrivateResourceRequestSignal,
     hasBarterSignal,
     hasProtectedItemForItemSignal,
     hasAvailabilityQuestion,
@@ -935,6 +945,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     latestFeatures.hasOfferTone ||
     latestFeatures.hasPrivatePurchaseSignal ||
     latestFeatures.hasPrivateOfferSignal ||
+    latestFeatures.hasPrivateResourceRequestSignal ||
     latestFeatures.hasBarterSignal ||
     latestFeatures.hasProtectedItemForItemSignal;
   const referenceText = repliedToMessage?.content || "";
@@ -963,6 +974,17 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
       requiresAi: true,
       confidence: combinedFeatures.hasItemSignal ? 86 : 74,
       reason: "private buy/sell handoff detected in recent message context"
+    };
+  }
+
+  if (combinedFeatures.hasPrivateResourceRequestSignal) {
+    return {
+      type: "selling",
+      source: "local_policy",
+      requiresAi: false,
+      confirmedByPolicy: true,
+      confidence: 69,
+      reason: "private config/resource handoff request detected"
     };
   }
 
@@ -1003,6 +1025,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     features.hasPrivateHandoff ||
     features.hasPrivatePurchaseSignal ||
     features.hasPrivateOfferSignal ||
+    features.hasPrivateResourceRequestSignal ||
     features.hasBarterSignal ||
     features.hasProtectedItemForItemSignal
   );
@@ -1014,6 +1037,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     !latestFeatures.hasOfferTone &&
     !latestFeatures.hasPrivatePurchaseSignal &&
     !latestFeatures.hasPrivateOfferSignal &&
+    !latestFeatures.hasPrivateResourceRequestSignal &&
     !latestFeatures.hasBarterSignal &&
     !latestFeatures.hasProtectedItemForItemSignal;
   const splitIntentAndItem =
@@ -1028,6 +1052,7 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
         latestFeatures.hasOfferTone ||
         latestFeatures.hasPrivatePurchaseSignal ||
         latestFeatures.hasPrivateOfferSignal ||
+        latestFeatures.hasPrivateResourceRequestSignal ||
         latestFeatures.hasBarterSignal
       ) &&
       !(latestIsOnlyPrice && !combinedHasProtectedDealItem)

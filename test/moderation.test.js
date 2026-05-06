@@ -440,6 +440,7 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.ok(detectSellingSignal("selling lvl 888 account"));
   assert.ok(detectSellingSignal("buying lvl 888 account for 2 usd"));
   assert.ok(detectSellingSignal("trading kicia config for robux"));
+  assert.ok(detectSellingSignal("Do you want to buy my configs"));
   assert.ok(detectSellingSignal("selling ue for 1 bucks"));
   assert.ok(detectSellingSignal("selling ue for 2 dollars"));
   assert.ok(detectSellingSignal("selling ue for 1 usd"));
@@ -473,6 +474,7 @@ test("selling detection flags broad sell wording while skipping anti-sell remind
   assert.equal(detectSellingSignal("im so glad kiciahook comes in 10 days instead of today"), null);
   assert.equal(detectScamTradeCandidateContext(["how to block account selling posts"]), null);
   assert.equal(detectScamTradeCandidateContext(["hey", "does someone have configs for ue"]), null);
+  assert.equal(detectScamTradeCandidateContext(["who has good config pls send here"]), null);
   assert.equal(detectScamTradeCandidateContext(["im so glad kiciahook comes in 10 days instead of today"]), null);
   assert.equal(detectScamTradeCandidateContext(["i saw someone say free robux in bio and reported it"]), null);
   assert.equal(detectSuspiciousSignal("i saw someone say free robux in bio and reported it"), null);
@@ -1885,6 +1887,56 @@ test("private Kicia buying handoff is caught without remote AI", async () => {
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.equal(fixture.replies.length, 1);
+});
+
+test("direct config buy solicitation is caught without remote AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("Do you want to buy my configs");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.match(fixture.logs[0].body, /Direct protected-item market offer/i);
+  assert.equal(fixture.replies.length, 1);
+});
+
+test("private config request is deleted without timeout or remote AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("who has good config pls send in dm");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.timeouts.length, 0);
+  assert.equal(fixture.dms.length, 0);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].header, /Scam\/Trade Alert/i);
+  assert.match(fixture.logs[0].body, /private config\/resource handoff request/i);
   assert.equal(fixture.replies.length, 1);
 });
 

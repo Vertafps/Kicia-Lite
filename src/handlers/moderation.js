@@ -258,29 +258,41 @@ const SUSPICIOUS_PUBLIC_REPLIES_BY_HIT = [
   ]
 ];
 const SELLING_PUBLIC_REPLIES = [
-  "scam radar blinked...",
-  "private-deal energy spotted...",
-  "that offer looked risky...",
-  "ok vro this deal stays out of chat...",
-  "trade-risk check passed the threshold...",
-  "that pitch looked a little too slick...",
-  "unsafe deal aura detected...",
-  "checkout lane closed...",
-  "that sounded like scam/trade bait...",
-  "not the trading floor...",
-  "deal greeter denied that one at the door...",
-  "the trade cart failed inspection...",
-  "private-sale alarm made a funny noise...",
-  "this deal tried to sneak in wearing a fake mustache...",
-  "marketplace cosplay detected...",
-  "the scam/trade scanner did a backflip..."
+  "Trading? what is that, a paid DLC?",
+  "He thought the deal would work, but it was just a thought.",
+  "bro opened the marketplace tab in the wrong server",
+  "checkout lane closed, try again in never",
+  "the deal tried to sneak in with a fake mustache",
+  "Kicia customs seized the suspicious deal package",
+  "bro is not Elon Typo, I mean Musk, and this is not a trade floor",
+  "trade offer declined by the council of common sense",
+  "that scam pitch came with a cartoon suspicious button",
+  "private-deal energy detected, chat said no",
+  "the scam scanner did a backflip and landed on delete",
+  "bro tried to sell air with premium deal shipping",
+  "marketplace cosplay detected",
+  "that deal failed the smell test and the math test",
+  "deal denied, please return to normal human conversation",
+  "the trade cart has been escorted out",
+  "bro brought a checkout counter to general chat",
+  "nice marketplace business plan, unfortunately no",
+  "that trade idea was microwaved on low power",
+  "the deal bargain bin has been unplugged",
+  "this is not a startup pitch meeting",
+  "bro said trust me and the scam scanner said absolutely not",
+  "trade_transaction.exe has stopped working",
+  "the suspicious little deal invoice has been vaporized",
+  "sir this is a support server, not a deal desk"
 ];
 const PROHIBITED_SALE_PUBLIC_REPLIES = [
-  "unsafe sale removed",
-  "that sale does not belong here",
-  "marketplace lane closed",
-  "prohibited-sale guard caught that",
-  "that listing is out of bounds"
+  "that listing got launched into policy jail",
+  "prohibited sale removed, no side quests",
+  "bro tried to list the unlistable",
+  "marketplace lane closed for crimes against judgment",
+  "that sale left the chat before it got worse",
+  "policy guard saw that and put on work boots",
+  "that catalog item is not welcome here",
+  "nope, that shop is permanently closed"
 ];
 const ROASTING_PATTERNS = [
   /\b(?:bro|blud|vro|lil bro)\s+(?:got\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,

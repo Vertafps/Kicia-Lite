@@ -451,6 +451,7 @@ function buildCommandsBody() {
     "`$cmd` show this command list",
     "`$status up` mark status as up",
     "`$status down` mark status as down",
+    "`$status unaware` mark status as unaware (auto-detection style)",
     "`$state` show the bot presence text",
     "`$state <message>` set the bot presence text",
     "`$state reset` restore the default bot presence text",

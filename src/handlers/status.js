@@ -15,6 +15,7 @@ function parseStatusCommand(content) {
   const normalized = String(content || "").trim().toLowerCase();
   if (normalized === "$status up") return "UP";
   if (normalized === "$status down") return "DOWN";
+  if (normalized === "$status unaware" || normalized === "$status unknown") return "UNAWARE";
   return null;
 }
 
@@ -61,7 +62,7 @@ function buildStatusEmbed(status = getRuntimeStatus()) {
   return buildPanel({
     header: "\u{1F4E1} KiciaHook Status",
     body: buildStatusReplyBody(status),
-    color: status === "DOWN" ? WARN : SUCCESS
+    color: status === "DOWN" ? DANGER : status === "UNAWARE" ? WARN : SUCCESS
   });
 }
 
@@ -192,8 +193,13 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     await safeReply(message, {
       embeds: [
         buildPanel({
-          body: nextStatus === "DOWN" ? "set kiciahook status to down" : "set kiciahook status to up",
-          color: nextStatus === "DOWN" ? WARN : SUCCESS
+          body:
+            nextStatus === "DOWN"
+              ? "set kiciahook status to **down**"
+              : nextStatus === "UNAWARE"
+                ? "set kiciahook status to **unaware** (review pending)"
+                : "set kiciahook status to **up**",
+          color: nextStatus === "DOWN" ? DANGER : nextStatus === "UNAWARE" ? WARN : SUCCESS
         })
       ],
       allowedMentions: { repliedUser: false }
@@ -205,7 +211,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     await safeReply(message, {
       embeds: [
         buildPanel({
-          body: "usage: `$status`, `$status up`, `$status down`, `$fetch`, `$jarvis`, or `$testpromax`",
+          body: "usage: `$status`, `$status up`, `$status down`, `$status unaware`, `$fetch`, `$jarvis`, or `$testpromax`",
           color: INFO
         })
       ],

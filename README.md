@@ -4,6 +4,8 @@ Discord support, moderation, and utility bot for the Kicia main server.
 
 The bot answers support pings from the remote KB, tracks KiciaHook runtime status, watches risky links and scam/trade patterns, logs moderation actions with review controls, supports restricted reaction rules, locks configured channels, and posts daily stats.
 
+When multiple distinct users explicitly report KiciaHook is down inside a 10-minute window, the bot auto-locks the configured chat channels, sets status to `UNAWARE`, posts an issue alert in general, pings staff with confirmation buttons in the staff channel, and writes a copy to logs. Staff click **Confirm Outage** to keep the lock and set status `DOWN`, or **False Alarm** to unlock everything and restore status `UP`.
+
 Run with Node 20+:
 
 ```powershell
@@ -39,7 +41,7 @@ Everyone:
 
 Owners:
 
-- `$status up` / `$status down` updates the runtime support status.
+- `$status up` / `$status down` / `$status unaware` updates the runtime support status.
 - `$state` shows the bot presence text.
 - `$state <message>` sets and persists the bot custom presence text.
 - `$state reset` restores the default presence text.

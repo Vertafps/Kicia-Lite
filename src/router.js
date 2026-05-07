@@ -5,7 +5,9 @@ const { normalizeText } = require("./text");
 
 const STATUS_UP_REPLY = "status says it's up rn";
 const STATUS_DOWN_REPLY = "status says it's down rn";
+const STATUS_UNAWARE_REPLY = "status is being verified by staff rn";
 const DOWN_NOTE = "btw, kiciahook is down rn, so that might be why";
+const UNAWARE_NOTE = "btw, multiple users just reported issues with kiciahook and staff is verifying — that might be why";
 const STATUS_COMMAND_REPLY = "you can also use `$status` anytime";
 const DOCS_HEADERS = [
   "\u{1F4DA} Found It Ez",
@@ -119,12 +121,21 @@ function getStatusChannelReply() {
 }
 
 function buildStatusReplyBody(runtimeStatus = "UP") {
-  const statusLine = runtimeStatus === "DOWN" ? STATUS_DOWN_REPLY : STATUS_UP_REPLY;
-  const detailLine = runtimeStatus === "DOWN"
-    ? "KiciaHook is marked down right now, so docs fixes may not solve it until status changes."
-    : "KiciaHook is marked online right now. If your setup still fails, check executor support and the docs match below.";
+  const dot = runtimeStatus === "DOWN" ? "🔴" : runtimeStatus === "UNAWARE" ? "🟡" : "🟢";
+  const statusLine =
+    runtimeStatus === "DOWN"
+      ? STATUS_DOWN_REPLY
+      : runtimeStatus === "UNAWARE"
+        ? STATUS_UNAWARE_REPLY
+        : STATUS_UP_REPLY;
+  const detailLine =
+    runtimeStatus === "DOWN"
+      ? "KiciaHook is marked down right now, so docs fixes may not solve it until status changes."
+      : runtimeStatus === "UNAWARE"
+        ? "I just got multiple outage reports and pinged staff to confirm. Hold tight — channels may be locked while this is being checked."
+        : "KiciaHook is marked online right now. If your setup still fails, check executor support and the docs match below.";
   return [
-    `**Current:** ${statusLine}`,
+    `**Current:** ${dot} ${statusLine}`,
     detailLine,
     `**Updates:** ${getStatusChannelReply()}`,
     `**Quick Check:** ${STATUS_COMMAND_REPLY}`
@@ -534,12 +545,20 @@ function buildIssueBody(issue) {
 }
 
 function maybeAppendDownNote(route, runtimeStatus) {
-  if (runtimeStatus !== "DOWN") return route;
   if (route.kind === "status") return route;
-  return {
-    ...route,
-    extra: route.extra ? `${route.extra}\n\n${DOWN_NOTE}` : DOWN_NOTE
-  };
+  if (runtimeStatus === "DOWN") {
+    return {
+      ...route,
+      extra: route.extra ? `${route.extra}\n\n${DOWN_NOTE}` : DOWN_NOTE
+    };
+  }
+  if (runtimeStatus === "UNAWARE") {
+    return {
+      ...route,
+      extra: route.extra ? `${route.extra}\n\n${UNAWARE_NOTE}` : UNAWARE_NOTE
+    };
+  }
+  return route;
 }
 
 function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
@@ -561,7 +580,11 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
       header: "\u{1F4E1} KiciaHook Status",
       body: buildStatusReplyBody(runtimeStatus),
       buttons: [{ label: "Open Status Channel", url: getStatusJumpUrl() }],
-      color: runtimeStatus === "DOWN" ? "warn" : "success"
+      color: runtimeStatus === "DOWN"
+        ? "danger"
+        : runtimeStatus === "UNAWARE"
+          ? "warn"
+          : "success"
     };
   }
 
@@ -645,6 +668,8 @@ module.exports = {
   getStatusChannelReply,
   STATUS_UP_REPLY,
   STATUS_DOWN_REPLY,
+  STATUS_UNAWARE_REPLY,
+  UNAWARE_NOTE,
   get STATUS_CHANNEL_REPLY() {
     return getStatusChannelReply();
   },

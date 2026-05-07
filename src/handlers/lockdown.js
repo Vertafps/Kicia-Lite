@@ -7,7 +7,7 @@ const { canUseLockCommands } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { safeEdit, safeReact, safeReply } = require("../utils/respond");
 
-const LOCK_REACTION = "\u274C";
+const LOCK_REACTION = "❌";
 const CHANNEL_PERMISSION_BITS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.ManageChannels,
@@ -18,6 +18,26 @@ const PERMISSION_LABELS = new Map([
   [PermissionFlagsBits.ManageChannels, "Manage Channels"],
   [PermissionFlagsBits.ManageRoles, "Manage Roles"]
 ]);
+
+const lockMutex = new Map();
+
+async function withGuildLockMutex(guildId, fn) {
+  const key = String(guildId || "global");
+  const previous = lockMutex.get(key) || Promise.resolve();
+  let release;
+  const next = previous.then(() => new Promise((resolve) => {
+    release = resolve;
+  }));
+  lockMutex.set(key, next);
+
+  try {
+    await previous.catch(() => null);
+    return await fn();
+  } finally {
+    if (lockMutex.get(key) === next) lockMutex.delete(key);
+    release?.();
+  }
+}
 
 function parseLockCommand(content) {
   const normalized = String(content || "").trim().toLowerCase();
@@ -94,10 +114,10 @@ function getOverwriteSendMessagesState(channel) {
   return null;
 }
 
-function getLockStateLabel(state) {
-  if (state === false) return "locked";
-  if (state === true) return "unlocked";
-  return "neutral";
+function describeLockState(state) {
+  if (state === false) return "🔒 locked";
+  if (state === true) return "🔓 unlocked";
+  return "➖ neutral";
 }
 
 function getAggregateLockState(channels) {
@@ -196,12 +216,15 @@ function needsLockEdit(currentState, desiredState) {
   return currentState !== desiredState;
 }
 
-function formatChannelStateLines(channels) {
+function formatChannelStateLines(channels, stateOverrides = null) {
   if (!channels.length) return "no configured lock targets resolved";
   return channels
     .map((entry) => {
-      const state = getOverwriteSendMessagesState(entry.channel);
-      return `- **${entry.target.label}:** <#${entry.channel.id}> - ${getLockStateLabel(state)}`;
+      const overrideState = stateOverrides?.get?.(entry.channel.id);
+      const state = overrideState !== undefined
+        ? overrideState
+        : getOverwriteSendMessagesState(entry.channel);
+      return `- **${entry.target.label}:** <#${entry.channel.id}> — ${describeLockState(state)}`;
     })
     .join("\n");
 }
@@ -229,13 +252,13 @@ function buildLockStatusPanel({ channels, failures }) {
   };
 }
 
-function buildLockAuditPanel({ command, actor, channels, failures = [], error = null }) {
+function buildLockAuditPanel({ command, actor, channels, failures = [], error = null, finalStates = null }) {
   return {
     header: command === "lock" ? "Channel Lock Applied" : command === "unlock" ? "Channel Unlock Applied" : "Channel Lock Check",
     body: [
       `**Actor:** ${actor}`,
       `**Command:** ${command}`,
-      `**Targets:**\n${formatChannelStateLines(channels)}`,
+      `**Targets:**\n${formatChannelStateLines(channels, finalStates)}`,
       failures.length ? `**Resolve Issues:**\n${formatResolveFailures(failures)}` : null,
       error ? `**Error:** ${error}` : null
     ].filter(Boolean).join("\n\n"),
@@ -243,7 +266,7 @@ function buildLockAuditPanel({ command, actor, channels, failures = [], error = 
   };
 }
 
-function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor }) {
+function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor, finalStates }) {
   return {
     header: success
       ? command === "lock" ? "Channels Locked" : "Channels Unlocked"
@@ -256,7 +279,7 @@ function buildLockResultPanel({ command, success, pastTenseLabel, resolved, resu
       `**Skipped:** ${result.skipped.length}`,
       `**By:** ${actor}`,
       "",
-      formatChannelStateLines(resolved.channels)
+      formatChannelStateLines(resolved.channels, finalStates)
     ].join("\n"),
     color: success ? command === "lock" ? WARN : SUCCESS : DANGER
   };
@@ -281,12 +304,16 @@ async function sendAutomaticLockAuditLog(guild, panel, sendLog = sendLogPanel) {
 async function applyLockState(channels, desiredState, actorId, actionLabel, previousStates) {
   const changed = [];
   const skipped = [];
+  const finalStates = new Map();
 
   for (const entry of channels) {
-    const currentState = getOverwriteSendMessagesState(entry.channel);
+    const currentState = previousStates.has(entry.channel.id)
+      ? previousStates.get(entry.channel.id)
+      : getOverwriteSendMessagesState(entry.channel);
 
     if (!needsLockEdit(currentState, desiredState)) {
       skipped.push(entry);
+      finalStates.set(entry.channel.id, currentState);
       continue;
     }
 
@@ -296,12 +323,14 @@ async function applyLockState(channels, desiredState, actorId, actionLabel, prev
       { reason: `${actionLabel} by ${actorId || "unknown"}` }
     );
     changed.push(entry);
+    finalStates.set(entry.channel.id, desiredState);
   }
 
   return {
     previousStates,
     changed,
-    skipped
+    skipped,
+    finalStates
   };
 }
 
@@ -319,16 +348,23 @@ async function rollbackLockState(channels, previousStates, actionLabel) {
   }
 }
 
-async function applyAutomaticLockdown(guild, {
-  actorId = "auto-detection",
-  actor = "Auto Detection",
-  reason = "automatic outage detection",
-  sendLog = sendLogPanel
+function snapshotPreviousStates(channels) {
+  return new Map(
+    channels.map((entry) => [entry.channel.id, getOverwriteSendMessagesState(entry.channel)])
+  );
+}
+
+async function applyAutomaticChannelTransition(guild, desiredState, {
+  actorId,
+  actor,
+  reason,
+  sendLog = sendLogPanel,
+  command = desiredState === true ? "unlock" : "lock"
 } = {}) {
   if (!guild) {
     return {
       ok: false,
-      command: "lock",
+      command,
       actor,
       channels: [],
       failures: [],
@@ -336,100 +372,121 @@ async function applyAutomaticLockdown(guild, {
     };
   }
 
-  const resolved = await resolveTargetChannels(guild);
-  const expectedTargets = getChannelLockTargets().length;
-  if (resolved.failures.length || resolved.channels.length !== expectedTargets) {
-    const error = "target resolution failed";
+  return withGuildLockMutex(guild.id, async () => {
+    const resolved = await resolveTargetChannels(guild);
+    const expectedTargets = getChannelLockTargets().length;
+    if (resolved.failures.length || resolved.channels.length !== expectedTargets) {
+      const error = "target resolution failed";
+      await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+        command,
+        actor,
+        ...resolved,
+        error
+      }), sendLog);
+
+      return {
+        ok: false,
+        command,
+        actor,
+        ...resolved,
+        error
+      };
+    }
+
+    const preflightIssues = getPreflightIssues(guild, resolved.channels);
+    if (preflightIssues.length) {
+      const error = preflightIssues.join(" | ");
+      await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+        command,
+        actor,
+        ...resolved,
+        error
+      }), sendLog);
+
+      return {
+        ok: false,
+        command,
+        actor,
+        ...resolved,
+        error,
+        preflightIssues
+      };
+    }
+
+    const previousStates = snapshotPreviousStates(resolved.channels);
+    let result;
+    try {
+      result = await applyLockState(
+        resolved.channels,
+        desiredState,
+        actorId,
+        `auto ${command}: ${reason}`,
+        previousStates
+      );
+    } catch (err) {
+      await rollbackLockState(resolved.channels, previousStates, `auto ${command}`);
+      const error = err?.message || "unknown permission overwrite failure";
+      await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+        command,
+        actor,
+        ...resolved,
+        error
+      }), sendLog);
+
+      return {
+        ok: false,
+        command,
+        actor,
+        ...resolved,
+        error,
+        result: {
+          previousStates,
+          changed: [],
+          skipped: [],
+          finalStates: new Map()
+        }
+      };
+    }
+
+    const ok = [...result.finalStates.values()].every((state) => state === desiredState);
+    const error = ok ? null : "final state verification failed";
     await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
-      command: "lock",
+      command,
       actor,
       ...resolved,
+      finalStates: result.finalStates,
       error
     }), sendLog);
 
     return {
-      ok: false,
-      command: "lock",
-      actor,
-      ...resolved,
-      error
-    };
-  }
-
-  const preflightIssues = getPreflightIssues(guild, resolved.channels);
-  if (preflightIssues.length) {
-    const error = preflightIssues.join(" | ");
-    await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
-      command: "lock",
-      actor,
-      ...resolved,
-      error
-    }), sendLog);
-
-    return {
-      ok: false,
-      command: "lock",
+      ok,
+      command,
       actor,
       ...resolved,
       error,
-      preflightIssues
+      result
     };
-  }
+  });
+}
 
-  const previousStates = new Map(
-    resolved.channels.map((entry) => [entry.channel.id, getOverwriteSendMessagesState(entry.channel)])
-  );
-  let result;
-  try {
-    result = await applyLockState(
-      resolved.channels,
-      false,
-      actorId,
-      `auto lock: ${reason}`,
-      previousStates
-    );
-  } catch (err) {
-    await rollbackLockState(resolved.channels, previousStates, "auto lock");
-    const error = err?.message || "unknown permission overwrite failure";
-    await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
-      command: "lock",
-      actor,
-      ...resolved,
-      error
-    }), sendLog);
+async function applyAutomaticLockdown(guild, options = {}) {
+  return applyAutomaticChannelTransition(guild, false, {
+    actorId: "auto-detection",
+    actor: "Auto Detection",
+    reason: "automatic outage detection",
+    ...options,
+    command: "lock"
+  });
+}
 
-    return {
-      ok: false,
-      command: "lock",
-      actor,
-      ...resolved,
-      error,
-      result: {
-        previousStates,
-        changed: [],
-        skipped: []
-      }
-    };
-  }
-
-  const finalAggregateState = getAggregateLockState(resolved.channels);
-  const ok = finalAggregateState.allLocked;
-  const error = ok ? null : "final state verification failed";
-  await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
-    command: "lock",
-    actor,
-    ...resolved,
-    error
-  }), sendLog);
-
-  return {
-    ok,
-    command: "lock",
-    actor,
-    ...resolved,
-    error,
-    result
-  };
+async function applyAutomaticUnlockdown(guild, options = {}) {
+  return applyAutomaticChannelTransition(guild, true, {
+    actorId: "auto-detection",
+    actor: "Auto Detection",
+    reason: "automatic outage all-clear",
+    ...options,
+    command: "unlock"
+  });
 }
 
 async function maybeHandleLockCommand(message) {
@@ -442,6 +499,10 @@ async function maybeHandleLockCommand(message) {
     return true;
   }
 
+  return withGuildLockMutex(message.guild?.id, () => runLockCommand(message, command));
+}
+
+async function runLockCommand(message, command) {
   const resolved = await resolveTargetChannels(message.guild);
   const actor = buildActorLabel(message);
 
@@ -542,9 +603,7 @@ async function maybeHandleLockCommand(message) {
   }
 
   let result;
-  const previousStates = new Map(
-    resolved.channels.map((entry) => [entry.channel.id, getOverwriteSendMessagesState(entry.channel)])
-  );
+  const previousStates = snapshotPreviousStates(resolved.channels);
   try {
     result = await applyLockState(
       resolved.channels,
@@ -579,10 +638,8 @@ async function maybeHandleLockCommand(message) {
     return true;
   }
 
-  const finalAggregateState = getAggregateLockState(resolved.channels);
-  const success = command === "lock"
-    ? finalAggregateState.allLocked
-    : finalAggregateState.allUnlocked;
+  const finalStates = result.finalStates;
+  const success = [...finalStates.values()].every((state) => state === desiredState);
 
   const resultPanel = buildLockResultPanel({
     command,
@@ -590,7 +647,8 @@ async function maybeHandleLockCommand(message) {
     pastTenseLabel,
     resolved,
     result,
-    actor
+    actor,
+    finalStates
   });
   await deliverFinalLockPanel(message, lockProgressReply, resultPanel, "lock-result-reply");
 
@@ -598,6 +656,7 @@ async function maybeHandleLockCommand(message) {
     command,
     actor,
     ...resolved,
+    finalStates,
     error: success ? null : "final state verification failed"
   }));
   return true;
@@ -611,5 +670,6 @@ module.exports = {
   getAggregateLockState,
   getNextSendMessagesState,
   applyAutomaticLockdown,
+  applyAutomaticUnlockdown,
   maybeHandleLockCommand
 };

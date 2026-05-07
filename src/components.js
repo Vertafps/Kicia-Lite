@@ -5,6 +5,8 @@ const MODLOG_REVERT_PREFIX = "modlog:revert:";
 const NICKMOD_RENAME_PREFIX = "nickmod:rename:";
 const NICKMOD_MODAL_PREFIX = "nickmod:rename-submit:";
 const NICKMOD_NICKNAME_INPUT_ID = "nickmod:nickname";
+const OUTAGE_CONFIRM_PREFIX = "outage:confirm:";
+const OUTAGE_DISMISS_PREFIX = "outage:dismiss:";
 
 function isValidHttpUrl(url) {
   try {
@@ -59,6 +61,28 @@ function buildModerationLogButtonRows(actionId, {
   ];
 }
 
+function buildOutageReviewButtonRows(reviewId, { disabled = false } = {}) {
+  const id = String(reviewId || "").trim();
+  if (!id) return [];
+
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${OUTAGE_CONFIRM_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji("\u{1F6A8}")
+        .setLabel("Confirm Outage")
+        .setDisabled(Boolean(disabled)),
+      new ButtonBuilder()
+        .setCustomId(`${OUTAGE_DISMISS_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Success)
+        .setEmoji("✅")
+        .setLabel("False Alarm")
+        .setDisabled(Boolean(disabled))
+    )
+  ];
+}
+
 function buildNicknameModerationButtonRows(userId, { disabled = false } = {}) {
   const id = String(userId || "").trim();
   if (!id) return [];
@@ -80,7 +104,10 @@ module.exports = {
   NICKMOD_MODAL_PREFIX,
   NICKMOD_NICKNAME_INPUT_ID,
   NICKMOD_RENAME_PREFIX,
+  OUTAGE_CONFIRM_PREFIX,
+  OUTAGE_DISMISS_PREFIX,
   buildNicknameModerationButtonRows,
   buildModerationLogButtonRows,
+  buildOutageReviewButtonRows,
   buildLinkButtonRows
 };

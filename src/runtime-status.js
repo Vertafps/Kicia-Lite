@@ -1,10 +1,14 @@
 const { DEFAULT_STATUS } = require("./config");
 
-let currentStatus = DEFAULT_STATUS === "DOWN" ? "DOWN" : "UP";
+const KNOWN_STATUSES = new Set(["UP", "DOWN", "UNAWARE"]);
+const FALLBACK_STATUS = "UP";
 
 function normalizeStatus(status) {
-  return String(status || "").trim().toUpperCase() === "DOWN" ? "DOWN" : "UP";
+  const value = String(status || "").trim().toUpperCase();
+  return KNOWN_STATUSES.has(value) ? value : FALLBACK_STATUS;
 }
+
+let currentStatus = normalizeStatus(DEFAULT_STATUS);
 
 function getRuntimeStatus() {
   return currentStatus;
@@ -19,6 +23,14 @@ function isRuntimeDown() {
   return currentStatus === "DOWN";
 }
 
+function isRuntimeUp() {
+  return currentStatus === "UP";
+}
+
+function isRuntimeUnaware() {
+  return currentStatus === "UNAWARE";
+}
+
 function resetRuntimeStatus() {
   currentStatus = normalizeStatus(DEFAULT_STATUS);
   return currentStatus;
@@ -28,5 +40,7 @@ module.exports = {
   getRuntimeStatus,
   setRuntimeStatus,
   isRuntimeDown,
+  isRuntimeUnaware,
+  isRuntimeUp,
   resetRuntimeStatus
 };

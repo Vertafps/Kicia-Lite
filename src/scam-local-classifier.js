@@ -159,8 +159,10 @@ const KICIA_PURCHASE_RE =
 const KICIA_DEAL_RISK_RE =
   /\b(?:sell|selling|sold|wts|wtb|trade|trading|swap|middleman|mm|dm|dms|message\s+me|from\s+me|my\s+(?:shop|server|reseller)|private|bio|profile|unofficial|account|accounts|akkount|akkounts|ackount|ackounts|acc|alts?|config|configs|confg|confgs|conf|confs|cfg|cfk|figs|script|executor|enhancement|enhancements|cheap|cheaper|nitro)\b/i;
 const PAYMENT_METHOD_RE =
-  /\b(?:roblox|robux|rbx|paypal|cashapp|cash\s+app|crypto|btc|eth|card|credit|debit|gift\s*card|usd|eur|gbp|dollars?|bucks?|rs|lkr|money|moneytoken)\b/i;
-const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me|bio|profile)\b/i;
+  /\b(?:roblox|robux|rbx|paypal|cashapp|cash\s+app|crypto|btc|eth|ltc|usdt|monero|xmr|card|credit|debit|gift\s*card|usd|eur|gbp|dollars?|bucks?|rs|lkr|money|moneytoken|venmo|zelle)\b/i;
+const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg me|inbox|add me|bio|profile|telegram|tg|snap(?:chat)?|insta(?:gram)?|whatsapp|wsap|signal|matrix|discord\s+(?:add|friend)|friend\s+req)\b/i;
+const ACCOUNT_LENDING_RE = /\b(?:lend|share|give|let\s+me\s+(?:use|borrow)|borrow|trial)\s+(?:me\s+|us\s+|your\s+)?(?:your\s+|the\s+)?(?:account|acc|alts?|key|license|premium|prem|cookie|cookies|token|login|password|cred(?:s|ential)?)\b/i;
+const ACCOUNT_RECOVERY_BAIT_RE = /\b(?:recover|unlock|restore|fix|appeal)\s+(?:my\s+|your\s+)?(?:account|discord|roblox)\b.{0,40}\b(?:dm|message me|inbox|telegram|whatsapp|tg)\b/i;
 const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|tickets|owner|admin|mod|moderator|store|shop|site|website|server|docs?|support|reseller|resellers|channel|channels)\b/i;
 const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why)\b/i;
 const PROTECTED_ITEM_RE =
@@ -533,6 +535,24 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 96,
       score: 0.97,
       reason: "Token/credential grabber language detected."
+    });
+  }
+
+  if (ACCOUNT_LENDING_RE.test(userText) && !hasMetaDiscussion && !hasTradeWarning) {
+    return localVerdict({
+      verdict: true,
+      confidence: 92,
+      score: 0.94,
+      reason: "Account/credential lending or sharing request detected."
+    });
+  }
+
+  if (ACCOUNT_RECOVERY_BAIT_RE.test(userText)) {
+    return localVerdict({
+      verdict: true,
+      confidence: 93,
+      score: 0.95,
+      reason: "Account recovery social-engineering bait detected."
     });
   }
 

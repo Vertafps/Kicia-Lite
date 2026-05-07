@@ -1,5 +1,6 @@
 const { CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { getStatusJumpUrl } = require("../channel-config");
+const { isNoResponseMessage } = require("../channel-policy");
 const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
 const { buildLinkButtonRows } = require("../components");
 const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
@@ -150,7 +151,13 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   const jarvisCommand = isJarvisCommandMessage(message.content);
   const testProMaxCommand = isTestProMaxCommandMessage(message.content);
 
-  if (statusCommand && isPublicStatusQueryMessage(message.content)) {
+  const publicStatusQuery = statusCommand && isPublicStatusQueryMessage(message.content);
+
+  if (publicStatusQuery && isNoResponseMessage(message)) {
+    return false;
+  }
+
+  if (publicStatusQuery) {
     return maybeReplyWithPublicStatus(message, { useCooldown: false });
   }
 
@@ -221,6 +228,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   }
 
   if (!shouldAutoReplyStatus(message.content)) return false;
+  if (isNoResponseMessage(message)) return false;
   return maybeReplyWithPublicStatus(message);
 }
 

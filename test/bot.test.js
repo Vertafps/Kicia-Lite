@@ -928,6 +928,68 @@ test("generic no-ping working prompt auto-replies with status", async () => {
   assert.match(replyPayload.embeds[0].data.description, /status channel/i);
 });
 
+test("$status is silenced in the configured general channel", async () => {
+  let replied = false;
+  let reacted = false;
+
+  const handled = await maybeHandleStatusCommand({
+    content: "$status",
+    author: { id: "not-owner" },
+    inGuild: () => true,
+    channelId: "1498745066339045406",
+    react: async () => {
+      reacted = true;
+    },
+    reply: async () => {
+      replied = true;
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(replied, false);
+  assert.equal(reacted, false);
+});
+
+test("natural-language status prompts are silenced in the configured general channel", async () => {
+  let replied = false;
+
+  const handled = await maybeHandleStatusCommand({
+    content: "is kicia down rn?",
+    author: { id: "user-asking" },
+    inGuild: () => true,
+    channelId: "1498745066339045406",
+    react: async () => {
+      throw new Error("should not react");
+    },
+    reply: async () => {
+      replied = true;
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(replied, false);
+});
+
+test("owner $status down still applies in general", async () => {
+  resetRuntimeStatus();
+
+  let replied = false;
+  const handled = await maybeHandleStatusCommand({
+    content: "$status down",
+    author: { id: "847703912932311091" },
+    inGuild: () => true,
+    channelId: "1498745066339045406",
+    reply: async () => {
+      replied = true;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(replied, true);
+  assert.equal(getRuntimeStatus(), "DOWN");
+  resetRuntimeStatus();
+});
+
 test("auto status matcher stays focused on actual status prompts", () => {
   assert.equal(shouldAutoReplyStatus("does it work?"), true);
   assert.equal(shouldAutoReplyStatus("working"), true);

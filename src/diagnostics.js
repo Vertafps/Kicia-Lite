@@ -176,7 +176,7 @@ function buildModerationGuardLines() {
       "shorteners/invites warn;",
       `file hosts, homoglyphs, masked links, and malware files timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`
     ].join(" "),
-    "**False Info Guard:** status + executor claim mismatch alerts to logs",
+    "**Fake Info Alerts:** retired from public/log moderation; status questions still use runtime status replies",
     [
       "**Suspicious Alerts:**",
       `timeout at ${SUSPICIOUS_TIMEOUT_THRESHOLD} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,

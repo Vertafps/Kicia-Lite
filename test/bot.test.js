@@ -1699,7 +1699,7 @@ test("owner scam audit command shows recent classifier decisions", async () => {
         handled: true,
         local: {
           answer: "TRUE",
-          model: "local-kicia-intent-v2"
+          model: "local-kicia-intent-v3"
         },
         ai: {},
         messageContent: "dms to buy kicia"
@@ -1710,7 +1710,7 @@ test("owner scam audit command shows recent classifier decisions", async () => {
   assert.equal(handled, true);
   assert.match(replyPayload.embeds[0].data.title, /Scam Audit/i);
   assert.match(replyPayload.embeds[0].data.description, /local_true/i);
-  assert.match(replyPayload.embeds[0].data.description, /local-kicia-intent-v2: TRUE/i);
+  assert.match(replyPayload.embeds[0].data.description, /local-kicia-intent-v3: TRUE/i);
   assert.match(replyPayload.embeds[0].data.description, /dms to buy kicia/i);
 });
 

@@ -33,7 +33,7 @@ const { formatDuration } = require("../duration");
 const { buildPanel, DANGER, INFO, SUCCESS, WARN, resolveAvatarURL } = require("../embed");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
-const { sendLogPanel } = require("../log-channel");
+const { sendIgnoreLogPanel, sendLogPanel } = require("../log-channel");
 const { canUseEmojiCommands, hasModerationBypassMessage } = require("../permissions");
 const { detectProhibitedCommerce, similarity } = require("../prohibited-commerce");
 const {
@@ -69,6 +69,7 @@ const sellingUserBuckets = new Map();
 const SELL_ITEM_RE = /\b(?:acc|account|accounts|akkount|akkounts|ackount|ackounts|lvl|level|configuration|config|configs|confg|confgs|conf|confs|cfg|cfgs|cfk|executor|executors|script|scripts|hvh|kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licenses|key|keys|cheat|cheats|exploit|exploits|robux|nitro|enhancement|enhancements)\b/;
 const SELL_SHORT_CONTEXT_ITEM_RE = /\b(?:ue)\b/;
 const SELL_MARKET_RE = /\b(?:price|prices|usd|paypal|cashapp|crypto|cheap|paid|money|shop|store|offer|offers|buy|buyer|buying|bucks?|dollars?|robux|rbx|trade|trades|trading|swap|swapping|exchange|middleman|mm)\b/;
+const KICIA_VALUE_EXCHANGE_RE = /\b(?:kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licenses|key|keys|ue)\b.{0,45}\bfor\b.{0,45}\b(?:volt|robux|rbx|account|accounts|acc|alts?|config|configs|cfg|cfgs|money|usd|dollars?|bucks?|paypal|cashapp|crypto|nitro|script|scripts|executor|executors)\b|\b(?:volt|robux|rbx|account|accounts|acc|alts?|config|configs|cfg|cfgs|money|usd|dollars?|bucks?|paypal|cashapp|crypto|nitro|script|scripts|executor|executors|ue)\b.{0,45}\bfor\b.{0,45}\b(?:kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licenses|key|keys)\b/;
 const SELL_PRICE_RE = /(?:^|\s)(?:[$\u20ac\u00a3]\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:bucks?|dollars?|usd|eur|gbp|robux|rbx)|for\s+\d+(?:\.\d+)?)(?:\s|$)/;
 const SELL_MONEY_EMOJI_RE = /[\u{1F4B0}\u{1F4B5}-\u{1F4B8}\u{1F911}]/u;
 const SELL_CONTEXT_WINDOW_MS = 2 * 60 * 1000;
@@ -816,13 +817,17 @@ function detectSellingSignal(content) {
       /\b(?:paid|money|cheap|shop|store|bucks?|dollars?|usd)\b/.test(spaced) ||
       SELL_PRICE_RE.test(rawLower)
     );
+  const hasKiciaValueExchange = KICIA_VALUE_EXCHANGE_RE.test(spaced);
   const hasBarterLikeItemSignal =
-    (hasEffectiveItemSignal || hasShortContextItem) &&
-    hasConcreteItemForItemSignal(spaced, {
-      hasMarketSignal,
-      hasBroadIntent: hasBroadSellIntent,
-      hasPrivateHandoff
-    });
+    hasKiciaValueExchange ||
+    (
+      (hasEffectiveItemSignal || hasShortContextItem) &&
+      hasConcreteItemForItemSignal(spaced, {
+        hasMarketSignal,
+        hasBroadIntent: hasBroadSellIntent,
+        hasPrivateHandoff
+      })
+    );
   const hasSafeContext = hasSafeSupportOrGameplayContext(spaced);
   const hasJoinedObfuscatedDeal = useCompactMatch && hasObfuscatedIntent && hasCondensedIntent && hasEffectiveItemSignal;
   const hasActionableDeal = hasActionableDealLanguage(spaced) || hasExplicitOffer || hasPrivateMarketItemSignal || hasMarketItemSignal || hasBarterLikeItemSignal;
@@ -876,7 +881,7 @@ function detectSellingSignal(content) {
     hasBroadSellIntent,
     hasItemSignal: hasEffectiveItemSignal || hasShortContextItem,
     hasMarketSignal
-  }) || (hasBarterLikeItemSignal ? 78 : 1);
+  }) || (hasKiciaValueExchange ? 82 : hasBarterLikeItemSignal ? 78 : 1);
 
   return {
     type: "selling",
@@ -942,13 +947,17 @@ function getScamTradeTextFeatures(text) {
     );
   const hasMarketSignal =
     SELL_MARKET_RE.test(rawLower) || SELL_MARKET_RE.test(spaced) || SELL_MONEY_EMOJI_RE.test(text) || hasPriceSignal;
+  const hasKiciaValueExchangeSignal = KICIA_VALUE_EXCHANGE_RE.test(spaced);
   const hasProtectedItemForItemSignal =
-    (hasProtectedItemSignal || hasShortItemSignal) &&
-    hasConcreteItemForItemSignal(spaced, {
-      hasMarketSignal,
-      hasBroadIntent: hasExactIntent || hasCondensedIntent || hasFuzzyIntent || hasCompactIntent,
-      hasPrivateHandoff
-    });
+    hasKiciaValueExchangeSignal ||
+    (
+      (hasProtectedItemSignal || hasShortItemSignal) &&
+      hasConcreteItemForItemSignal(spaced, {
+        hasMarketSignal,
+        hasBroadIntent: hasExactIntent || hasCondensedIntent || hasFuzzyIntent || hasCompactIntent,
+        hasPrivateHandoff
+      })
+    );
   return {
     rawLower,
     spaced,
@@ -966,6 +975,7 @@ function getScamTradeTextFeatures(text) {
     hasPrivateOfferSignal,
     hasPrivateResourceRequestSignal,
     hasBarterSignal,
+    hasKiciaValueExchangeSignal,
     hasProtectedItemForItemSignal,
     hasAvailabilityQuestion,
     hasJoinedObfuscatedDeal: useCompactMatch && hasObfuscatedIntent && hasCondensedIntent && hasProtectedItemSignal,
@@ -1078,6 +1088,16 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
       requiresAi: true,
       confidence: combinedFeatures.hasItemSignal ? 82 : 64,
       reason: "possible barter/trade intent in recent message context"
+    };
+  }
+
+  if (combinedFeatures.hasKiciaValueExchangeSignal) {
+    return {
+      type: "selling",
+      source: "context",
+      requiresAi: true,
+      confidence: 82,
+      reason: "Kicia premium/key value-exchange wording in recent message context"
     };
   }
 
@@ -2609,9 +2629,11 @@ async function handleContentFilterMessage(message, signals, {
 async function confirmScamTradeSignals(message, signals, scamContext, {
   classifyScam = classifyScamContextWithGemini,
   sendLog = sendLogPanel,
+  sendClearLog,
   now = Date.now()
 } = {}) {
   if (!signals.length) return [];
+  const sendClearedLog = sendClearLog || (sendLog === sendLogPanel ? sendIgnoreLogPanel : sendLog);
 
   const strongest = signals.reduce(
     (best, signal) => (!best || (signal.confidence || 0) > (best.confidence || 0) ? signal : best),
@@ -2676,7 +2698,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     (localResult.confidence || 0) >= 92 &&
     (!hasAiRequiredSignals || localResult.stage === "policy" || (localResult.confidence || 0) >= 97)
   ) {
-    await sendLog(message.guild, buildScamAiClearedLogPanel({
+    await sendClearedLog(message.guild, buildScamAiClearedLogPanel({
       message,
       candidateSignal: strongest,
       aiResult: localVerdict
@@ -2747,7 +2769,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   }
 
   if (aiResult?.verdict === false) {
-    await sendLog(message.guild, buildScamAiClearedLogPanel({
+    await sendClearedLog(message.guild, buildScamAiClearedLogPanel({
       message,
       candidateSignal: strongest,
       aiResult
@@ -2898,6 +2920,7 @@ async function maybeHandleModerationWatch(message, {
   classifyToxicityShadow = maybeClassifyToxicityShadow,
   checkThreatIntel,
   sendLog = sendLogPanel,
+  sendClearLog,
   now = Date.now()
 } = {}) {
   if (!message?.inGuild?.() || message.author?.bot) return false;
@@ -2986,6 +3009,7 @@ async function maybeHandleModerationWatch(message, {
       ? await confirmScamTradeSignals(message, sellingSignals, scamContext, {
           classifyScam,
           sendLog,
+          sendClearLog,
           now
         })
       : [];
@@ -3014,18 +3038,9 @@ async function maybeHandleModerationWatch(message, {
       return true;
     }
 
-    if (otherContentSignals.length) {
-      await sendLog(message.guild, buildSignalAlertPanel(message, otherContentSignals));
-      const fakeInfoSignals = otherContentSignals.filter((signal) => signal.type === "fake_info");
-      if (fakeInfoSignals.length && !confirmedSellingSignals.length && !suspiciousSignals.length) {
-        publicReplySent = publicReplySent || await replyToFakeInfoMessage(message, fakeInfoSignals);
-      }
-      const eventTypes = new Set(otherContentSignals.map((signal) => signal.type));
-      for (const eventType of eventTypes) {
-        if (eventType === "fake_info") {
-          await recordModerationStat(`${eventType}_alert`, now);
-        }
-      }
+    const alertableContentSignals = otherContentSignals.filter((signal) => signal.type !== "fake_info");
+    if (alertableContentSignals.length) {
+      await sendLog(message.guild, buildSignalAlertPanel(message, alertableContentSignals));
     }
 
     if (

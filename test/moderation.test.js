@@ -804,10 +804,16 @@ test("local scam classifier follows KiciaHook safe and unsafe standards", () => 
     userMessages: ["trading kicia premium for account"]
   }).verdict, true);
   assert.equal(classifyScamContextLocally({
+    userMessages: ["Kiciahook Premium for Volt"]
+  }).verdict, true);
+  assert.equal(classifyScamContextLocally({
     userMessages: ["can i trade kicia config here?"]
   }).verdict, null);
   assert.equal(classifyScamContextLocally({
     userMessages: ["do not trade kicia premium"]
+  }).verdict, false);
+  assert.equal(classifyScamContextLocally({
+    userMessages: ["Do not dm me about free robux scams"]
   }).verdict, false);
 
   assert.equal(classifyScamContextLocally({
@@ -1792,6 +1798,28 @@ test("single scam-market words do not trigger without context", async () => {
   assert.equal(fixture.timeouts.length, 0);
 });
 
+test("anti-scam warning wording does not become a free-robux scam action", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("Do not dm me about free robux scams");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      throw new Error("anti-scam warning should not call scam AI");
+    }
+  });
+
+  assert.equal(handled, false);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.deleted.length, 0);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
+});
+
 test("prohibited priced sale split across messages times out without scam AI", async () => {
   await clearDailyStatsTracking(1);
   const userId = "prohibited-sale-user";
@@ -1973,7 +2001,7 @@ test("private Kicia buying handoff is caught without remote AI", async () => {
   assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
   assert.equal(fixture.replies.length, 1);
 });
 
@@ -1996,9 +2024,32 @@ test("direct config buy solicitation is caught without remote AI", async () => {
   assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
   assert.match(fixture.logs[0].body, /Direct protected-item market offer/i);
   assert.equal(fixture.replies.length, 1);
+});
+
+test("bare Kicia premium value exchange is caught without remote AI", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("Ue for kcia prm");
+  let aiCalls = 0;
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls += 1;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(aiCalls, 0);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
+  assert.match(fixture.logs[0].body, /value-exchange/i);
 });
 
 test("private config request is deleted without timeout or remote AI", async () => {
@@ -2049,7 +2100,7 @@ test("scam classifier decisions are written to the audit table", async () => {
   assert.equal(audit[0].handled, true);
   assert.equal(audit[0].userId, fixture.message.author.id);
   assert.equal(audit[0].local.verdict, true);
-  assert.equal(audit[0].local.model, "local-kicia-intent-v2");
+  assert.equal(audit[0].local.model, "local-kicia-intent-v3");
   assert.match(audit[0].candidate.reason, /sale context|private buy\/sell handoff/i);
   assert.equal(audit[0].messageContent, "dms to buy kicia");
 
@@ -2080,6 +2131,28 @@ test("generic barter wording becomes AI-borderline instead of automatic action",
   assert.match(fixture.logs[0].header, /Scam AI Cleared/i);
 });
 
+test("AI-cleared scam decisions can be routed away from main moderation logs", async () => {
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("trading this for that");
+  const clearLogs = [];
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    sendClearLog: async (_guild, panel) => {
+      clearLogs.push(panel);
+      return true;
+    },
+    classifyScam: async () => ({ attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" })
+  });
+
+  assert.equal(handled, false);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(clearLogs.length, 1);
+  assert.match(clearLogs[0].header, /Scam AI Cleared/i);
+});
+
 test("Kicia premium trade wording is caught locally without remote AI", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("trade with kiciahook pre");
@@ -2098,7 +2171,7 @@ test("Kicia premium trade wording is caught locally without remote AI", async ()
   assert.equal(handled, true);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
   assert.match(fixture.logs[0].body, /Kicia premium\/key trade wording/i);
 });
 
@@ -2157,7 +2230,7 @@ test("local classifier confirms obvious split selling context before remote AI",
   assert.equal(aiCalls, 0);
   assert.equal(fixture.replies.length, 1);
   assert.match(fixture.logs[0].body, /AI Scam Verdict/i);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v2: TRUE/i);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
 });
 
 test("scam action clears recent user context before a safe follow-up", async () => {

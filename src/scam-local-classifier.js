@@ -7,7 +7,7 @@ const URL_RE = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?/gi
 const MONEY_EMOJI_RE = /[\u{1F4B0}\u{1F4B5}-\u{1F4B8}\u{1F911}]/gu;
 const MONEY_RE = /(?:[$€£]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|dollars?|bucks?|rs|lkr|robux|rbx)\b)/gi;
 
-const MODEL_NAME = "local-kicia-intent-v2";
+const MODEL_NAME = "local-kicia-intent-v3";
 
 const SCAM_SAMPLES = [
   "selling configs cheap dm me",
@@ -211,6 +211,10 @@ const URGENCY_RE =
   /\b(?:act\s+now|limited\s+time|expires?\s+(?:soon|now)|claim\s+before|before\s+it(?:'s|\s+is)\s+gone|last\s+chance|only\s+\d+\s+(?:left|remaining|spots?))\b/i;
 const ACCOUNT_PHISH_RE =
   /\b(?:verify\s+your\s+(?:account|discord|identity)|account\s+(?:suspended|banned|terminated|flagged|at\s+risk)|confirm\s+your\s+(?:account|email)|unusual\s+activity|security\s+alert)\b/i;
+const KICIA_VALUE_EXCHANGE_RE =
+  /\b(?:kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licence|key|keys|ue)\b.{0,45}\bfor\b.{0,45}\b(?:volt|robux|rbx|account|accounts|acc|alts?|config|configs|cfg|cfgs|moneytoken|money|usd|dollars?|bucks?|paypal|cashapp|crypto|nitro|script|scripts|executor|executors)\b|\b(?:volt|robux|rbx|account|accounts|acc|alts?|config|configs|cfg|cfgs|moneytoken|money|usd|dollars?|bucks?|paypal|cashapp|crypto|nitro|script|scripts|executor|executors|ue)\b.{0,45}\bfor\b.{0,45}\b(?:kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licence|key|keys)\b/i;
+const SCAM_WARNING_RE =
+  /\b(?:do\s+not|don't|dont|never|stop|avoid|warning|warn|report|reported|watch\s+out|scam|scams|fake)\b.{0,120}\b(?:free\s+(?:robux|nitro)|robux\s+in\s+(?:my\s+)?(?:bio|profile)|nitro\s+giveaway|token\s+grabber|cookie\s+logger|verify\s+your\s+account|crypto\s+(?:offer|scam|group)|investment\s+scam|phish|phishing)\b|\b(?:free\s+(?:robux|nitro)|robux\s+in\s+(?:my\s+)?(?:bio|profile)|nitro\s+giveaway|token\s+grabber|cookie\s+logger|verify\s+your\s+account|crypto\s+(?:offer|scam|group)|investment\s+scam|phish|phishing)\b.{0,120}\b(?:do\s+not|don't|dont|never|stop|avoid|warning|warn|report|reported|watch\s+out|scam|scams|fake)\b/i;
 const MONEY_TEST_RE = new RegExp(MONEY_RE.source, "i");
 const URL_TEST_RE = new RegExp(URL_RE.source, "i");
 
@@ -261,6 +265,10 @@ function isKiciaLegitPurchaseIntent(input) {
   const text = normalizeClassifierText(parts.filter(Boolean).join(" "));
   const hasServerProduct = KICIA_BRAND_RE.test(text) || /\b(?:premium|prem|prm|license|licence|key|early access)\b/.test(text);
   if (!hasServerProduct || !KICIA_PURCHASE_RE.test(text)) {
+    return false;
+  }
+
+  if (KICIA_VALUE_EXCHANGE_RE.test(text)) {
     return false;
   }
 
@@ -369,6 +377,29 @@ function extractPolicyIntent(context = {}, options = {}) {
   const fullText = normalizeClassifierText(buildContextText(context));
   const signalConfidence = Number(options.strongestSignal?.confidence || 0);
   if (!userText && !fullText) return null;
+
+  if (SCAM_WARNING_RE.test(userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 95,
+      score: 0.04,
+      reason: "Warning/report context about a scam pattern, not target-user scam intent."
+    });
+  }
+
+  if (
+    KICIA_VALUE_EXCHANGE_RE.test(userText) &&
+    !/\b(?:sell|selling|buy|buying|trade|trading|swap|swapping|exchange|exchanging|give|giving|offer|offering|wts|wtb)\b/i.test(userText) &&
+    !META_DISCUSSION_RE.test(userText) &&
+    !/\b(?:allowed|against rules?|not allowed|is not allowed|isn't allowed|report|reported|warning|warn|scam|scams)\b/i.test(userText)
+  ) {
+    return localVerdict({
+      verdict: true,
+      confidence: 95,
+      score: 0.96,
+      reason: "Kicia premium/key value-exchange wording matched unauthorized deal policy."
+    });
+  }
 
   if (isSafePurchaseMethodQuestion(userMessages.length ? userMessages : userText, context.repliedToMessage)) {
     return localVerdict({

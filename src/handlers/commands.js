@@ -623,6 +623,7 @@ function formatSetChannelUsage() {
     "`$set channel general <#channel|channelid>`",
     "`$set channel support <#channel|channelid>`",
     "`$set channel logs <#channel|channelid>`",
+    "`$set channel ignorelogs <#channel|channelid>`",
     "`$set channel <slot> reset`",
     `**Slots:** ${CHANNEL_CONFIG_SLOTS.map((slot) => slot.key).join(", ")}`
   ].join("\n");

@@ -50,6 +50,8 @@ Owners:
 - `$role <@user|userid> <roleid>` assigns a role to one member.
 - `$db` inspects SQLite state.
 - `$scamaudit` shows recent scam/trade classifier decisions.
+- `$set channels` checks configured bot channels.
+- `$set channel ignorelogs <#channel|channelid>` routes "Scam AI Cleared" review noise away from the main logs.
 - `$whitelist <user>` / `$whitelist remove <user>` manages manual moderation bypass.
 - `$lock` / `$unlock` updates configured channel send permissions.
 

@@ -62,6 +62,23 @@ const CHANNEL_CONFIG_SLOTS = [
     uses: ["moderation logs", "audit panels", "runtime warnings"]
   },
   {
+    key: "ignorelogs",
+    aliases: [
+      "ignorelog",
+      "ignore-logs",
+      "clearedlogs",
+      "cleared-logs",
+      "scamcleared",
+      "scam-cleared",
+      "aicleared",
+      "ai-cleared"
+    ],
+    label: "Ignore Logs Channel",
+    defaultId: "",
+    required: false,
+    uses: ["Scam AI Cleared panels", "false-positive review noise"]
+  },
+  {
     key: "staff",
     aliases: ["staffchat", "staff-chat", "staffalerts", "staff-alerts", "alerts"],
     label: "Staff Chat",
@@ -230,6 +247,10 @@ function getLogChannelId() {
   return getConfiguredChannelId("logs") || LOG_CHANNEL_ID;
 }
 
+function getIgnoreLogChannelId() {
+  return getConfiguredChannelId("ignorelogs");
+}
+
 function getStaffChannelId() {
   return getConfiguredChannelId("staff");
 }
@@ -291,6 +312,7 @@ module.exports = {
   getConfiguredChannelSource,
   getDailyStatsChannelId,
   getDocsJumpUrl,
+  getIgnoreLogChannelId,
   getLogChannelId,
   getNoResponseChannelIds,
   getStaffChannelId,

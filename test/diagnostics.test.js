@@ -12,10 +12,11 @@ const {
   runJarvisDiagnostics
 } = require("../src/diagnostics");
 
-test("jarvis moderation guard lines show false info and suspicious alert coverage", () => {
+test("jarvis moderation guard lines show retired fake info and suspicious alert coverage", () => {
   const body = buildModerationGuardLines().join("\n");
 
-  assert.match(body, /False Info Guard/i);
+  assert.match(body, /Fake Info Alerts/i);
+  assert.match(body, /retired from public\/log moderation/i);
   assert.match(body, /docs\/trusted\/gifs/i);
   assert.match(body, /homoglyphs/i);
   assert.match(body, /masked links/i);

@@ -568,7 +568,95 @@ test("scam trade guard ignores support and gameplay false-positive contexts", as
       "ffa is goofy ahh and doesnt give any levels",
       "Above 100?",
       "bc before i got acc to lv 50 in ffa in just 20 minutes (3 match)"
-    ]
+    ],
+    ["how can i buy premium"],
+    [
+      "Why",
+      "Bro all they gotta do is generate some codes",
+      "It ain't that hard to make stock",
+      "Why are they reslling a virtual client",
+      "Js buy it from the person that makes it"
+    ],
+    [
+      "how do i check person messages but if hes not in the server",
+      "not how reseller works reseller need to buy k##s + and v3 soon and price is gonna be more"
+    ],
+    [
+      "some level 91 said he clipped me raging and hes gonna report me",
+      "telling me to make a new acc"
+    ],
+    [
+      "bro i got mutd",
+      "muted",
+      "config",
+      "best config\\",
+      "best config for it"
+    ],
+    [
+      "ofc if its paid",
+      "paid kicia destreoys ue",
+      "whats the best config for kicia"
+    ],
+    [
+      "i like men btw",
+      "any1 wanna dm an egirl?",
+      "hey google how to remove 20 kg dumbbell from anus"
+    ],
+    [
+      "beo",
+      "hvh me",
+      "bro what",
+      "yeh stellar is broke",
+      "in return she lets u look at her armpits"
+    ],
+    [
+      "exclude rage from free vr",
+      "ver",
+      "v3 released for prem users btw"
+    ],
+    [
+      "where",
+      "i need buy my own kh pre"
+    ],
+    [
+      "Idc what u say u gotta give me a valid answer since ur a staff",
+      "Wow",
+      "they staffs tho mwahaha",
+      "When is v3",
+      "sonion ue v2 or Kiciahook v3?"
+    ],
+    ["give me free executor"],
+    [
+      "Someone kick this kid",
+      "What are you a brainded person",
+      "Go back to YT shorts",
+      "Give confg"
+    ],
+    ["v3 js dropped for premium users no ragebot yet tho"],
+    [
+      "what does priemium ver do",
+      "dam",
+      "with sky?",
+      "i jst wana buy ealy acces bru"
+    ],
+    ["is it possible for me to get premium back.."],
+    ["How much for premium"],
+    [
+      "Even my phone is bugging",
+      "Also workink",
+      "Js buy your gonna get prem v3",
+      "Yes"
+    ],
+    ["guys can someone send me link of madium exe server in dms"],
+    ["which execs work for kicia"],
+    ["Dm me I'll send u freind req"],
+    [
+      "I lost my burner number then lost my tele account",
+      "Omfg",
+      "Solution for getting kicked out: navigate to settings tab and turn off auto load kicia and then after every match load it up again If you just free...",
+      "I use it for crypto business"
+    ],
+    ["TY FOR UNTIMOUTING ME KICIA"]
   ];
 
   assert.equal(detectSellingSignal("dont use kicia i got banned 2 times btw"), null);
@@ -591,7 +679,7 @@ test("scam trade guard ignores support and gameplay false-positive contexts", as
         sendLog: fixture.sendLog,
         classifyScam: async () => {
           aiCalls += 1;
-          throw new Error("safe support/gameplay context should not call scam AI");
+          throw new Error(`safe support/gameplay context should not call scam AI (${exampleIndex}:${messageIndex} ${content})`);
         },
         now: 10_000 + exampleIndex * 10_000 + messageIndex * 1_000
       });
@@ -1427,7 +1515,7 @@ test("fake info guard catches wrong status claims", () => {
   assert.match(signal.reason, /runtime status is up/i);
 });
 
-test("fake info guard replies publicly without moderation action", async () => {
+test("fake info guard no longer replies or logs public moderation action", async () => {
   await clearDailyStatsTracking(1);
   const fixture = buildModerationMessage("kicia is down");
 
@@ -1437,10 +1525,9 @@ test("fake info guard replies publicly without moderation action", async () => {
     sendLog: fixture.sendLog
   });
 
-  assert.equal(handled, true);
-  assert.equal(fixture.logs.length, 1);
-  assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.replies[0].content, /## False info bro!/);
+  assert.equal(handled, false);
+  assert.equal(fixture.logs.length, 0);
+  assert.equal(fixture.replies.length, 0);
   assert.equal(fixture.timeouts.length, 0);
   assert.equal(fixture.dms.length, 0);
   assert.equal(fixture.deleted.length, 0);

@@ -62,6 +62,14 @@ const CHANNEL_CONFIG_SLOTS = [
     uses: ["moderation logs", "audit panels", "runtime warnings"]
   },
   {
+    key: "staff",
+    aliases: ["staffchat", "staff-chat", "staffalerts", "staff-alerts", "alerts"],
+    label: "Staff Chat",
+    defaultId: "",
+    required: false,
+    uses: ["outage auto-detection alerts"]
+  },
+  {
     key: "daily",
     aliases: ["stats", "dailystats", "daily-stats"],
     label: "Daily Stats Channel",
@@ -222,6 +230,10 @@ function getLogChannelId() {
   return getConfiguredChannelId("logs") || LOG_CHANNEL_ID;
 }
 
+function getStaffChannelId() {
+  return getConfiguredChannelId("staff");
+}
+
 function getDailyStatsChannelId() {
   return getConfiguredChannelId("daily") || DAILY_STATS_CHANNEL_ID;
 }
@@ -281,6 +293,7 @@ module.exports = {
   getDocsJumpUrl,
   getLogChannelId,
   getNoResponseChannelIds,
+  getStaffChannelId,
   getStatusJumpUrl,
   getStoredChannelConfigKey,
   getTicketJumpUrl,

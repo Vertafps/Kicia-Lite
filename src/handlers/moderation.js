@@ -103,7 +103,24 @@ const SELL_ANTI_PATTERNS = [
   /\b(?:saw|seen|reported?|warn(?:ed)?|say|said|says|asking|asked|mentions?|mentioned)\b.{0,80}\b(?:free\s+robux|selling|trading|paid\s+cfg|configs?|accounts?|scripts?|scams?)\b/,
   /\b(?:parental\s+controls?|controls?)\b.{0,60}\b(?:work|working|help|support)\b.{0,40}\brobux\b/,
   /\b(?:is\s+this|is\s+that|are\s+these)\s+allowed\b/,
-  /\b(?:someone|somebody|user|person|people|they|he|she)\b.{0,60}\b(?:said|says|asked|told|selling|trading|scamming)\b.{0,60}\b(?:allowed|rules?|report)\b/
+  /\b(?:someone|somebody|user|person|people|they|he|she)\b.{0,60}\b(?:said|says|asked|told|selling|trading|scamming)\b.{0,60}\b(?:allowed|rules?|report)\b/,
+  /\b(?:how|where|can|could|do|does|what)\b.{0,70}\b(?:buy|purchase|get|pay|price|cost)\b.{0,50}\b(?:premium|prem|prm|license|key|early access|kicia|kiciahook|kh)\b/,
+  /\bhow\s+much\s+for\s+(?:premium|prem|prm|license|key|kicia|kiciahook|kh)\b/,
+  /\b(?:i|im|i m)\s+(?:need|want|wanna|wana|just\s+want|jst\s+wana)\b.{0,50}\b(?:buy|get|purchase)\b.{0,50}\b(?:premium|prem|prm|pre|early access|ealy acces|kh|kicia)\b/,
+  /\b(?:buy|purchase|get)\s+it\s+from\s+the\s+(?:person|one|owner|dev|developer|maker)\b/,
+  /\b(?:reseller|resellers|reselling|reslling)\b.{0,90}\b(?:work|works|need|needs|buy|stock|codes?|price|official|person|maker)\b/,
+  /\b(?:reselling|reslling|resell(?:er|ers)?)\b.{0,60}\bvirtual\s+client\b/,
+  /\b(?:make|get|got)\s+a\s+new\s+acc\b/,
+  /\b(?:best|working)\s+(?:config|configs|cfg|cfgs|confg|confgs)\b/,
+  /\b(?:config|configs|cfg|cfgs|confg|confgs)\s+for\s+(?:it|kicia|kiciahook|ue)\b/,
+  /\b(?:v3|kicia|kiciahook|premium|prem|prm)\b.{0,35}\b(?:released|dropped|users?|ragebot|comes|coming)\b/,
+  /\b(?:premium|prem|prm)\b.{0,35}\b(?:back|ver|version|do|does|possible)\b/,
+  /\b(?:ty|thanks|thank you)\b.{0,35}\b(?:untimeout|untimouting|untime?out|unmuting|unmute)\b/,
+  /\bdm me\b.{0,50}\b(?:friend|freind)\s+req\b/,
+  /\b(?:give|send|drop)\s+(?:me\s+)?(?:free\s+)?(?:executor|exec|config|cfg|confg|configuration)\b/,
+  /\b(?:send|give|drop)\s+(?:me\s+)?(?:the\s+)?(?:link|invite)\b.{0,70}\b(?:server|executor|exec|exe)\b.{0,30}\bdms?\b/,
+  /\bwhich\s+(?:exec|execs|executor|executors)\s+work\s+for\s+kicia\b/,
+  /\bi\s+use\s+it\s+for\s+crypto\s+business\b/
 ];
 const SELL_POLICY_NEGATIVE_CONDENSED_PATTERNS = [
   /(?:not|never).{0,40}(?:seling|selling|trading|buying)/,
@@ -150,7 +167,7 @@ const MARKET_QUESTION_RE = /^(?:anyone|who|where|can i|am i allowed|is it allowe
 const WANT_OFFER_RE = /\b(?:who|anyone|somebody|someone|any1|some1)\s+(?:wants?|wanna|wana|want|need)\b|\b(?:wanna|wana)\s+(?:buy|trade|swap)\b|\b(?:do|would)\s+(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b|\b(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b/;
 const RESOURCE_AVAILABILITY_QUESTION_RE = /^(?:hey\s+)?(?:does|do)\s+(?:someone|somebody|anyone|anybody|some1|any1)\s+(?:have|has|got)\b|^(?:hey\s+)?(?:who|anyone|anybody|someone|somebody|some1|any1)\s+(?:has|have|got)\b/;
 const SAFE_SUPPORT_CONTEXT_RE = /\b(?:help|support|ticket|docs?|documented|issue|problem|bug|fix|freez(?:e|ing)|crash(?:ing|ed)?|load(?:ing)?|detected|detect|ban(?:ned)?|not\s+working|working|work|login|locked|settings?|renew|using|use)\b/;
-const SAFE_GAMEPLAY_CONTEXT_RE = /\b(?:rivals|ffa|match(?:es)?|levels?|lvl|ping|bars?|beat|playing|play|glazer|chat|goofy|loadout)\b/;
+const SAFE_GAMEPLAY_CONTEXT_RE = /\b(?:rivals|ffa|match(?:es)?|levels?|lvl|ping|bars?|beat|playing|play|glazer|chat|goofy|loadout|ragebot|lua|slots?|staff|answer|friend\s+req|freind\s+req|muted|untimeout|released|dropped|early\s+access|ealy\s+acces)\b/;
 const ACTIONABLE_DEAL_LANGUAGE_RE = /\b(?:sell|selling|seller|sold|buy\s+(?:my|from\s+me)|from\s+me|trade|trading|swap|exchange|wts|wtb|for\s+sale|taking\s+offers|cheap|paid|money|paypal|cashapp|crypto|shop|store|middleman|mm)\b/;
 const MODERATION_ACTION_REVIEW_MAX_MS = 12 * 60 * 60 * 1000;
 const MODERATION_CONTEXT_VIEW_LIMIT = 8;
@@ -260,41 +277,43 @@ const SUSPICIOUS_PUBLIC_REPLIES_BY_HIT = [
   ]
 ];
 const SELLING_PUBLIC_REPLIES = [
-  "bro got folded by a delete button with no warmup",
-  "he thought, but the thought got timeouted",
+  "bro tried to open a marketplace and got evicted by a semicolon",
   "Trading? what is that, a deleted scene?",
-  "bro opened shop mode and instantly lost permissions",
-  "the business plan was a napkin with three typos",
-  "checkout lane closed, cashier left, floor despawned",
-  "bro tried to sell air with premium shipping :skull:",
-  "Kicia saw the pitch and unplugged the microphone",
-  "bro is not Elon Musk, the pitch deck is a napkin",
-  "the offer had negative aura and one working button",
-  "chat watched bro invent losing money in real time",
-  "bro said trust me and the delete button stretched first",
-  "the invoice said trust me bro and caught fire",
+  "he thought, but it was just a thought",
+  "bro is not Elon Musk, bro is Elon Mistake",
+  "the business plan was a napkin with a cooldown",
+  "checkout closed, receipt shredded, dream uninstalled",
+  "bro tried to sell premium oxygen and got audited by the delete button",
+  "Kicia looked at the pitch and unplugged the microphone",
+  "the offer had negative aura and a loading spinner",
+  "bro said trust me and trust immediately left the server",
   "bro entered entrepreneur mode with 2 percent battery",
-  "this was a side quest and bro lost the tutorial",
-  "that idea was cooked in a microwave with no plate",
-  "bro brought a checkout counter to a chat room",
-  "the offer got declined by common sense headquarters",
-  "bro's whole business model was Ctrl+C Ctrl+L",
-  "the delete button looked at this and said my turn",
-  "bro tried to launch a startup called Bad Idea LLC",
-  "the pitch walked in, slipped, and deleted itself",
-  "that plan had the structural integrity of wet paper",
+  "that startup had one employee and zero future",
+  "bro's pitch deck was just the word dm in 4K",
+  "the invoice said trust me bro and filed for bankruptcy",
   "bro got patched mid-sentence",
-  "sir this is the official Kicia server"
+  "this offer was rejected by common sense before I loaded",
+  "bro brought a checkout counter to general chat and lost to moderation",
+  "the delete button saw this and started doing warmups",
+  "bro tried capitalism with trial-version permissions",
+  "that trade offer had the resale value of a loading error",
+  "bro speedran becoming a case study",
+  "the shop opened and immediately became historical footage",
+  "bro's whole business model was Ctrl+C Ctrl+L",
+  "this was not a hustle, this was a bug report with prices",
+  "the pitch walked in, slipped, and deleted itself"
 ];
 const PROHIBITED_SALE_PUBLIC_REPLIES = [
   "policy jail speedrun, any percent",
-  "bro tried to list forbidden DLC and got patched",
+  "bro listed forbidden DLC and got patched before checkout",
   "that sale got banned during the loading screen",
-  "the catalog looked illegal and fell down the stairs",
-  "bro opened the cursed shop tab and blue-screened",
+  "the catalog looked illegal and deleted itself out of shame",
+  "bro opened the bad shop tab and blue-screened",
   "that listing had negative stars before it loaded",
   "the side quest failed before the cutscene started",
-  "nope, that shop got deleted before rent was due"
+  "nope, that shop got deleted before rent was due",
+  "bro tried street-commerce roleplay and got folded by policy",
+  "the marketplace said absolutely not and locked the door"
 ];
 const ROASTING_PATTERNS = [
   /\b(?:bro|blud|vro|lil bro)\s+(?:got\s+)?(?:cooked|roasted|fried|smoked|destroyed|packed)\b/,
@@ -539,8 +558,11 @@ function repairSellingNormalizedText(text) {
     .replace(/\backounts?\b/g, "account")
     .replace(/\bconfg+z*\b/g, "config")
     .replace(/\bconfigz+\b/g, "config")
+    .replace(/\bpriemium\b/g, "premium")
     .replace(/\bprm\b/g, "prem")
+    .replace(/\bpre\b/g, "prem")
     .replace(/\bkcia\b/g, "kicia")
+    .replace(/\bkh\b/g, "kicia")
     .replace(/\bkicka\b/g, "kicia");
 }
 
@@ -603,6 +625,19 @@ function compactContainsApproxTerm(compact, terms, threshold = 0.72) {
   return false;
 }
 
+function shouldUseCompactSellingMatch(content, spaced) {
+  const raw = String(content || "");
+  const normalized = String(spaced || "");
+  if (!raw.trim()) return false;
+  if (/[^\x00-\x7F]/.test(raw)) return true;
+  if (/[|()[\]{}<>_.,;:~`"'\\/-]/.test(raw)) return true;
+  if (/(?:\b[a-z0-9]\s+){3,}[a-z0-9]\b/i.test(raw)) return true;
+  if (/\b(?:14ad1ng|14adlng|trd(?:ing)?|trding|sellin|selin|seing|slling|s311in|akkount|ackount|confg|configz|prm|kcia|cfk|figs?)\b/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
 function hasSuspiciousConfigAlias(spaced, { hasObfuscatedIntent, hasMarketSignal, hasPrivateHandoff } = {}) {
   if (SELL_CONFIG_ALIAS_RE.test(spaced)) return true;
   return Boolean(
@@ -631,6 +666,28 @@ function hasActionableDealLanguage(spaced) {
   return ACTIONABLE_DEAL_LANGUAGE_RE.test(String(spaced || ""));
 }
 
+function hasConcreteItemForItemSignal(spaced, {
+  hasMarketSignal = false,
+  hasBroadIntent = false,
+  hasPrivateHandoff = false
+} = {}) {
+  const text = String(spaced || "");
+  if (!/\bfor\b/.test(text)) return false;
+  if (hasSellAntiContext(text, text, text.replace(/\s+/g, ""))) return false;
+
+  const item = "(?:kicia|kiciahook|premium|prem|prm|ue|config|configs|cfg|cfgs|account|accounts|acc|key|keys|license|licenses|robux|rbx|script|scripts|executor|executors|hvh|cfk|enhancement|enhancements)";
+  const consideration = "(?:kicia|kiciahook|premium|prem|prm|ue|config|configs|cfg|cfgs|account|accounts|acc|key|keys|license|licenses|robux|rbx|money|usd|dollars?|bucks?|paypal|cashapp|crypto|nitro|volt)";
+  const itemForItem = new RegExp(`\\b${item}\\b.{0,45}\\bfor\\b.{0,45}\\b${consideration}\\b`);
+  const tradeVerb = /\b(?:trade|trading|swap|swapping|exchange|exchanging|sell|selling|sold|buying|wts|wtb|for sale)\b/.test(text);
+  const moneyOrRobux = /\b(?:money|usd|dollars?|bucks?|paypal|cashapp|crypto|robux|rbx|nitro|volt)\b/.test(text);
+  const enhancementForPremium = /\benhancements?\b.{0,45}\bfor\b.{0,45}\b(?:kicia|kiciahook|premium|prem|prm)\b/.test(text);
+
+  return Boolean(
+    itemForItem.test(text) &&
+    (tradeVerb || hasBroadIntent || hasPrivateHandoff || hasMarketSignal || moneyOrRobux || enhancementForPremium)
+  );
+}
+
 function hasSellAntiContext(rawLower, spaced, condensed) {
   const raw = String(rawLower || "");
   const spacedText = String(spaced || "");
@@ -657,10 +714,11 @@ function scoreSellingConfidence({
   const rawLower = raw.toLowerCase();
   const tokens = spaced.split(/\s+/).filter(Boolean);
   const hasPrivateOrBio = PRIVATE_HANDOFF_RE.test(spaced);
+  const useCompactMatch = shouldUseCompactSellingMatch(raw, spaced);
   if (!hasBroadSellIntent && !(hasItemSignal && (hasMarketSignal || hasPrivateOrBio))) return 0;
 
   const hasFuzzyIntent = hasApproxToken(tokens, SELL_FUZZY_INTENT_TERMS);
-  const hasCompactIntent = compactContainsApproxTerm(condensed, SELL_FUZZY_INTENT_TERMS);
+  const hasCompactIntent = useCompactMatch && compactContainsApproxTerm(condensed, SELL_FUZZY_INTENT_TERMS);
   const hasWantOffer = WANT_OFFER_RE.test(spaced);
   const hasQuestionTone =
     hasQuestionPunctuation(raw) ||
@@ -669,9 +727,9 @@ function scoreSellingConfidence({
     SELL_STRONG_INTENT_RE.test(spaced) ||
     /\b(?:wts|wtb)\b/.test(spaced) ||
     /f+o+r+s+a+l+e+/.test(condensed) ||
-    SELL_CONDENSED_INTENT_RE.test(condensed) ||
+    (useCompactMatch && SELL_CONDENSED_INTENT_RE.test(condensed)) ||
     hasFuzzyIntent;
-  const hasCondensedIntent = SELL_CONDENSED_INTENT_RE.test(condensed);
+  const hasCondensedIntent = useCompactMatch && SELL_CONDENSED_INTENT_RE.test(condensed);
   const hasPriceSignal = /\$\s*\d/.test(raw) || SELL_PRICE_RE.test(rawLower);
   const hasPrivateTradeSignal =
     hasPrivateOrBio &&
@@ -700,15 +758,16 @@ function detectSellingSignal(content) {
   const condensed = buildSellingCondensedText(content);
   if (!spaced || !condensed) return null;
   const tokens = spaced.split(/\s+/).filter(Boolean);
+  const useCompactMatch = shouldUseCompactSellingMatch(content, spaced);
   if (hasSellAntiContext(rawLower, spaced, condensed)) return null;
   if (isKiciaLegitPurchaseIntent([content])) return null;
   if (isSafePurchaseMethodQuestion([content])) return null;
 
   const hasExplicitOffer = SELL_OFFER_PATTERNS.some((pattern) => pattern.test(spaced));
   const hasFuzzyIntent = hasApproxToken(tokens, SELL_FUZZY_INTENT_TERMS);
-  const hasCompactIntent = compactContainsApproxTerm(condensed, SELL_FUZZY_INTENT_TERMS);
+  const hasCompactIntent = useCompactMatch && compactContainsApproxTerm(condensed, SELL_FUZZY_INTENT_TERMS);
   const hasExactIntent = SELL_BROAD_INTENT_RE.test(spaced);
-  const hasCondensedIntent = SELL_CONDENSED_INTENT_RE.test(condensed);
+  const hasCondensedIntent = useCompactMatch && SELL_CONDENSED_INTENT_RE.test(condensed);
   const hasObfuscatedIntent = (hasFuzzyIntent || hasCompactIntent || hasCondensedIntent) && !hasExactIntent;
   const hasBroadSellIntent =
     hasExplicitOffer ||
@@ -718,9 +777,9 @@ function detectSellingSignal(content) {
     hasCompactIntent;
   const hasItemSignal =
     SELL_ITEM_RE.test(spaced) ||
-    SELL_CONDENSED_ITEM_RE.test(condensed) ||
+    (useCompactMatch && SELL_CONDENSED_ITEM_RE.test(condensed)) ||
     hasApproxToken(tokens, SELL_FUZZY_ITEM_TERMS) ||
-    compactContainsApproxTerm(condensed, SELL_FUZZY_ITEM_TERMS);
+    (useCompactMatch && compactContainsApproxTerm(condensed, SELL_FUZZY_ITEM_TERMS));
   const hasShortContextItem = SELL_SHORT_CONTEXT_ITEM_RE.test(spaced);
   const hasMarketSignal =
     SELL_MARKET_RE.test(rawLower) ||
@@ -758,11 +817,14 @@ function detectSellingSignal(content) {
       SELL_PRICE_RE.test(rawLower)
     );
   const hasBarterLikeItemSignal =
-    /\bfor\b/.test(spaced) &&
     (hasEffectiveItemSignal || hasShortContextItem) &&
-    (/\b(?:kicia|kiciahook|premium|prem|prm|robux|ue|config|cfg|account)\b/.test(spaced) || hasMarketSignal);
+    hasConcreteItemForItemSignal(spaced, {
+      hasMarketSignal,
+      hasBroadIntent: hasBroadSellIntent,
+      hasPrivateHandoff
+    });
   const hasSafeContext = hasSafeSupportOrGameplayContext(spaced);
-  const hasJoinedObfuscatedDeal = hasObfuscatedIntent && hasCondensedIntent && hasEffectiveItemSignal;
+  const hasJoinedObfuscatedDeal = useCompactMatch && hasObfuscatedIntent && hasCondensedIntent && hasEffectiveItemSignal;
   const hasActionableDeal = hasActionableDealLanguage(spaced) || hasExplicitOffer || hasPrivateMarketItemSignal || hasMarketItemSignal || hasBarterLikeItemSignal;
 
   if (hasSafeContext && !hasActionableDeal && !hasJoinedObfuscatedDeal) {
@@ -831,17 +893,23 @@ function getScamTradeTextFeatures(text) {
   const spaced = buildSellingSpacedText(text);
   const condensed = buildSellingCondensedText(text);
   const tokens = spaced.split(/\s+/).filter(Boolean);
+  const useCompactMatch = shouldUseCompactSellingMatch(text, spaced);
   const intentTokens = new Set(["sell", "selling", "seller", "sold", "buy", "buying", "buyer", "trade", "trading", "trader", "swap", "swapping", "exchange", "exchanging", "give", "giving", "offer", "offering", "wts", "wtb", "for", "sale"]);
   const objectishTokens = tokens.filter((token) => !intentTokens.has(token) && token.length > 1);
   const hasPriceSignal = /\$\s*\d/.test(text) || SELL_PRICE_RE.test(rawLower);
   const hasShortItemSignal = SELL_SHORT_CONTEXT_ITEM_RE.test(spaced);
   const hasFuzzyIntent = hasApproxToken(tokens, SELL_FUZZY_INTENT_TERMS);
-  const hasCompactIntent = compactContainsApproxTerm(condensed, SELL_FUZZY_INTENT_TERMS);
+  const hasCompactIntent = useCompactMatch && compactContainsApproxTerm(condensed, SELL_FUZZY_INTENT_TERMS);
   const hasExactIntent = SELL_BROAD_INTENT_RE.test(spaced);
-  const hasCondensedIntent = SELL_CONDENSED_INTENT_RE.test(condensed);
+  const hasCondensedIntent = useCompactMatch && SELL_CONDENSED_INTENT_RE.test(condensed);
   const hasObfuscatedIntent = (hasFuzzyIntent || hasCompactIntent || hasCondensedIntent) && !hasExactIntent;
-  const hasFuzzyItem = hasApproxToken(tokens, SELL_FUZZY_ITEM_TERMS) || compactContainsApproxTerm(condensed, SELL_FUZZY_ITEM_TERMS);
-  const baseProtectedItemSignal = SELL_ITEM_RE.test(spaced) || SELL_CONDENSED_ITEM_RE.test(condensed) || hasFuzzyItem;
+  const hasFuzzyItem =
+    hasApproxToken(tokens, SELL_FUZZY_ITEM_TERMS) ||
+    (useCompactMatch && compactContainsApproxTerm(condensed, SELL_FUZZY_ITEM_TERMS));
+  const baseProtectedItemSignal =
+    SELL_ITEM_RE.test(spaced) ||
+    (useCompactMatch && SELL_CONDENSED_ITEM_RE.test(condensed)) ||
+    hasFuzzyItem;
   const hasConfigAlias = hasSuspiciousConfigAlias(spaced, {
     hasObfuscatedIntent,
     hasMarketSignal: SELL_MARKET_RE.test(rawLower) || SELL_MARKET_RE.test(spaced) || hasPriceSignal,
@@ -872,10 +940,15 @@ function getScamTradeTextFeatures(text) {
       hasAvailabilityQuestion ||
       /\b(?:send|drop|share|slide|give|need|want|looking\s+for|has|have|got)\b/.test(spaced)
     );
+  const hasMarketSignal =
+    SELL_MARKET_RE.test(rawLower) || SELL_MARKET_RE.test(spaced) || SELL_MONEY_EMOJI_RE.test(text) || hasPriceSignal;
   const hasProtectedItemForItemSignal =
-    /\bfor\b/.test(spaced) &&
     (hasProtectedItemSignal || hasShortItemSignal) &&
-    (/\b(?:kicia|kiciahook|premium|prem|prm|robux|ue|config|cfg|account|money)\b/.test(spaced) || SELL_MONEY_EMOJI_RE.test(text));
+    hasConcreteItemForItemSignal(spaced, {
+      hasMarketSignal,
+      hasBroadIntent: hasExactIntent || hasCondensedIntent || hasFuzzyIntent || hasCompactIntent,
+      hasPrivateHandoff
+    });
   return {
     rawLower,
     spaced,
@@ -886,7 +959,7 @@ function getScamTradeTextFeatures(text) {
     hasBroadIntent: hasExactIntent || hasCondensedIntent || hasFuzzyIntent || hasCompactIntent,
     hasItemSignal: hasProtectedItemSignal,
     hasShortItemSignal,
-    hasMarketSignal: SELL_MARKET_RE.test(rawLower) || SELL_MARKET_RE.test(spaced) || SELL_MONEY_EMOJI_RE.test(text) || hasPriceSignal,
+    hasMarketSignal,
     hasPriceSignal: hasPriceSignal || SELL_MONEY_EMOJI_RE.test(text),
     hasPrivateHandoff,
     hasPrivatePurchaseSignal,
@@ -895,7 +968,7 @@ function getScamTradeTextFeatures(text) {
     hasBarterSignal,
     hasProtectedItemForItemSignal,
     hasAvailabilityQuestion,
-    hasJoinedObfuscatedDeal: hasObfuscatedIntent && hasCondensedIntent && hasProtectedItemSignal,
+    hasJoinedObfuscatedDeal: useCompactMatch && hasObfuscatedIntent && hasCondensedIntent && hasProtectedItemSignal,
     hasDeicticDealSignal,
     hasQuestionTone: hasQuestionPunctuation(text) || MARKET_QUESTION_RE.test(spaced),
     hasOfferTone,
@@ -1048,8 +1121,6 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
       (
         combinedHasProtectedDealItem ||
         previousHasProtectedDealContext ||
-        latestFeatures.hasPrivateHandoff ||
-        latestFeatures.hasOfferTone ||
         latestFeatures.hasPrivatePurchaseSignal ||
         latestFeatures.hasPrivateOfferSignal ||
         latestFeatures.hasPrivateResourceRequestSignal ||
@@ -1071,10 +1142,12 @@ function detectScamTradeCandidateContext(messageTexts, repliedToMessage = null) 
     combinedFeatures.hasBroadIntent &&
     (
       combinedFeatures.hasItemSignal ||
-      combinedFeatures.hasPrivateHandoff ||
-      combinedFeatures.hasOfferTone ||
+      combinedFeatures.hasPrivatePurchaseSignal ||
+      combinedFeatures.hasPrivateOfferSignal ||
+      combinedFeatures.hasPrivateResourceRequestSignal ||
       combinedFeatures.hasBarterSignal ||
       combinedFeatures.hasProtectedItemForItemSignal ||
+      (combinedFeatures.hasDeicticDealSignal && combinedFeatures.hasOfferTone) ||
       (combinedFeatures.hasPriceSignal && combinedHasProtectedDealItem)
     )
   ) {
@@ -2358,11 +2431,6 @@ function collectContentSignals(content, { kb, runtimeStatus, contentFilterRules 
   const suspiciousSignal = detectSuspiciousSignal(content);
   if (suspiciousSignal) signals.push(suspiciousSignal);
 
-  if (kb && runtimeStatus) {
-    const fakeInfoSignal = detectFakeInfoSignal(content, { kb, runtimeStatus });
-    if (fakeInfoSignal) signals.push(fakeInfoSignal);
-  }
-
   return signals;
 }
 
@@ -2606,7 +2674,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   if (
     localResult?.verdict === false &&
     (localResult.confidence || 0) >= 92 &&
-    (!hasAiRequiredSignals || localResult.stage === "policy")
+    (!hasAiRequiredSignals || localResult.stage === "policy" || (localResult.confidence || 0) >= 97)
   ) {
     await sendLog(message.guild, buildScamAiClearedLogPanel({
       message,
@@ -2843,7 +2911,7 @@ async function maybeHandleModerationWatch(message, {
     const scamContext = buildScamAiContext({ message, recentMessages: recentMessageEntries, repliedToMessage });
     let resolvedKb = kb || null;
     const hasLink = mightContainLink(message.content);
-    if (!resolvedKb && (hasLink || mightContainFakeInfo(message.content))) {
+    if (!resolvedKb && hasLink) {
       resolvedKb = await fetchKbFn().catch(() => null);
     }
     const contentFilterRules = await listContentFilterRules().catch((err) => {
@@ -3321,6 +3389,7 @@ function resetModerationState() {
 
 module.exports = {
   detectSellingSignal,
+  getScamTradeTextFeatures,
   detectContextualSellingSignal,
   detectProhibitedCommerceSignal,
   detectScamTradeCandidateContext,

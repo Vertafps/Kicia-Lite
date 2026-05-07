@@ -26,6 +26,7 @@ const { maybeHandleLockCommand } = require("./handlers/lockdown");
 const { maybeHandleRoleCommand } = require("./handlers/role-assignment");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
 const { maybeHandleStatusCommand } = require("./handlers/status");
+const { maybeHandleOutageDetection } = require("./outage-detector");
 const {
   cleanupExpiredModerationActions,
   flushRestrictedEmojiDatabaseNow,
@@ -309,12 +310,13 @@ client.on(Events.MessageCreate, async (message) => {
     if (await maybeHandleControlCommand(message)) return;
     if (await maybeHandleRoleCommand(message)) return;
     if (await maybeHandleModerationWatch(message)) return;
+    if (await maybeHandleOutageDetection(message)) return;
+    if (await maybeHandleStatusCommand(message)) return;
 
     if (isNoResponseMessage(message)) {
       return;
     }
 
-    if (await maybeHandleStatusCommand(message)) return;
     if (message.channel.isDMBased()) {
       await handleDm(message);
       return;
@@ -349,7 +351,8 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
     if (oldContent !== null && oldContent === newContent) return;
 
     await maybeEnforceNicknameOnMessage(message).catch(() => null);
-    await maybeHandleModerationWatch(message);
+    if (await maybeHandleModerationWatch(message)) return;
+    await maybeHandleOutageDetection(message);
   }, {
     message: newMessage
   });

@@ -153,7 +153,7 @@ const SAFE_SAMPLES = [
   "warning do not click that nitro link"
 ];
 
-const KICIA_BRAND_RE = /\b(?:kicia|kiciahook|kcia|kicka)\b/i;
+const KICIA_BRAND_RE = /\b(?:kicia|kiciahook|kcia|kicka|kh)\b/i;
 const KICIA_PURCHASE_RE =
   /\b(?:buy|buying|bought|purchase|purchasing|pay|paid|payment|price|prices|cost|costs|shop|store|premium|prem|prm|license|licence|key|subscription|sub|upgrade|get|getting)\b/i;
 const KICIA_DEAL_RISK_RE =
@@ -191,6 +191,16 @@ const EXPLANATION_VERB_RE =
   /\b(?:buy|go|check|open|use|ask|look|find|purchase|pay|get|through|from|in|inside|under)\b/i;
 const SELF_PRIVATE_DEAL_RE =
   /\b(?:dm me|dms me|message me|msg me|pm me|inbox me|add me|from me|in my bio|my profile|my shop|my server|my reseller|i sell|i can sell|i got|i have)\b/i;
+const SAFE_RESOURCE_REQUEST_RE =
+  /\b(?:give|send|drop)\s+(?:me\s+)?(?:free\s+)?(?:executor|exec|config|cfg|confg|configuration)\b/i;
+const SAFE_PRIVATE_LINK_REQUEST_RE =
+  /\b(?:send|give|drop)\s+(?:me\s+)?(?:the\s+)?(?:link|invite)\b.{0,70}\b(?:server|executor|exec|exe)\b.{0,30}\bdms?\b/i;
+const SAFE_PREMIUM_PURCHASE_RE =
+  /\b(?:how|where|can|could|do|does|what)\b.{0,70}\b(?:buy|purchase|get|pay|price|cost)\b.{0,50}\b(?:premium|prem|prm|license|key|early access|kicia|kiciahook|kh)\b|\bhow\s+much\s+for\s+(?:premium|prem|prm|license|key|kicia|kiciahook|kh)\b|\b(?:i|im|i m)\s+(?:need|want|wanna|wana|just\s+want|jst\s+wana)\b.{0,50}\b(?:buy|get|purchase)\b.{0,50}\b(?:premium|prem|prm|pre|early access|ealy access|kh|kicia)\b/i;
+const SAFE_META_PURCHASE_RE =
+  /\b(?:buy|purchase|get)\s+it\s+from\s+the\s+(?:person|one|owner|dev|developer|maker)\b|\b(?:reseller|resellers|reselling|reslling)\b.{0,90}\b(?:work|works|need|needs|buy|stock|codes?|price|official|person|maker)\b|\b(?:reselling|reslling|resell(?:er|ers)?)\b.{0,60}\bvirtual\s+client\b/i;
+const SAFE_CONTEXT_DISCUSSION_RE =
+  /\b(?:best|working)\s+(?:config|configs|cfg|cfgs|confg|confgs)\b|\b(?:config|configs|cfg|cfgs|confg|confgs)\s+for\s+(?:it|kicia|kiciahook|ue)\b|\b(?:v3|kicia|kiciahook|premium|prem|prm)\b.{0,35}\b(?:released|dropped|users?|ragebot|comes|coming)\b|\b(?:premium|prem|prm)\b.{0,35}\b(?:back|ver|version|do|does|possible)\b|\b(?:ty|thanks|thank you)\b.{0,35}\b(?:untimeout|untimouting|untime?out|unmuting|unmute)\b|\bwhich\s+(?:exec|execs|executor|executors)\s+work\s+for\s+kicia\b|\bgive\s+me\s+a\s+valid\s+answer\b|\bi\s+use\s+it\s+for\s+crypto\s+business\b/i;
 const CRYPTO_INVEST_RE =
   /\b(?:invest|investing|investment|returns?|profit|profits|passive\s+income|signal\s+group|crypto\s+group|double\s+your|triple\s+your|guaranteed|100x|pump|trading\s+group|i\s+made\s+\d+|send\s+\d+\s+get)\b/i;
 const GIVEAWAY_PHISH_RE =
@@ -237,8 +247,11 @@ function normalizeClassifierText(value) {
     .replace(/\backounts?\b/g, "account")
     .replace(/\bconfg+z*\b/g, "config")
     .replace(/\bconfigz+\b/g, "config")
+    .replace(/\bpriemium\b/g, "premium")
     .replace(/\bprm\b/g, "prem")
+    .replace(/\bpre\b/g, "prem")
     .replace(/\bkcia\b/g, "kicia")
+    .replace(/\bkh\b/g, "kicia")
     .replace(/\bkicka\b/g, "kicia")
     .trim();
 }
@@ -246,7 +259,8 @@ function normalizeClassifierText(value) {
 function isKiciaLegitPurchaseIntent(input) {
   const parts = Array.isArray(input) ? input : [input];
   const text = normalizeClassifierText(parts.filter(Boolean).join(" "));
-  if (!KICIA_BRAND_RE.test(text) || !KICIA_PURCHASE_RE.test(text)) {
+  const hasServerProduct = KICIA_BRAND_RE.test(text) || /\b(?:premium|prem|prm|license|licence|key|early access)\b/.test(text);
+  if (!hasServerProduct || !KICIA_PURCHASE_RE.test(text)) {
     return false;
   }
 
@@ -351,6 +365,7 @@ function extractPolicyIntent(context = {}, options = {}) {
   const userMessages = Array.isArray(context.userMessages) ? context.userMessages : [];
   const rawUserText = userMessages.join(" ");
   const userText = normalizeClassifierText(userMessages.join(" "));
+  const replyText = normalizeClassifierText(context.repliedToMessage?.content || "");
   const fullText = normalizeClassifierText(buildContextText(context));
   const signalConfidence = Number(options.strongestSignal?.confidence || 0);
   if (!userText && !fullText) return null;
@@ -387,6 +402,25 @@ function extractPolicyIntent(context = {}, options = {}) {
     return localVerdict(explanationResult);
   }
 
+  if (
+    (
+      SAFE_RESOURCE_REQUEST_RE.test(userText) ||
+      SAFE_PRIVATE_LINK_REQUEST_RE.test(userText) ||
+      SAFE_PREMIUM_PURCHASE_RE.test(userText) ||
+      SAFE_META_PURCHASE_RE.test(userText) ||
+      SAFE_CONTEXT_DISCUSSION_RE.test(userText)
+    ) &&
+    (!PRIVATE_HANDOFF_RE.test(userText) || SAFE_PRIVATE_LINK_REQUEST_RE.test(userText)) &&
+    !/\b(?:selling|sell|trading|trade|wts|wtb|from me|cheap|cheaper|paypal|cashapp|crypto|moneytoken|robux)\b/i.test(userText)
+  ) {
+    return localVerdict({
+      verdict: false,
+      confidence: 96,
+      score: 0.03,
+      reason: "Support, purchase, or resource request wording without private deal evidence."
+    });
+  }
+
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(userText);
   const hasOfficialRoute = OFFICIAL_ROUTE_RE.test(userText);
   const hasQuestionTone = QUESTION_START_RE.test(userText) || /\?$/.test(userText);
@@ -408,6 +442,10 @@ function extractPolicyIntent(context = {}, options = {}) {
     (hasProtectedItem || hasDeicticItem || hasKicia);
   const hasPrivateOfferHandoff = hasPrivateHandoff && hasOfferTone && (hasProtectedItem || hasDeicticItem);
   const hasTradeOffer = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i.test(userText) && hasOfferTone;
+  const replyAsksForRiskResource =
+    PRIVATE_HANDOFF_RE.test(userText) &&
+    /\b(?:where|send|give|drop|get|need|want|looking for|has|have|got|link|download)\b/i.test(replyText) &&
+    /\b(?:executor|exec|script|config|cfg|account|acc|key|link|download|server)\b/i.test(replyText);
   const hasGenericPricedSale =
     hasDirectOffer &&
     /\bmoneytoken\b/i.test(userText) &&
@@ -425,6 +463,15 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 93,
       score: 0.07,
       reason: "Meta-discussion, report, or policy question rather than target-user deal intent."
+    });
+  }
+
+  if (replyAsksForRiskResource) {
+    return localVerdict({
+      verdict: null,
+      confidence: 72,
+      score: 0.5,
+      reason: "Private handoff reply to a risky resource request needs remote AI confirmation."
     });
   }
 
@@ -467,7 +514,11 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
-  if (CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText) && hasPrivateHandoff) {
+  const hasBenignReturnPhrase =
+    /\bin return\b/i.test(userText) &&
+    !/\b(?:crypto|invest|investment|profit|profits|guaranteed|signal|100x|double|triple|pump)\b/i.test(userText);
+
+  if (!hasBenignReturnPhrase && CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText) && hasPrivateHandoff) {
     return localVerdict({
       verdict: true,
       confidence: 95,
@@ -477,6 +528,7 @@ function extractPolicyIntent(context = {}, options = {}) {
   }
 
   if (
+    !hasBenignReturnPhrase &&
     CRYPTO_INVEST_RE.test(userText) &&
     (
       hasPrivateHandoff ||
@@ -492,7 +544,7 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
-  if (CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText)) {
+  if (!hasBenignReturnPhrase && CRYPTO_INVEST_RE.test(userText) && MONEY_TEST_RE.test(rawUserText)) {
     return localVerdict({
       verdict: null,
       confidence: 85,
@@ -741,8 +793,10 @@ function classifyScamContextLocally(context = {}, options = {}) {
   const inquiryWithoutOffer =
     /^(?:anyone|does anyone|who|where|how|can i|am i allowed|is it allowed|do you|is there)\b/.test(normalized) &&
     !/\b(?:my|mine|from me|dm me|dms|message me|msg me|taking offers|for sale|wts|wtb|cheap|paypal|cashapp|crypto|middleman|mm)\b/.test(normalized);
+  const actionableLocalSurface = hasActionableLocalScamSurface(normalized);
   const highRiskSignal =
     signalConfidence >= 86 &&
+    actionableLocalSurface &&
     /\b(?:dm|dms|paypal|cashapp|crypto|middleman|account|accounts|acc|config|configs|cfg|robux|nitro|moneytoken)\b/.test(normalized);
 
   if (inquiryWithoutOffer && !highRiskSignal) {
@@ -756,7 +810,6 @@ function classifyScamContextLocally(context = {}, options = {}) {
     };
   }
 
-  const actionableLocalSurface = hasActionableLocalScamSurface(normalized);
   if ((score >= 0.93 && actionableLocalSurface) || highRiskSignal) {
     return {
       verdict: true,

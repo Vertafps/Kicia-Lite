@@ -270,6 +270,14 @@ async function sendLockAuditLog(message, panel) {
   }
 }
 
+async function sendAutomaticLockAuditLog(guild, panel, sendLog = sendLogPanel) {
+  try {
+    await sendLog(guild, panel);
+  } catch (err) {
+    recordRuntimeEvent("warn", "auto-lock-audit-log", err?.message || err);
+  }
+}
+
 async function applyLockState(channels, desiredState, actorId, actionLabel, previousStates) {
   const changed = [];
   const skipped = [];
@@ -309,6 +317,119 @@ async function rollbackLockState(channels, previousStates, actionLabel) {
       { reason: `rollback after failed ${actionLabel}` }
     ).catch(() => null);
   }
+}
+
+async function applyAutomaticLockdown(guild, {
+  actorId = "auto-detection",
+  actor = "Auto Detection",
+  reason = "automatic outage detection",
+  sendLog = sendLogPanel
+} = {}) {
+  if (!guild) {
+    return {
+      ok: false,
+      command: "lock",
+      actor,
+      channels: [],
+      failures: [],
+      error: "missing guild"
+    };
+  }
+
+  const resolved = await resolveTargetChannels(guild);
+  const expectedTargets = getChannelLockTargets().length;
+  if (resolved.failures.length || resolved.channels.length !== expectedTargets) {
+    const error = "target resolution failed";
+    await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+      command: "lock",
+      actor,
+      ...resolved,
+      error
+    }), sendLog);
+
+    return {
+      ok: false,
+      command: "lock",
+      actor,
+      ...resolved,
+      error
+    };
+  }
+
+  const preflightIssues = getPreflightIssues(guild, resolved.channels);
+  if (preflightIssues.length) {
+    const error = preflightIssues.join(" | ");
+    await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+      command: "lock",
+      actor,
+      ...resolved,
+      error
+    }), sendLog);
+
+    return {
+      ok: false,
+      command: "lock",
+      actor,
+      ...resolved,
+      error,
+      preflightIssues
+    };
+  }
+
+  const previousStates = new Map(
+    resolved.channels.map((entry) => [entry.channel.id, getOverwriteSendMessagesState(entry.channel)])
+  );
+  let result;
+  try {
+    result = await applyLockState(
+      resolved.channels,
+      false,
+      actorId,
+      `auto lock: ${reason}`,
+      previousStates
+    );
+  } catch (err) {
+    await rollbackLockState(resolved.channels, previousStates, "auto lock");
+    const error = err?.message || "unknown permission overwrite failure";
+    await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+      command: "lock",
+      actor,
+      ...resolved,
+      error
+    }), sendLog);
+
+    return {
+      ok: false,
+      command: "lock",
+      actor,
+      ...resolved,
+      error,
+      result: {
+        previousStates,
+        changed: [],
+        skipped: []
+      }
+    };
+  }
+
+  const finalAggregateState = getAggregateLockState(resolved.channels);
+  const ok = finalAggregateState.allLocked;
+  const error = ok ? null : "final state verification failed";
+  await sendAutomaticLockAuditLog(guild, buildLockAuditPanel({
+    command: "lock",
+    actor,
+    ...resolved,
+    error
+  }), sendLog);
+
+  return {
+    ok,
+    command: "lock",
+    actor,
+    ...resolved,
+    error,
+    result
+  };
 }
 
 async function maybeHandleLockCommand(message) {
@@ -489,5 +610,6 @@ module.exports = {
   getOverwriteSendMessagesState,
   getAggregateLockState,
   getNextSendMessagesState,
+  applyAutomaticLockdown,
   maybeHandleLockCommand
 };

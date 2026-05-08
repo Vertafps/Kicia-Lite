@@ -31,9 +31,6 @@ const {
   removeModerationWhitelistedUser,
   removeRestrictedEmojiByKey,
   removeTrustedLinkByKey,
-  listContentFilterRules,
-  addContentFilterRule,
-  removeContentFilterRuleById,
   cleanupExpiredModerationActions,
   resetBotPresenceState,
   resetChannelSetting,
@@ -86,9 +83,6 @@ const {
   DEFAULT_NICKNAME_RENAME_SENTINEL,
   buildDefaultBadName
 } = require("../src/nickname-policy");
-const {
-  detectContentFilterSignal
-} = require("../src/content-filter");
 const {
   buildNormalizedTextForms
 } = require("../src/text");
@@ -704,41 +698,6 @@ test("unicode normalizer folds mixed-script and zero-width bypass text", () => {
   assert.equal(buildNormalizedTextForms("т р с о а е б п к").normalized, "t p c o a e b n k");
 });
 
-test("content filter catches obfuscated adult promo and hate-slur variants", () => {
-  const samples = [
-    "şëx ćàm in bîò",
-    "sëḻḻīṉġ ħëṉṯäī in bïø",
-    "sezling ep0rń",
-    "s3x is f@gğy",
-    "ΝΙGGΞζ, ï ḻïķë hâíṟý aşß hółéş, .сumрornniggеr"
-  ];
-
-  for (const sample of samples) {
-    const signal = detectContentFilterSignal(sample);
-    assert.ok(signal, `expected content filter match for ${sample}`);
-    assert.equal(signal.action, "delete");
-    assert.ok(signal.confidence >= 88);
-  }
-});
-
-test("content filter avoids boundary false positives", () => {
-  const safeSamples = [
-    "class",
-    "classic",
-    "pass",
-    "assassin",
-    "assess",
-    "configuration",
-    "normal selling is not allowed",
-    "how do i buy kicia premium from the official store?",
-    "can support help with my configuration?"
-  ];
-
-  for (const sample of safeSamples) {
-    assert.equal(detectContentFilterSignal(sample), null, `unexpected match for ${sample}`);
-  }
-});
-
 test("local scam classifier protects official Kicia purchase questions", () => {
   assert.equal(isKiciaLegitPurchaseIntent(["buying kicia"]), true);
   assert.equal(isKiciaLegitPurchaseIntent(["where can i buy kicia premium"]), true);
@@ -976,72 +935,6 @@ test("premium users use the same scam-trade confidence thresholds as everyone el
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.doesNotMatch(fixture.logs[0].body, /premium member confidence dampened|premium role dampening/i);
-});
-
-test("content filter deletes, replies, and logs obfuscated adult and slur text", async () => {
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("şëx ćàm in bîò, sëḻḻīṉġ ħëṉṯäī in bïø");
-
-  const handled = await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: 5_000
-  });
-
-  assert.equal(handled, true);
-  assert.equal(fixture.timeouts.length, 0);
-  assert.equal(fixture.deleted.length, 1);
-  assert.equal(fixture.replies.length, 1);
-  assert.equal(fixture.replies[0].content, "badie wordi detected, message removed.");
-  assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].header, /Content Filter Delete/i);
-  assert.match(fixture.logs[0].body, /adult promo|adult content/i);
-});
-
-test("content filter catches edited messages from clean text", async () => {
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("hi");
-
-  const cleanHandled = await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: 1_000
-  });
-
-  fixture.message.content = "ΝΙGGΞζ, .сumрornniggеr";
-  const editedHandled = await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: 2_000
-  });
-
-  assert.equal(cleanHandled, false);
-  assert.equal(editedHandled, true);
-  assert.equal(fixture.deleted.length, 1);
-  assert.equal(fixture.timeouts.length, 0);
-  assert.match(fixture.logs[0].body, /hate slur/i);
-});
-
-test("scam trade action wins when bad-word signal is also present", async () => {
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("selling kicia premium cheap, şëx ćàm in bîò");
-
-  const handled = await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    now: 3_000
-  });
-
-  assert.equal(handled, true);
-  assert.equal(fixture.timeouts.length, 1);
-  assert.equal(fixture.deleted.length, 1);
-  assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
-  assert.match(fixture.logs[0].body, /scam\/trade/i);
-  assert.equal(fixture.logs.some((panel) => /Content Filter Alert/i.test(panel.header)), true);
 });
 
 test("toxicity shadow model logs high scores without deleting or timing out", async () => {
@@ -2897,34 +2790,6 @@ test("trusted link database adds and removes links", async () => {
 
   const linksAfterRemove = await listTrustedLinks();
   assert.equal(linksAfterRemove.length, 0);
-});
-
-test("content filter rule database adds, lists, disables, and snapshots custom rules", async () => {
-  await resetRestrictedEmojiDatabaseForTests(testDbPath);
-
-  const added = await addContentFilterRule({
-    term: "custom bad term",
-    category: "custom",
-    normalizedKey: "custombadterm",
-    createdBy: "staff-user"
-  });
-  assert.equal(added.added, true);
-  assert.equal(added.rule.createdBy, "staff-user");
-
-  const rulesAfterAdd = await listContentFilterRules();
-  assert.equal(rulesAfterAdd.length, 1);
-  assert.equal(rulesAfterAdd[0].term, "custom bad term");
-
-  const snapshotAfterAdd = await getRestrictedEmojiDatabaseSnapshot();
-  assert.equal(snapshotAfterAdd.tableCounts.contentFilterRules, 1);
-
-  const removed = await removeContentFilterRuleById(added.rule.id);
-  assert.equal(removed.removed, true);
-  assert.equal((await listContentFilterRules()).length, 0);
-
-  const withDisabled = await listContentFilterRules({ includeDisabled: true });
-  assert.equal(withDisabled.length, 1);
-  assert.equal(withDisabled[0].enabled, false);
 });
 
 test("bot presence state persists in app config and resets to default", async () => {

@@ -208,7 +208,99 @@ const SAFE_SAMPLES = [
   "kicia crashed after injection help",
   "my key expired how do i renew it",
   "kicia premium worth it or nah",
-  "does kicia have a trial or free tier"
+  "does kicia have a trial or free tier",
+  "delete carrot bot and ill give you nitro",
+  "ill give you nitro if you delete that bot",
+  "what if i give you nitro basic",
+  "yeah give me",
+  "you said nitro",
+  "i had a colorbot for valorant and it was def russian spyware",
+  "isnt matcha a rootkit",
+  "isnt wave a rootkit or smth",
+  "is solara safe or sketchy",
+  "is hydrogen legit or virus",
+  "im joking trust",
+  "trust me bro im joking",
+  "i wonder whats spam in here",
+  "how many games do you have",
+  "bet",
+  "vro",
+  "alr",
+  "fair",
+  "lets gooo",
+  "this is all ive ever wanted",
+  "ok can i get fig now big daddy stellurr",
+  "can i fig your con",
+  "can i get fig now",
+  "i have idea for v4 make it so when u die u dont die",
+  "will aimbot aim",
+  "no bro i meant skin changer",
+  "u dont",
+  "an iq to high",
+  "slide lua",
+  "send me lua",
+  "slide a lua script",
+  "someone can give me a rage cfg",
+  "someone give me rage cfg",
+  "any pls can give me rage config",
+  "any plss can give me rage config",
+  "can someone give me a hvh config",
+  "give me a legit cfg",
+  "send me a working config pls",
+  "yo what executors are supported for kicia free on pc",
+  "what executors are supported for kicia",
+  "which executor is supported by kicia",
+  "what exec works for kicia free",
+  "every executor is down rn",
+  "every executor us down",
+  "all executors are broken right now",
+  "downgrade roblox",
+  "downgrade here weao",
+  "downgrade here https rdd weao gg",
+  "click download previous",
+  "click download previous version",
+  "have you a old version of roblox",
+  "do you have old roblox",
+  "anyone got old roblox installer",
+  "m1sery can i give me the old roblox for medium",
+  "m1sery do you have old roblox version",
+  "ss in dm",
+  "sending ss in dm",
+  "ill send screenshot in dm",
+  "who wanna hvh",
+  "who wanna hvh dm me",
+  "wanna hvh dm me",
+  "lf hvh partner dm",
+  "hvh anyone dm",
+  "hvh match dm me",
+  "anyone wanna hvh tonight",
+  "please never talk in here again",
+  "stop talking buddy",
+  "congrats you are on the stupid question list",
+  "no",
+  "and minecraft",
+  "it doesnt inject",
+  "it does not inject",
+  "kicia doesnt inject for me",
+  "cuz i aint buying nitro",
+  "cuz im not buying nitro",
+  "im not selling anything",
+  "i ain't trading anyone here",
+  "i would never sell my account",
+  "we never trade in this server",
+  "stop selling configs in here",
+  "antivirus disable for kicia injection",
+  "exclude solara folder from defender",
+  "matcha needs av off to inject",
+  "matcha is just an executor not a rootkit",
+  "executor flagged as virus by windows",
+  "executor said failed to inject",
+  "kicia free version doesnt work on pc",
+  "the bot keeps crashing every time",
+  "kicia v3 came out yesterday",
+  "is kicia released yet",
+  "thanks for the untimeout",
+  "ty for unmuting me"
 ];
 
 const KICIA_BRAND_RE = /\b(?:kicia|kiciahook|kcia|kicka|kh)\b/i;
@@ -222,7 +314,7 @@ const PRIVATE_HANDOFF_RE = /\b(?:dm|dms|pm|pms|private|privately|message me|msg 
 const ACCOUNT_LENDING_RE = /\b(?:lend|share|give|let\s+me\s+(?:use|borrow)|borrow|trial)\s+(?:me\s+|us\s+|your\s+)?(?:your\s+|the\s+)?(?:account|acc|alts?|key|license|premium|prem|cookie|cookies|token|login|password|cred(?:s|ential)?)\b/i;
 const ACCOUNT_RECOVERY_BAIT_RE = /\b(?:recover|unlock|restore|fix|appeal)\s+(?:my\s+|your\s+)?(?:account|discord|roblox)\b.{0,40}\b(?:dm|message me|inbox|telegram|whatsapp|tg)\b/i;
 const OFFICIAL_ROUTE_RE = /\b(?:official|staff|ticket|tickets|owner|admin|mod|moderator|store|shop|site|website|server|docs?|support|reseller|resellers|channel|channels)\b/i;
-const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why)\b/i;
+const QUESTION_START_RE = /^(?:anyone|does anyone|who|where|how|can i|can we|could i|am i allowed|is it allowed|do you|is there|what|why|someone|somebody|anybody|some1|any1|ne1|any\s*(?:pls|plss|plz|please)|any\s+pls\s+can|please|plss|plz|pls)\b/i;
 const PROTECTED_ITEM_RE =
   /\b(?:kicia|kiciahook|kcia|kicka|account|accounts|akkount|akkounts|ackount|ackounts|acc|alts?|config|configs|confg|confgs|conf|confs|cfg|cfk|figs|script|scripts|hvh|executor|executors|key|keys|license|licence|premium|prem|prm|robux|rbx|nitro|token|cookie|cookies|enhancement|enhancements)\b/i;
 const SHORT_SERVER_ITEM_RE = /\b(?:ue)\b/i;
@@ -232,8 +324,16 @@ const DIRECT_OFFER_RE =
 const DIRECT_SOLICITATION_QUESTION_RE =
   /\b(?:do|would)\s+(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b|\b(?:you|u)\s+(?:want|wanna|wana)\s+(?:to\s+)?(?:buy|trade|swap)\b/i;
 const TRADE_WORD_RE = /\b(?:trade|trading|swap|swapping|exchange|exchanging)\b/i;
-const BARTER_RE =
-  /\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offering)\b.{0,80}\bfor\b/i;
+const TRADE_ITEM_OR_PAYMENT_TERMS =
+  "kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licence|key|keys|account|accounts|akkount|akkounts|ackount|ackounts|acc|alts?|config|configs|confg|confgs|conf|confs|cfg|cfgs|cfk|figs?|script|scripts|hvh|executor|executors|robux|rbx|nitro|ue|enhancement|enhancements|cookie|cookies|token|password|moneytoken|cash|crypto|btc|eth|ltc|usdt|monero|xmr|paypal|cashapp|zelle|venmo|usd|eur|gbp|dollars?|bucks?|volt|wave|hydrogen|codex|solara|velocity|matcha";
+const BARTER_RE = new RegExp(
+  `\\b(?:trade|trading|swap|swapping|exchange|exchanging|give|giving|offering)\\b.{0,40}\\b(?:${TRADE_ITEM_OR_PAYMENT_TERMS})\\b.{0,40}\\bfor\\b.{0,40}\\b(?:${TRADE_ITEM_OR_PAYMENT_TERMS})\\b`,
+  "i"
+);
+const NEGATED_DEAL_RE =
+  /\b(?:i\s+ain'?t|im\s+not|i\s+m\s+not|i\s+aint|cuz\s+i\s+ain'?t|cuz\s+i\s+aint|cuz\s+i'?m\s+not|never\s+gonna|not\s+gonna|wont\s+be|wouldn'?t\s+be|never\s+selling|never\s+buying|never\s+trading|stopped\s+(?:buying|selling|trading))\b.{0,30}\b(?:buying|selling|trading|giving|paying|getting|sending|swap|swapping)\b/i;
+const SUPPORT_CONTEXT_GUARD_RE =
+  /\b(?:supported|support|supports|works|working|work|compatible|compat|usable|usability|use|uses|using|run|runs|running|inject|injects|injecting|injection|load|loads|loading|crash(?:es|ed|ing)?|broken|down|fix|fixes|fixed|fixing|free|free\s+on|free\s+for|detection|detected|undetected|undetect|broken|update|updated|outdated|version|versions|build|installer|setup|installed|installing|launch|launching|launches|antivirus|defender|av\s+off|antivirus\s+off|disable|enable|enabling|disabling|whitelist|exclude|exclusion|allow|reset|reinstall|virus|trojan|rootkit|spyware|valorant|fortnite|minecraft|game|games|player|players)\b/i;
 const KICIA_TRADE_ASSET_RE = /\b(?:kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licence|key|keys|ue)\b/i;
 const TRADE_WARNING_RE =
   /\b(?:do not|don't|dont|never|stop|avoid|against rules?|not allowed|is not allowed|isn't allowed|no|report|reported|warning|warn)\b.{0,80}\b(?:trade|trading|swap|swapping|exchange|exchanging)\b|\b(?:trade|trading|swap|swapping|exchange|exchanging)\b.{0,80}\b(?:against rules?|not allowed|is not allowed|isn't allowed|report|reported|warning|warn)\b/i;
@@ -252,15 +352,22 @@ const EXPLANATION_VERB_RE =
 const SELF_PRIVATE_DEAL_RE =
   /\b(?:dm me|dms me|message me|msg me|pm me|inbox me|add me|from me|in my bio|my profile|my shop|my server|my reseller|i sell|i can sell|i got|i have)\b/i;
 const SAFE_RESOURCE_REQUEST_RE =
-  /\b(?:give|send|drop)\s+(?:me\s+)?(?:free\s+)?(?:executor|exec|config|cfg|confg|configuration)\b/i;
+  /\b(?:give|send|drop|share|slide|gimme|pls\s+give|plss\s+give|plz\s+give|please\s+give|hand|throw|provide)\s+(?:me\s+|us\s+|y'?all\s+)?(?:a\s+|an\s+|the\s+|some\s+|free\s+|valid\s+|good\s+|working\s+|new\s+|old\s+|any\s+|legit\s+|silent\s+|rage\s+|hvh\s+|aim\s+|menu\s+)?(?:[a-z0-9]{2,15}\s+)?(?:executor|exec|execs|config|cfg|cfgs|configs|confg|confgs|configuration|lua|script|scripts|injector|injectors|menu|menus|aimbot|aim|silent|legit|rage)\b/i;
 const SAFE_PRIVATE_LINK_REQUEST_RE =
   /\b(?:send|give|drop)\s+(?:me\s+)?(?:the\s+)?(?:link|invite)\b.{0,70}\b(?:server|executor|exec|exe)\b.{0,30}\bdms?\b/i;
+const SAFE_OLD_VERSION_REQUEST_RE =
+  /\b(?:downgrade|old\s+(?:version|roblox|build|installer)|older\s+(?:version|roblox|build)|previous\s+(?:version|roblox|build)|earlier\s+(?:version|roblox|build))\b|\b(?:got|have|has|need|want|share|drop|give|send|slide|gimme|pls)\s+(?:me\s+|us\s+|y'?all\s+)?(?:a\s+|an\s+|the\s+|some\s+|old\s+|older\s+|previous\s+|earlier\s+)?(?:version|build|installer|setup)\b|\bdo\s+you\s+have\s+(?:a\s+|an\s+|the\s+|some\s+|an?\s+old(?:er)?\s+)?(?:version|build|roblox|installer)\b/i;
+const SAFE_GAMEPLAY_PARTNER_RE =
+  /\b(?:who(?:\s+wants?|\s+wanna|\s+wana|\s+down)?\s+(?:to\s+)?(?:hvh|legit\s+pvp|pvp|deathmatch|1v1|1v1s|matchmaking|match|ffa|rivals)|wanna\s+hvh|hvh\s+anyone|hvh\s+partner|hvh\s+match|hvh\s+session|need\s+hvh|looking\s+for\s+hvh|lf\s+hvh|hvh\s+plz|hvh\s+pls|hvh\s+pls?s?)\b/i;
+const SAFE_EXECUTOR_SUPPORT_QUESTION_RE =
+  /\b(?:what|which|wich|wat|whats|whats\s+the)\s+(?:exec|execs|executor|executors|execu+tor|executers|exe)\s+(?:are\s+|is\s+|gets?\s+|been\s+)?(?:supported|support|supports?|works?|working|compatible|legit|good)\s+(?:for|with|on|by|in|at)\s+(?:kicia|kiciahook|kcia|kicka|kh|the\s+bot|this\s+bot|free|premium)\b|\b(?:supported|works|compatible|legit)\s+(?:exec|execs|executors?|exe)\s+for\s+(?:kicia|kiciahook|kcia|kicka|kh)\b|\bwhat\s+(?:exec|execs|executor|executors)\s+(?:should\s+i\s+use|do\s+i\s+use|to\s+use)\b/i;
+const SAFE_NEGATED_DEAL_RE = NEGATED_DEAL_RE;
 const SAFE_PREMIUM_PURCHASE_RE =
   /\b(?:how|where|can|could|do|does|what)\b.{0,70}\b(?:buy|purchase|get|pay|price|cost)\b.{0,50}\b(?:premium|prem|prm|license|key|early access|kicia|kiciahook|kh)\b|\bhow\s+much\s+for\s+(?:premium|prem|prm|license|key|kicia|kiciahook|kh)\b|\b(?:i|im|i m)\s+(?:need|want|wanna|wana|just\s+want|jst\s+wana)\b.{0,50}\b(?:buy|get|purchase)\b.{0,50}\b(?:premium|prem|prm|pre|early access|ealy access|kh|kicia)\b/i;
 const SAFE_META_PURCHASE_RE =
   /\b(?:buy|purchase|get)\s+it\s+from\s+the\s+(?:person|one|owner|dev|developer|maker)\b|\b(?:reseller|resellers|reselling|reslling)\b.{0,90}\b(?:work|works|need|needs|buy|stock|codes?|price|official|person|maker)\b|\b(?:reselling|reslling|resell(?:er|ers)?)\b.{0,60}\bvirtual\s+client\b/i;
 const SAFE_CONTEXT_DISCUSSION_RE =
-  /\b(?:best|working)\s+(?:config|configs|cfg|cfgs|confg|confgs)\b|\b(?:config|configs|cfg|cfgs|confg|confgs)\s+for\s+(?:it|kicia|kiciahook|ue)\b|\b(?:v3|kicia|kiciahook|premium|prem|prm)\b.{0,35}\b(?:released|dropped|users?|ragebot|comes|coming)\b|\b(?:premium|prem|prm)\b.{0,35}\b(?:back|ver|version|do|does|possible)\b|\b(?:ty|thanks|thank you)\b.{0,35}\b(?:untimeout|untimouting|untime?out|unmuting|unmute)\b|\bwhich\s+(?:exec|execs|executor|executors)\s+work\s+for\s+kicia\b|\bgive\s+me\s+a\s+valid\s+answer\b|\bi\s+use\s+it\s+for\s+crypto\s+business\b/i;
+  /\b(?:best|working)\s+(?:config|configs|cfg|cfgs|confg|confgs)\b|\b(?:config|configs|cfg|cfgs|confg|confgs)\s+for\s+(?:it|kicia|kiciahook|ue)\b|\b(?:v3|kicia|kiciahook|premium|prem|prm)\b.{0,35}\b(?:released|dropped|users?|ragebot|comes|coming)\b|\b(?:premium|prem|prm)\b.{0,35}\b(?:back|ver|version|do|does|possible)\b|\b(?:ty|thanks|thank you)\b.{0,35}\b(?:untimeout|untimouting|untime?out|unmuting|unmute)\b|\bwhich\s+(?:exec|execs|executor|executors)\s+work\s+for\s+kicia\b|\bgive\s+me\s+a\s+valid\s+answer\b|\bi\s+use\s+it\s+for\s+crypto\s+business\b|\b(?:supported|support|supports|works|working|compatible|use|run|inject|broken|down|crash|free)\b.{0,30}\b(?:for|with|on|by)\b.{0,30}\b(?:kicia|kiciahook|kcia|kicka|kh)\b|\bkicia\b.{0,30}\b(?:supports?|works|compatible)\b|\b(?:every|all)\s+executors?\b.{0,40}\b(?:down|broken|crash|not\s+working|offline)\b|\bdowngrade\s+(?:roblox|here|to)\b|\bclick\s+download\s+(?:previous|older|old)\b|\bisnt?\s+\w+\s+(?:a\s+)?(?:rootkit|spyware|trojan|virus|malware)\b|\b(?:colorbot|aimbot|skin\s+changer|injector)\b.{0,30}\b(?:for|in|on)\s+(?:valorant|fortnite|minecraft|cs|csgo|cs2|apex|warzone)\b|\b(?:matcha|wave|hydrogen|codex|solara|velocity|swift)\b.{0,40}\b(?:rootkit|spyware|trojan|virus|malware|safe|sus|sketchy|legit|undetected|detected)\b/i;
 const CRYPTO_INVEST_RE =
   /\b(?:invest|investing|investment|returns?|profit|profits|passive\s+income|signal\s+group|crypto\s+group|double\s+your|triple\s+your|guaranteed|100x|pump|trading\s+group|i\s+made\s+\d+|send\s+\d+\s+get)\b/i;
 const GIVEAWAY_PHISH_RE =
@@ -447,11 +554,48 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
+  if (NEGATED_DEAL_RE.test(rawUserText) || NEGATED_DEAL_RE.test(userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 92,
+      score: 0.05,
+      reason: "Negated deal phrasing — user explicitly disclaims buying/selling/trading."
+    });
+  }
+
+  if (SAFE_EXECUTOR_SUPPORT_QUESTION_RE.test(userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 96,
+      score: 0.03,
+      reason: "Asking which executors are supported by Kicia — support question, not value exchange."
+    });
+  }
+
+  if (SAFE_GAMEPLAY_PARTNER_RE.test(userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 95,
+      score: 0.04,
+      reason: "Looking for HvH/PvP partners, not a sale or trade."
+    });
+  }
+
+  if (SAFE_OLD_VERSION_REQUEST_RE.test(userText)) {
+    return localVerdict({
+      verdict: false,
+      confidence: 94,
+      score: 0.05,
+      reason: "Asking for old Roblox version / downgrade help."
+    });
+  }
+
   if (
     KICIA_VALUE_EXCHANGE_RE.test(userText) &&
     !/\b(?:sell|selling|buy|buying|trade|trading|swap|swapping|exchange|exchanging|give|giving|offer|offering|wts|wtb)\b/i.test(userText) &&
     !META_DISCUSSION_RE.test(userText) &&
-    !/\b(?:allowed|against rules?|not allowed|is not allowed|isn't allowed|report|reported|warning|warn|scam|scams)\b/i.test(userText)
+    !/\b(?:allowed|against rules?|not allowed|is not allowed|isn't allowed|report|reported|warning|warn|scam|scams)\b/i.test(userText) &&
+    !SUPPORT_CONTEXT_GUARD_RE.test(userText)
   ) {
     return localVerdict({
       verdict: true,
@@ -514,7 +658,11 @@ function extractPolicyIntent(context = {}, options = {}) {
 
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(userText);
   const hasOfficialRoute = OFFICIAL_ROUTE_RE.test(userText);
-  const hasQuestionTone = QUESTION_START_RE.test(userText) || /\?$/.test(userText);
+  const hasQuestionTone =
+    QUESTION_START_RE.test(userText) ||
+    /\?$/.test(userText) ||
+    /\?/.test(rawUserText) ||
+    /\?/.test(context.repliedToMessage?.content || "");
   const hasProtectedItem = PROTECTED_ITEM_RE.test(userText);
   const hasShortServerItem = SHORT_SERVER_ITEM_RE.test(userText);
   const hasKiciaTradeAsset = TRADE_WORD_RE.test(userText) && KICIA_TRADE_ASSET_RE.test(userText);
@@ -739,7 +887,23 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
-  if (hasDirectOffer && hasProtectedItem && !(hasQuestionTone && !hasPrivateHandoff && !hasDirectSolicitationQuestion)) {
+  const hasMarketSignalForActionable =
+    PAYMENT_METHOD_RE.test(userText) ||
+    /\b(?:moneytoken|cheap|cheaper|paid|paying|priced|for\s+sale|on\s+sale|reseller|middleman|mm)\b/i.test(userText);
+  const hasExplicitTradeVerb =
+    /\b(?:sell|selling|sold|buy\s+(?:my|from\s+me)|wts|wtb|trade|trading|swap|swapping|exchange|exchanging|reseller|for\s+sale|taking\s+offers)\b/i.test(userText);
+  const hasGiftDealEnvelope =
+    /\b(?:giving|give|offer|offering)\b/i.test(userText) &&
+    (
+      hasMarketSignalForActionable ||
+      hasPrivateHandoff ||
+      /\b(?:dm|dms|message|msg|inbox|add\s+me)\b/i.test(userText)
+    );
+  const hasDirectOfferWithEvidence =
+    hasDirectOffer &&
+    (hasMarketSignalForActionable || hasExplicitTradeVerb || hasGiftDealEnvelope);
+
+  if (hasDirectOfferWithEvidence && hasProtectedItem && !(hasQuestionTone && !hasPrivateHandoff && !hasDirectSolicitationQuestion) && !SUPPORT_CONTEXT_GUARD_RE.test(userText)) {
     return localVerdict({
       verdict: true,
       confidence: 94,
@@ -748,7 +912,7 @@ function extractPolicyIntent(context = {}, options = {}) {
     });
   }
 
-  if (hasBarter && (hasDeicticItem || /\b(?:for|this|that)\b/i.test(userText))) {
+  if (hasBarter && (hasDeicticItem || hasMarketSignalForActionable) && !hasQuestionTone && !SUPPORT_CONTEXT_GUARD_RE.test(userText)) {
     return localVerdict({
       verdict: null,
       confidence: 84,
@@ -845,10 +1009,23 @@ function hasActionableLocalScamSurface(normalizedText) {
   const text = String(normalizedText || "");
   if (!text) return false;
 
+  if (NEGATED_DEAL_RE.test(text)) return false;
+  if (SAFE_GAMEPLAY_PARTNER_RE.test(text)) return false;
+  if (SAFE_EXECUTOR_SUPPORT_QUESTION_RE.test(text)) return false;
+  if (SAFE_OLD_VERSION_REQUEST_RE.test(text)) return false;
+  if (SUPPORT_CONTEXT_GUARD_RE.test(text) && !DIRECT_OFFER_RE.test(text) && !BARTER_RE.test(text)) {
+    return false;
+  }
+
   const hasPrivateHandoff = PRIVATE_HANDOFF_RE.test(text) || SELF_PRIVATE_DEAL_RE.test(text);
   const hasProtectedItem = PROTECTED_ITEM_RE.test(text) || SHORT_SERVER_ITEM_RE.test(text);
   const hasKiciaTradeAsset = TRADE_WORD_RE.test(text) && KICIA_TRADE_ASSET_RE.test(text);
   const hasMarketOffer = DIRECT_OFFER_RE.test(text) || BARTER_RE.test(text);
+  const hasMarketSignal =
+    PAYMENT_METHOD_RE.test(text) ||
+    /\b(?:moneytoken|cheap|cheaper|paid|paying|priced|for\s+sale|on\s+sale|reseller|middleman|mm)\b/.test(text);
+  const hasExplicitTradeVerb =
+    /\b(?:sell|selling|sold|buy\s+(?:my|from\s+me)|wts|wtb|trade|trading|swap|swapping|exchange|exchanging|reseller|for\s+sale|taking\s+offers)\b/.test(text);
   const hasCredentialOrPhish =
     TOKEN_GRAB_RE.test(text) ||
     ACCOUNT_PHISH_RE.test(text) ||
@@ -858,8 +1035,9 @@ function hasActionableLocalScamSurface(normalizedText) {
   return Boolean(
     hasCredentialOrPhish ||
     hasKiciaTradeAsset ||
-    (hasMarketOffer && hasProtectedItem) ||
-    (hasPrivateHandoff && (hasProtectedItem || DEICTIC_ITEM_RE.test(text))) ||
+    (hasMarketOffer && hasProtectedItem && (hasMarketSignal || hasExplicitTradeVerb)) ||
+    (hasPrivateHandoff && hasProtectedItem && (hasMarketSignal || hasExplicitTradeVerb)) ||
+    (hasPrivateHandoff && DEICTIC_ITEM_RE.test(text) && (hasMarketSignal || hasExplicitTradeVerb)) ||
     (/\bmoneytoken\b/.test(text) && hasMarketOffer && hasProtectedItem)
   );
 }

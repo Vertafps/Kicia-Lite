@@ -298,18 +298,6 @@ function createSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS nickname_patterns_pattern_flags_idx
       ON nickname_patterns (pattern, flags);
 
-    CREATE TABLE IF NOT EXISTS content_filter_rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      term TEXT NOT NULL,
-      normalized_key TEXT NOT NULL,
-      category TEXT NOT NULL DEFAULT 'custom',
-      created_at INTEGER NOT NULL,
-      created_by TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS content_filter_rules_key_category_idx
-      ON content_filter_rules (normalized_key, category);
   `);
 
   try {
@@ -479,27 +467,6 @@ function mapNicknamePatternRow(row) {
     renameTo,
     createdAt: Number(row.created_at || 0),
     display: `/${pattern}/${flags} -> ${displayRenameTo}`
-  };
-}
-
-function normalizeContentFilterRuleKey(value) {
-  return String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
-
-function mapContentFilterRuleRow(row) {
-  return {
-    id: Number(row.id || 0),
-    term: String(row.term || ""),
-    normalizedKey: String(row.normalized_key || ""),
-    category: String(row.category || "custom"),
-    createdAt: Number(row.created_at || 0),
-    createdBy: row.created_by ? String(row.created_by) : null,
-    enabled: Boolean(row.enabled)
   };
 }
 
@@ -1219,164 +1186,6 @@ async function removeNicknamePatternById(id) {
   };
 }
 
-async function listContentFilterRules({ includeDisabled = false, limit = 100 } = {}) {
-  const db = await getDatabase();
-  const safeLimit = Math.min(250, Math.max(1, Math.round(Number(limit) || 100)));
-  return getRows(
-    db,
-    `
-      SELECT id, term, normalized_key, category, created_at, created_by, enabled
-      FROM content_filter_rules
-      ${includeDisabled ? "" : "WHERE enabled = 1"}
-      ORDER BY created_at ASC, id ASC
-      LIMIT ?
-    `,
-    [safeLimit]
-  ).map(mapContentFilterRuleRow);
-}
-
-async function addContentFilterRule({
-  term,
-  category = "custom",
-  normalizedKey = null,
-  createdBy = null,
-  createdAt = Date.now()
-} = {}) {
-  const safeTerm = String(term || "").replace(/\s+/g, " ").trim();
-  const safeCategory = String(category || "custom").trim().toLowerCase().replace(/[\s-]+/g, "_") || "custom";
-  const safeKey = String(normalizedKey || normalizeContentFilterRuleKey(safeTerm)).trim();
-  if (!safeTerm || !safeKey) {
-    throw new Error("Missing content filter rule term");
-  }
-
-  const db = await getDatabase();
-  const existing = getRows(
-    db,
-    `
-      SELECT id, term, normalized_key, category, created_at, created_by, enabled
-      FROM content_filter_rules
-      WHERE normalized_key = ? AND category = ?
-      LIMIT 1
-    `,
-    [safeKey, safeCategory]
-  )[0];
-
-  if (existing) {
-    if (!Number(existing.enabled)) {
-      db.run(
-        `
-          UPDATE content_filter_rules
-          SET term = ?,
-              created_by = ?,
-              created_at = ?,
-              enabled = 1
-          WHERE id = ?
-        `,
-        [
-          safeTerm,
-          createdBy ? String(createdBy) : null,
-          Math.max(1, Math.round(Number(createdAt) || Date.now())),
-          Number(existing.id)
-        ]
-      );
-      schedulePersist(db, { immediate: true });
-      const restored = getRows(
-        db,
-        `
-          SELECT id, term, normalized_key, category, created_at, created_by, enabled
-          FROM content_filter_rules
-          WHERE id = ?
-          LIMIT 1
-        `,
-        [Number(existing.id)]
-      )[0];
-      return {
-        added: true,
-        restored: true,
-        rule: mapContentFilterRuleRow(restored)
-      };
-    }
-
-    return {
-      added: false,
-      restored: false,
-      rule: mapContentFilterRuleRow(existing)
-    };
-  }
-
-  const now = Math.max(1, Math.round(Number(createdAt) || Date.now()));
-  db.run(
-    `
-      INSERT INTO content_filter_rules (
-        term,
-        normalized_key,
-        category,
-        created_at,
-        created_by,
-        enabled
-      ) VALUES (?, ?, ?, ?, ?, 1)
-    `,
-    [
-      safeTerm,
-      safeKey,
-      safeCategory,
-      now,
-      createdBy ? String(createdBy) : null
-    ]
-  );
-  schedulePersist(db, { immediate: true });
-  const inserted = getRows(
-    db,
-    `
-      SELECT id, term, normalized_key, category, created_at, created_by, enabled
-      FROM content_filter_rules
-      WHERE normalized_key = ? AND category = ?
-      LIMIT 1
-    `,
-    [safeKey, safeCategory]
-  )[0];
-
-  return {
-    added: true,
-    restored: false,
-    rule: mapContentFilterRuleRow(inserted)
-  };
-}
-
-async function removeContentFilterRuleById(id) {
-  const normalizedId = Math.max(0, Math.round(Number(id) || 0));
-  if (!normalizedId) {
-    throw new Error("Missing content filter rule id");
-  }
-
-  const db = await getDatabase();
-  const existing = getRows(
-    db,
-    `
-      SELECT id, term, normalized_key, category, created_at, created_by, enabled
-      FROM content_filter_rules
-      WHERE id = ?
-      LIMIT 1
-    `,
-    [normalizedId]
-  )[0];
-
-  if (!existing || !Number(existing.enabled)) {
-    return {
-      removed: false,
-      rule: existing ? mapContentFilterRuleRow(existing) : null
-    };
-  }
-
-  db.run("UPDATE content_filter_rules SET enabled = 0 WHERE id = ?", [normalizedId]);
-  schedulePersist(db, { immediate: true });
-
-  return {
-    removed: true,
-    rule: mapContentFilterRuleRow(existing)
-  };
-}
-
 function trimAuditText(value, max = 900) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text || text.length <= max) return text;
@@ -2003,7 +1812,6 @@ async function getRestrictedEmojiDatabaseSnapshot() {
   const trustedLinks = await listTrustedLinks();
   const moderationWhitelist = await listModerationWhitelistedUsers();
   const nicknamePatterns = await listNicknamePatterns();
-  const contentFilterRules = await listContentFilterRules({ includeDisabled: true });
   const emojiTimeoutMs = await getEmojiTimeoutMs();
   const dailyStats = await getDailyStatsSnapshot();
   const channelSettings = await listChannelSettings();
@@ -2015,7 +1823,6 @@ async function getRestrictedEmojiDatabaseSnapshot() {
     trustedLinks,
     moderationWhitelist,
     nicknamePatterns,
-    contentFilterRules,
     channelSettings,
     dailyStats,
     tableCounts: {
@@ -2024,7 +1831,6 @@ async function getRestrictedEmojiDatabaseSnapshot() {
       trustedLinks: Number(getScalarValue(db, "SELECT COUNT(*) FROM trusted_links") || 0),
       moderationWhitelist: Number(getScalarValue(db, "SELECT COUNT(*) FROM moderation_whitelist") || 0),
       nicknamePatterns: Number(getScalarValue(db, "SELECT COUNT(*) FROM nickname_patterns") || 0),
-      contentFilterRules: Number(getScalarValue(db, "SELECT COUNT(*) FROM content_filter_rules WHERE enabled = 1") || 0),
       dailyUsers: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_user_message_stats") || 0),
       dailyChannels: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_channel_message_stats") || 0),
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
@@ -2085,9 +1891,6 @@ module.exports = {
   isModerationWhitelistedUser,
   addModerationWhitelistedUser,
   removeModerationWhitelistedUser,
-  listContentFilterRules,
-  addContentFilterRule,
-  removeContentFilterRuleById,
   listNicknamePatterns,
   addNicknamePattern,
   removeNicknamePatternById,

@@ -52,6 +52,7 @@ const { getRuntimeStatus } = require("../runtime-status");
 const { classifyScamContextWithGemini } = require("../scam-ai");
 const {
   classifyScamContextLocally,
+  classifyScamContextLocallyAsync,
   isExplanationResponseIntent,
   isKiciaLegitPurchaseIntent,
   isSafePurchaseMethodQuestion
@@ -2746,7 +2747,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   const needsAi = signals.some((signal) => signal.requiresAi) || Boolean(strongest);
   if (!needsAi) return signals;
 
-  const localResult = classifyScamContextLocally(scamContext, { strongestSignal: strongest });
+  const localResult = await classifyScamContextLocallyAsync(scamContext, { strongestSignal: strongest });
   const localVerdict = buildClassifierVerdictResult(localResult);
   if (localResult?.verdict === true && (localResult.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD) {
     const confirmedSignals = signals.map((signal) => ({

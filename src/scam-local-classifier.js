@@ -88,7 +88,18 @@ const SCAM_SAMPLES = [
   "100x returns guaranteed signal group",
   "i made 500 in 24 hours invest with me",
   "dm me for my crypto group guaranteed profit",
-  "send me 50 get 200 back paypal crypto"
+  "send me 50 get 200 back paypal crypto",
+  "got cheap kicia premium hmu",
+  "anyone wanna trade configs dm",
+  "swap my account for a wave key",
+  "selling kicia key for cheap cashapp only",
+  "got a spare kicia license wanna trade",
+  "wts kicia acc cheap af dm",
+  "trading wave key for robux dm",
+  "lmk if u wanna buy my config bundle",
+  "selling executor configs bundle dm price",
+  "anyone buying kicia keys dm offers",
+  "swap acc for premium access dm me"
 ];
 
 const SAFE_SAMPLES = [
@@ -150,7 +161,54 @@ const SAFE_SAMPLES = [
   "how do i report a scam investment post",
   "someone said free nitro is that real",
   "is this crypto offer legit or a scam",
-  "warning do not click that nitro link"
+  "warning do not click that nitro link",
+  "anyone know how to disable defender for kicia",
+  "my antivirus keeps eating the dll",
+  "wave executor isnt loading anymore",
+  "best executor right now ngl",
+  "where do i download kicia",
+  "kicia key system not giving me a key",
+  "bypass keeps failing on this update",
+  "my exploit crashes on inject",
+  "is solara still safe to use",
+  "how to fix the script error in kicia",
+  "kicia not working after update help",
+  "does solara work with kicia rn",
+  "hydrogen executor wont inject",
+  "codex executor crashing every time",
+  "velocity executor says failed to inject",
+  "how do i get a key for kicia",
+  "kicia key page not loading",
+  "do i need to turn off av for kicia",
+  "which executor works best for kicia",
+  "kicia script not running in game",
+  "does kicia work on wave executor",
+  "my dll got flagged by windows security",
+  "getting detection bypass help pls",
+  "add kicia folder to windows defender exclusions",
+  "whitelist the exe in ur av settings",
+  "turn off realtime protection then run the injector",
+  "disable defender real time protection for it to work",
+  "kicia just needs av off to inject properly",
+  "executor says injection failed what do i do",
+  "how do i bypass the game anticheat",
+  "is kicia detection safe rn or not",
+  "wave wont launch says blocked by av",
+  "codex saying injection error on latest update",
+  "solara is flagging as virus is that normal",
+  "where is the kicia download link",
+  "link for kicia not working",
+  "kicia server invite expired",
+  "free executor that works with kicia",
+  "does kicia have a free version",
+  "what executors are supported by kicia",
+  "kicia config not loading in game",
+  "how to import kicia configs",
+  "best hvh config for kicia rn",
+  "kicia crashed after injection help",
+  "my key expired how do i renew it",
+  "kicia premium worth it or nah",
+  "does kicia have a trial or free tier"
 ];
 
 const KICIA_BRAND_RE = /\b(?:kicia|kiciahook|kcia|kicka|kh)\b/i;
@@ -906,8 +964,32 @@ function classifyScamContextLocally(context = {}, options = {}) {
   };
 }
 
+async function classifyScamContextLocallyAsync(context = {}, options = {}) {
+  const syncResult = classifyScamContextLocally(context, options);
+  if (syncResult.verdict !== null) return syncResult;
+
+  let embedClassifier;
+  try {
+    embedClassifier = require("./scam-embeddings-classifier");
+  } catch {
+    return syncResult;
+  }
+
+  if (!embedClassifier.isEmbedderReady()) return syncResult;
+
+  try {
+    const embedResult = await embedClassifier.classifyScamContextWithEmbeddings(context);
+    if (embedResult.verdict !== null) return embedResult;
+  } catch {
+    // fall through to original result
+  }
+
+  return syncResult;
+}
+
 module.exports = {
   classifyScamContextLocally,
+  classifyScamContextLocallyAsync,
   extractPolicyIntent,
   getExplanationResponseIntent,
   isExplanationResponseIntent,
@@ -915,5 +997,7 @@ module.exports = {
   isSafeSecurityDisableSupport,
   isKiciaLegitPurchaseIntent,
   normalizeClassifierText,
-  probabilityForScam
+  probabilityForScam,
+  SCAM_SAMPLES,
+  SAFE_SAMPLES
 };

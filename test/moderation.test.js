@@ -3029,3 +3029,60 @@ test("restricted reactions on staff messages remove the reaction and DM warn the
   const reactionAlert = snapshot.moderation.find((entry) => entry.eventKey === "restricted_reaction_alert");
   assert.equal(reactionAlert?.eventCount, 1);
 });
+
+test("pipeline works correctly when scam embedder is absent (no download)", async () => {
+  const { resetScamEmbedStateForTests } = require("../src/scam-embeddings-classifier");
+  resetScamEmbedStateForTests();
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("selling kicia config cheap dm me");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      throw new Error("remote AI should not be called");
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(fixture.deleted.length, 1);
+  assert.equal(fixture.logs.length, 1);
+  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
+});
+
+test("executor support wording is not flagged as scam when embedder is absent", async () => {
+  const { resetScamEmbedStateForTests } = require("../src/scam-embeddings-classifier");
+  resetScamEmbedStateForTests();
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("wave executor isnt loading help");
+
+  const handled = await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => ({ attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" })
+  });
+
+  assert.equal(handled, false);
+});
+
+test("antivirus disable request is never flagged as scam even with embedder absent", async () => {
+  const { resetScamEmbedStateForTests } = require("../src/scam-embeddings-classifier");
+  resetScamEmbedStateForTests();
+  await clearDailyStatsTracking(1);
+  const fixture = buildModerationMessage("disable windows defender so the executor works");
+  let aiCalls = 0;
+
+  await maybeHandleModerationWatch(fixture.message, {
+    kb,
+    runtimeStatus: "UP",
+    sendLog: fixture.sendLog,
+    classifyScam: async () => {
+      aiCalls++;
+      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
+    }
+  });
+
+  assert.equal(aiCalls, 0, "antivirus support phrasing should not reach AI");
+});

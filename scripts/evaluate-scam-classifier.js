@@ -6,6 +6,11 @@ process.env.KB_URL = process.env.KB_URL || "https://example.com/kb.json";
 const { listScamDecisionAudit } = require("../src/restricted-emoji-db");
 const { classifyScamContextLocally } = require("../src/scam-local-classifier");
 
+// TODO(human): --mode embeddings-only ablation requires the model to download on first run (~23 MB).
+// When ready, wire classifyScamContextWithEmbeddings here after calling loadOrBuildCache().
+const MODE_EMBEDDINGS_ONLY = process.argv.includes("--mode") &&
+  process.argv[process.argv.indexOf("--mode") + 1] === "embeddings-only";
+
 const DEFAULT_LIMIT = 250;
 const POSITIVE_LABELS = new Set(["true_positive", "missed"]);
 const NEGATIVE_LABELS = new Set(["false_positive", "safe"]);
@@ -42,6 +47,10 @@ function verdictKey(value) {
 }
 
 async function main() {
+  if (MODE_EMBEDDINGS_ONLY) {
+    console.error("--mode embeddings-only: not yet implemented (see TODO in this file)");
+    process.exit(1);
+  }
   const limit = parseLimit(process.argv.slice(2));
   const rows = await listScamDecisionAudit({ limit, labeledOnly: true });
   const evaluated = rows

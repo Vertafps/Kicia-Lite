@@ -35,6 +35,7 @@ const {
   hydrateChannelSettings
 } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
+const { loadOrBuildCache: loadScamEmbedCache } = require("./scam-embeddings-classifier");
 const { safeReply } = require("./utils/respond");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
@@ -204,6 +205,12 @@ client.once(Events.ClientReady, async (readyClient) => {
     fetchKb().catch((err) => console.warn("Scheduled KB refresh failed:", err.message));
   }, 10 * 60 * 1000);
   timer.unref?.();
+
+  loadScamEmbedCache().then(() => {
+    recordRuntimeEvent("info", "scam-embed-cache", "prototype index ready");
+  }).catch((err) => {
+    recordRuntimeEvent("warn", "scam-embed-cache", err?.message || err);
+  });
 
   await refreshAndReportScamPulse(readyClient, { initial: true });
 

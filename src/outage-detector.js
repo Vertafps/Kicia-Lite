@@ -252,20 +252,15 @@ function formatUnlockResult(unlockResult) {
   return `needs review: ${unlockResult.error || "unknown unlock failure"}`;
 }
 
-function buildOutageGeneralPayload(result, { lockResult } = {}) {
+function buildOutageGeneralPayload() {
   return {
     content: "## 🚨 Issue Detected · [Auto Detect]",
     embeds: [
       buildPanel({
         header: "KiciaHook Issue Detected",
         body: [
-          "Multiple users just reported KiciaHook is not working, so I paused chat while staff verifies.",
-          "",
-          "**What I did**",
-          "- Status set to **Unaware** (pending staff review)",
-          `- Chat lock: ${formatLockResult(lockResult)}`,
-          "",
-          "Hold tight — staff has been pinged. Updates will land here."
+          "An issue with KiciaHook has been detected and is being investigated.",
+          "Chat is paused while staff confirms — hold tight, updates will land here."
         ].join("\n"),
         color: WARN
       })
@@ -448,7 +443,7 @@ async function maybeHandleOutageDetection(message, {
   const generalMessage = await sendConfiguredChannel(
     message.guild,
     getConfiguredChannelId("general"),
-    buildOutageGeneralPayload(result, { lockResult })
+    buildOutageGeneralPayload()
   );
   review.generalMessageRef = generalMessage;
 

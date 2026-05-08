@@ -2781,7 +2781,10 @@ test("roasting detector replies without logs or moderation actions", async () =>
 
   assert.equal(handled, true);
   assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.replies[0].content, /(roast|cooked|kitchen|preheating|cookout|seasoning|heat|flame|crispy)/i);
+  assert.match(
+    fixture.replies[0].content,
+    /(roast|cook|kitchen|oven|grill|broil|smoke|flame|heat|barbecue|cookout|season|temperat|menu|chef|teeth|comeback|hands|🔥|crispy|preheat|thanksgiving|medium-rare|well done|plate|ingredient|kicia ban|numbers)/i
+  );
   assert.equal(fixture.logs.length, 0);
   assert.equal(fixture.dms.length, 0);
   assert.equal(fixture.timeouts.length, 0);

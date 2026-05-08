@@ -1468,7 +1468,8 @@ async function recordScamDecisionAudit(record = {}) {
     ]
   );
   schedulePersist(db);
-  return true;
+  const insertedId = getScalarValue(db, "SELECT last_insert_rowid()");
+  return { id: Number(insertedId || 0) };
 }
 
 async function listScamDecisionAudit({ limit = 10, labeledOnly = false } = {}) {
@@ -1645,7 +1646,8 @@ async function labelScamDecisionAudit({
     updated: true,
     reason: "updated",
     record: mapScamDecisionAuditRow(record),
-    label: normalizedLabel
+    label: normalizedLabel,
+    previousLabel: existing.review_label ? String(existing.review_label) : null
   };
 }
 

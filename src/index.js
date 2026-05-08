@@ -27,6 +27,7 @@ const { maybeHandleRoleCommand } = require("./handlers/role-assignment");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
 const { maybeHandleStatusCommand } = require("./handlers/status");
 const { maybeHandleOutageReviewInteraction } = require("./handlers/outage-review");
+const { maybeHandleScamReviewInteraction } = require("./handlers/scam-review");
 const { maybeHandleOutageDetection } = require("./outage-detector");
 const {
   cleanupExpiredModerationActions,
@@ -391,6 +392,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   await runGuarded("interaction-handler", async () => {
     if (await maybeHandleNicknameModerationInteraction(interaction)) return;
     if (await maybeHandleOutageReviewInteraction(interaction)) return;
+    if (await maybeHandleScamReviewInteraction(interaction)) return;
     if (await maybeHandleModerationLogInteraction(interaction)) return;
   });
 });

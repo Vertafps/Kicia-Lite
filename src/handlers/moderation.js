@@ -22,7 +22,8 @@ const {
 const {
   MODLOG_REVERT_PREFIX,
   MODLOG_VIEW_PREFIX,
-  buildModerationLogButtonRows
+  buildModerationLogButtonRows,
+  buildScamReviewButtonRows
 } = require("../components");
 const {
   detectContentFilterSignal,
@@ -574,7 +575,7 @@ async function recordScamAudit(message, {
 } = {}) {
   const candidate = strongest || signals?.[0] || null;
   try {
-    await recordScamDecisionAudit({
+    const result = await recordScamDecisionAudit({
       createdAt: now,
       guildId: message.guildId || message.guild?.id || null,
       channelId: message.channelId || null,
@@ -590,8 +591,10 @@ async function recordScamAudit(message, {
       replyContent: scamContext?.repliedToMessage?.content || "",
       recentMessages: scamContext?.userMessages || []
     });
+    return { auditId: result?.id || null };
   } catch (err) {
     recordRuntimeEvent("warn", "scam-audit", err?.message || err);
+    return { auditId: null };
   }
 }
 
@@ -2165,16 +2168,10 @@ function buildSellingDmPayload({ message, signals, state, durationMs }) {
         thumbnail: resolveAvatarURL(message.author),
         body: [
           isProhibitedSale
-            ? `i timed you out for ${formatDuration(durationMs)} because your recent message looked like prohibited-goods sale behavior`
-            : `i timed you out for ${formatDuration(durationMs)} because your recent message looked like scam/trade behavior`,
-          isProhibitedSale
-            ? "please keep prohibited goods, illegal sales, and unsafe marketplace behavior out of the chat"
-            : "please keep buying, selling, trading, account deals, and private download handoffs out of the chat",
-          `**Channel:** <#${message.channelId}>`,
-          `**Confidence:** ${state.confidence}%`,
-          `**Trigger:** ${state.trigger}`,
-          `**Why:**\n${formatSignalReasons(signals)}`,
-          `**Message:** ${trimExcerpt(message.content, 180)}`
+            ? "Hey! I noticed your recent messages looked like a prohibited-goods sale."
+            : "Hey! I noticed your recent messages looked like scam/trade behavior.",
+          "The following action has been taken:\n- Messages deleted\n- Timeout (" + formatDuration(durationMs) + ")\n- Staff have been notified",
+          "If you think this is a mistake, please contact a staff member."
         ].join("\n\n"),
         color: DANGER
       })
@@ -2211,7 +2208,8 @@ function buildSellingLogPanel({
   timeoutResult,
   dmSent,
   durationMs,
-  recentMessages = []
+  recentMessages = [],
+  auditId = null
 }) {
   const isProhibitedSale = hasProhibitedSaleSignal(signals);
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
@@ -2225,7 +2223,7 @@ function buildSellingLogPanel({
       ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | delete ${deleteText} | dm ${dmSent ? "sent" : "not sent"}`
       : `delete ${deleteText} | log only`;
 
-  return {
+  const panel = {
     header: isProhibitedSale
       ? state.action === "timeout" ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
       : state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
@@ -2244,6 +2242,8 @@ function buildSellingLogPanel({
     ].filter(Boolean).join("\n\n"),
     color: state.action === "timeout" ? DANGER : WARN
   };
+  if (auditId) panel.components = buildScamReviewButtonRows(auditId);
+  return panel;
 }
 
 function formatAiVerdictLines(signals) {
@@ -2397,26 +2397,24 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
       buildPanel({
         header: isTimeout ? "Suspicious Message Timeout" : "Suspicious Message Warning",
         thumbnail: resolveAvatarURL(message.author),
-        body: [
-          isTimeout
-            ? highConfidence
-              ? `i timed you out for ${formatDuration(durationMs)} because this message looked highly suspicious`
-              : `i timed you out for ${formatDuration(durationMs)} because multiple recent messages looked suspicious`
-            : "i flagged one of your recent messages as suspicious",
-          "please do not repeat this kind of message; staff have been notified",
-          `**Channel:** <#${message.channelId}>`,
-          `**Confidence:** ${confidence}%`,
-          `**Suspicious Hits:** ${count}`,
-          `**Why:**\n${formatSignalReasons(signals)}`,
-          `**Message:** ${trimExcerpt(message.content, 180)}`
-        ].join("\n\n"),
+        body: isTimeout
+          ? [
+              "Hey! One or more of your recent messages were flagged as suspicious.",
+              "The following action has been taken:\n- Timeout (" + formatDuration(durationMs) + ")\n- Staff have been notified",
+              "If you think this is a mistake, please contact a staff member."
+            ].join("\n\n")
+          : [
+              "Hey! One of your recent messages was flagged as suspicious.",
+              "The following action has been taken:\n- Message removed\n- Staff have been notified",
+              "Please don't repeat this kind of message."
+            ].join("\n\n"),
         color: isTimeout ? DANGER : WARN
       })
     ]
   };
 }
 
-function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs, deleteResult = null }) {
+function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs, deleteResult = null, auditId = null }) {
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
   const action =
     state.action === "timeout"
@@ -2425,7 +2423,7 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
         ? `delete ${formatDeleteSummary(deleteResult)} | dm warning ${dmSent ? "sent" : "not sent"}`
         : "log only";
 
-  return {
+  const panel = {
     header:
       state.action === "timeout"
         ? "Suspicious Message Timeout"
@@ -2446,6 +2444,8 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
     ].filter(Boolean).join("\n\n"),
     color: state.action === "timeout" ? DANGER : WARN
   };
+  if (auditId) panel.components = buildScamReviewButtonRows(auditId);
+  return panel;
 }
 
 function buildContentFilterLogPanel({ message, signals, deleteResult, publicReplySent = false, toxicityShadow = null }) {
@@ -2599,7 +2599,8 @@ async function handleSellingMessage(message, signals, {
   timeoutMs = SELLING_TIMEOUT_MS,
   now = Date.now(),
   replyPublic = true,
-  recentMessages = []
+  recentMessages = [],
+  auditId = null
 } = {}) {
   const state = rememberSellingMessage(message, signals, now);
   const effectiveTimeoutMs = Number(state.durationMs || 0) > 0 ? Number(state.durationMs) : timeoutMs;
@@ -2635,7 +2636,8 @@ async function handleSellingMessage(message, signals, {
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs,
-    recentMessages
+    recentMessages,
+    auditId
   });
   await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
     actionType: getSellingActionType(signals),
@@ -2708,7 +2710,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   sendClearLog,
   now = Date.now()
 } = {}) {
-  if (!signals.length) return [];
+  if (!signals.length) return { signals: [], auditId: null };
   const sendClearedLog = sendClearLog || (sendLog === sendLogPanel ? sendIgnoreLogPanel : sendLog);
 
   const strongest = signals.reduce(
@@ -2732,7 +2734,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       reason: `policy-confirmed unsafe commerce: ${signal.reason}`,
       ai: policyVerdict
     }));
-    await recordScamAudit(message, {
+    const { auditId } = await recordScamAudit(message, {
       action: "local_policy_true",
       handled: true,
       signals: confirmedSignals,
@@ -2741,11 +2743,11 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       localResult: policyResult,
       now
     });
-    return confirmedSignals;
+    return { signals: confirmedSignals, auditId };
   }
 
   const needsAi = signals.some((signal) => signal.requiresAi) || Boolean(strongest);
-  if (!needsAi) return signals;
+  if (!needsAi) return { signals, auditId: null };
 
   const localResult = await classifyScamContextLocallyAsync(scamContext, { strongestSignal: strongest });
   const localVerdict = buildClassifierVerdictResult(localResult);
@@ -2756,7 +2758,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       reason: `classifier-confirmed scam/trade intent: ${signal.reason}`,
       ai: localVerdict
     }));
-    await recordScamAudit(message, {
+    const { auditId } = await recordScamAudit(message, {
       action: "local_true",
       handled: true,
       signals: confirmedSignals,
@@ -2765,7 +2767,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       localResult,
       now
     });
-    return confirmedSignals;
+    return { signals: confirmedSignals, auditId };
   }
 
   const hasAiRequiredSignals = signals.some((signal) => signal.requiresAi);
@@ -2788,7 +2790,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       localResult,
       now
     });
-    return [];
+    return { signals: [], auditId: null };
   }
 
   const deterministicSignals = signals.filter((signal) =>
@@ -2811,7 +2813,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       reason: `local-confirmed scam/trade intent: ${signal.reason}`,
       ai: deterministicVerdict
     }));
-    await recordScamAudit(message, {
+    const { auditId } = await recordScamAudit(message, {
       action: "local_deterministic_true",
       handled: true,
       signals: confirmedSignals,
@@ -2820,7 +2822,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       localResult: deterministicResult,
       now
     });
-    return confirmedSignals;
+    return { signals: confirmedSignals, auditId };
   }
 
   const aiResult = await classifyScam(scamContext, { now });
@@ -2831,7 +2833,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       reason: `AI-confirmed scam/trade intent: ${signal.reason}`,
       ai: aiResult
     }));
-    await recordScamAudit(message, {
+    const { auditId } = await recordScamAudit(message, {
       action: "ai_true",
       handled: true,
       signals: confirmedSignals,
@@ -2841,7 +2843,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       aiResult,
       now
     });
-    return confirmedSignals;
+    return { signals: confirmedSignals, auditId };
   }
 
   if (aiResult?.verdict === false) {
@@ -2860,7 +2862,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       aiResult,
       now
     });
-    return [];
+    return { signals: [], auditId: null };
   }
 
   if (aiResult?.attempted && aiResult.skipped && aiResult.skipped !== "missing_key") {
@@ -2870,7 +2872,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   // Local development or missing AI key keeps the deterministic guard working.
   if (!aiResult?.attempted && aiResult?.skipped === "missing_key") {
     const fallbackSignals = signals.filter((signal) => !signal.requiresAi || (signal.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
-    await recordScamAudit(message, {
+    const { auditId } = await recordScamAudit(message, {
       action: "missing_key_fallback",
       handled: Boolean(fallbackSignals.length),
       signals: fallbackSignals.length ? fallbackSignals : signals,
@@ -2880,13 +2882,13 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       aiResult,
       now
     });
-    return fallbackSignals;
+    return { signals: fallbackSignals, auditId: fallbackSignals.length ? auditId : null };
   }
 
   // If Gemini is configured but unavailable/rate-limited, only act on very
   // strong deterministic evidence. Ambiguous scam candidates wait for AI.
   const fallbackSignals = signals.filter((signal) => !signal.requiresAi && (signal.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD);
-  await recordScamAudit(message, {
+  const { auditId } = await recordScamAudit(message, {
     action: aiResult?.skipped ? `ai_${aiResult.skipped}` : "ai_no_verdict",
     handled: Boolean(fallbackSignals.length),
     signals: fallbackSignals.length ? fallbackSignals : signals,
@@ -2896,7 +2898,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     aiResult,
     now
   });
-  return fallbackSignals;
+  return { signals: fallbackSignals, auditId: fallbackSignals.length ? auditId : null };
 }
 
 async function handleSuspiciousMessage(message, signals, {
@@ -2920,6 +2922,17 @@ async function handleSuspiciousMessage(message, signals, {
   };
   const shouldDelete = state.action === "timeout" || state.action === "warn";
   const deletePlan = buildDeletePlanSummary(recentMessages, message, shouldDelete);
+
+  const { auditId } = await recordScamAudit(message, {
+    action: `suspicious_${state.action}`,
+    handled: state.action === "timeout" || state.action === "warn",
+    signals,
+    strongest: null,
+    scamContext: null,
+    localResult: null,
+    aiResult: null,
+    now
+  });
 
   if (state.action === "timeout") {
     timeoutResult = await tryTimeoutMessageMember(
@@ -2963,7 +2976,8 @@ async function handleSuspiciousMessage(message, signals, {
     timeoutResult,
     dmSent,
     durationMs: effectiveTimeoutMs,
-    deleteResult: deletePlan
+    deleteResult: deletePlan,
+    auditId: (state.action === "timeout" || state.action === "warn") ? auditId : null
   });
   await sendModerationLogWithTools(sendLog, message.guild, message, panel, {
     actionType: "suspicious",
@@ -3081,21 +3095,22 @@ async function maybeHandleModerationWatch(message, {
       signal.type !== "selling" && signal.type !== "content_filter"
     );
 
-    const confirmedSellingSignals = sellingSignals.length
+    const { signals: confirmedSellingSignals, auditId: sellingAuditId } = sellingSignals.length
       ? await confirmScamTradeSignals(message, sellingSignals, scamContext, {
           classifyScam,
           sendLog,
           sendClearLog,
           now
         })
-      : [];
+      : { signals: [], auditId: null };
 
     if (confirmedSellingSignals.length) {
       const state = await handleSellingMessage(message, confirmedSellingSignals, {
         sendLog,
         now,
         replyPublic: !suspiciousSignals.length,
-        recentMessages: recentMessageEntries
+        recentMessages: recentMessageEntries,
+        auditId: sellingAuditId
       });
       clearRecentUserMessagesFor(message);
       publicReplySent = publicReplySent || state.publicReplySent;
@@ -3495,5 +3510,9 @@ module.exports = {
   maybeHandleModerationLogInteraction,
   observeRaidMessage,
   resetModerationState,
-  maybeHandleModerationWatch
+  maybeHandleModerationWatch,
+  buildSellingDmPayload,
+  buildSuspiciousDmPayload,
+  buildSellingLogPanel,
+  buildSuspiciousLogPanel
 };

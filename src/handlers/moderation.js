@@ -1933,10 +1933,12 @@ function withModerationLogTools(panel, {
     ? `Context + undo controls expire ${formatModerationActionReviewWindow(expiresAt)}`
     : `Context review expires ${formatModerationActionReviewWindow(expiresAt)}`;
 
+  const existingRows = Array.isArray(panel.components) ? panel.components : [];
+  const toolRows = buildModerationLogButtonRows(actionId, { canRevert });
   return {
     ...panel,
     extra: [panel.extra, reviewNote].filter(Boolean).join(" | "),
-    components: buildModerationLogButtonRows(actionId, { canRevert })
+    components: [...existingRows, ...toolRows].slice(0, 5)
   };
 }
 

@@ -118,8 +118,19 @@ async function maybeHandleScamReviewInteraction(interaction) {
   const footerLine = `Reviewed by ${actorLabel} — marked ${labelDisplay}`;
 
   if (interaction.message?.edit) {
+    const disabledScamRow = buildScamReviewButtonRows(auditId, { disabled: true })[0];
+    const existingRows = Array.isArray(interaction.message.components) ? interaction.message.components : [];
+    const updatedRows = existingRows.map((row) => {
+      const buttons = row?.components || [];
+      const isScamRow = buttons.some((btn) => {
+        const id = btn?.customId || btn?.custom_id || btn?.data?.custom_id || "";
+        return id.startsWith(SCAM_REVIEW_TRUE_PREFIX) || id.startsWith(SCAM_REVIEW_FALSE_PREFIX);
+      });
+      return isScamRow && disabledScamRow ? disabledScamRow : row;
+    });
+
     await interaction.message.edit({
-      components: buildScamReviewButtonRows(auditId, { disabled: true }),
+      components: updatedRows,
       embeds: interaction.message.embeds?.map((embed, index) => {
         if (index !== 0) return embed;
         const existing = embed?.data || embed?.toJSON?.() || embed;

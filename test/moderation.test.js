@@ -2446,10 +2446,12 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.doesNotMatch(fixture.logs[0].body, /Staff Tools/i);
   assert.match(fixture.logs[0].extra, /Context \+ undo controls expire/i);
   const buttons = getPanelButtonJson(fixture.logs[0]);
-  assert.equal(buttons.length, 2);
-  assert.equal(buttons[0].label, "View Context");
-  assert.equal(buttons[1].label, "Undo Timeout");
-  assert.equal(buttons[1].disabled, false);
+  assert.equal(buttons.length, 4);
+  assert.equal(buttons[0].label, "Correct");
+  assert.equal(buttons[1].label, "False Positive");
+  assert.equal(buttons[2].label, "View Context");
+  assert.equal(buttons[3].label, "Undo Timeout");
+  assert.equal(buttons[3].disabled, false);
   const actionId = getActionIdFromPanel(fixture.logs[0], MODLOG_REVERT_PREFIX);
   const action = await getModerationAction(actionId);
   assert.equal(action.actionType, "scam_trade");

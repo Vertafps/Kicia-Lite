@@ -51,10 +51,27 @@ function buildInteraction(customId, {
   userId = "staff-123",
   roleIds = [STAFF_ROLE_ID],
   inGuild = true,
-  existingEmbeds = [{ data: { description: "original body" } }]
+  existingEmbeds = [{ data: { description: "original body" } }],
+  existingComponents = null
 } = {}) {
   const replies = [];
   const edits = [];
+
+  const auditIdFromCustomId =
+    customId?.startsWith?.(SCAM_REVIEW_TRUE_PREFIX)
+      ? customId.slice(SCAM_REVIEW_TRUE_PREFIX.length)
+      : customId?.startsWith?.(SCAM_REVIEW_FALSE_PREFIX)
+        ? customId.slice(SCAM_REVIEW_FALSE_PREFIX.length)
+        : "0";
+
+  const defaultComponents = [
+    {
+      components: [
+        { customId: `${SCAM_REVIEW_TRUE_PREFIX}${auditIdFromCustomId}`, disabled: false },
+        { customId: `${SCAM_REVIEW_FALSE_PREFIX}${auditIdFromCustomId}`, disabled: false }
+      ]
+    }
+  ];
 
   const interaction = {
     customId,
@@ -68,6 +85,7 @@ function buildInteraction(customId, {
     },
     message: {
       embeds: existingEmbeds,
+      components: existingComponents || defaultComponents,
       edit: async (payload) => {
         edits.push(payload);
       }

@@ -79,7 +79,10 @@ function buildStatusReplyPayload(status = getRuntimeStatus()) {
     : status === "UNAWARE"
       ? Array.from({ length: 96 }, (_, i) => (i >= 88 ? "unaware" : "up"))
       : Array.from({ length: 96 }, (_, i) => (i >= 90 ? "down" : i >= 86 ? "unaware" : "up"));
-  const uptime = status === "UP" ? 99.94 : status === "UNAWARE" ? 97.20 : 87.50;
+  const incidents7d = status === "UP" ? 0 : 1;
+  const uptime = incidents7d === 0
+    ? 100
+    : status === "UNAWARE" ? 99.50 : 98.20;
 
   const result = ui.buildStatusEmbed({
     status,
@@ -87,7 +90,7 @@ function buildStatusReplyPayload(status = getRuntimeStatus()) {
     latencyMs: 0,
     ribbon,
     lastDown: status === "UP" ? "—" : "earlier today",
-    incidents7d: status === "UP" ? "0" : "1"
+    incidents7d: String(incidents7d)
   });
 
   return { embed: result.embeds[0], files: result.files };

@@ -249,25 +249,52 @@ test("daily stats embeds show top users and silent staff without counting mods",
   const report = await buildDailyStatsEmbeds(guild, { now: reportTime });
 
   assert.equal(report.embeds.length, 3);
-  const serverDescription = report.embeds[0].data.description;
-  const staffDescription = report.embeds[1].data.description;
-  const moderationDescription = report.embeds[2].data.description;
 
-  assert.match(serverDescription, /Top Users/i);
-  assert.match(serverDescription, /Peak Hours/i);
-  assert.match(serverDescription, /Messages \/ Hour/i);
-  assert.match(serverDescription, /Top Channel Share/i);
-  assert.match(serverDescription, /Most Recent Message/i);
-  assert.match(serverDescription, /Alpha/i);
-  assert.match(staffDescription, /Staff Silent/i);
-  assert.match(staffDescription, /Staff Share of Server Messages/i);
-  assert.match(staffDescription, /no staff messages this window/i);
-  assert.doesNotMatch(staffDescription, /Mod Beta/i);
+  function embedText(embed) {
+    const parts = [];
+    if (embed.data.description) parts.push(embed.data.description);
+    for (const f of (embed.data.fields || [])) {
+      parts.push(f.name);
+      parts.push(f.value);
+    }
+    return parts.join("\n");
+  }
+
+  function embedField(embed, namePattern) {
+    return (embed.data.fields || []).find((f) => namePattern.test(f.name)) || null;
+  }
+
+  const serverText = embedText(report.embeds[0]);
+  const staffText = embedText(report.embeds[1]);
+
+  assert.match(serverText, /Top Users/i);
+  assert.match(serverText, /Peak Hours/i);
+  assert.match(serverText, /Messages \/ Hour/i);
+  assert.match(serverText, /Top Channel Share/i);
+  assert.match(serverText, /Most Recent Message/i);
+  assert.match(serverText, /Alpha/i);
+  assert.match(staffText, /Staff Silent/i);
+  assert.match(staffText, /Staff Share of Server Messages/i);
+  assert.match(staffText, /no staff messages this window/i);
+  assert.doesNotMatch(staffText, /Mod Beta/i);
   assert.match(report.embeds[2].data.title, /Daily Moderation/i);
-  assert.match(moderationDescription, /Link Guard:\*\* 1 total/i);
-  assert.match(moderationDescription, /Suspicious Alerts:\*\* 1 total/i);
-  assert.match(moderationDescription, /Retired Fake Info Alerts:\*\* 1/i);
-  assert.match(moderationDescription, /Scam\/Trade Guard:\*\* 1 total \| 1 timeouts/i);
+
+  const lgField = embedField(report.embeds[2], /link guard/i);
+  assert.ok(lgField, "Link Guard field present");
+  assert.match(lgField.value, /1 total/i);
+
+  const saField = embedField(report.embeds[2], /suspicious alerts/i);
+  assert.ok(saField, "Suspicious Alerts field present");
+  assert.match(saField.value, /1 total/i);
+
+  const fiField = embedField(report.embeds[2], /fake info/i);
+  assert.ok(fiField, "Retired Fake Info Alerts field present");
+  assert.match(fiField.value, /\b1\b/);
+
+  const stField = embedField(report.embeds[2], /scam.*trade/i);
+  assert.ok(stField, "Scam/Trade Guard field present");
+  assert.match(stField.value, /1 total/i);
+  assert.match(stField.value, /1 timeout/i);
 
   const snapshot = await getDailyStatsSnapshot();
   assert.equal(snapshot.staff.length, 1);

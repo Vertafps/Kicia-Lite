@@ -27,7 +27,7 @@ const {
 } = require("../components");
 const { buildNormalizedTextForms } = require("../text");
 const { formatDuration } = require("../duration");
-const { buildPanel, DANGER, INFO, SUCCESS, WARN, resolveAvatarURL } = require("../embed");
+const { buildPanel, DANGER, INFO, SUCCESS, TEAL, WARN, resolveAvatarURL } = require("../embed");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendIgnoreLogPanel, sendLogPanel } = require("../log-channel");
@@ -2128,20 +2128,21 @@ function buildPrimaryAlertHeader(signals) {
 
 function buildSignalAlertPanel(message, signals) {
   const link = buildMessageUrl(message);
-  const reasons = signals.map((signal) => `- ${signal.reason}`).join("\n");
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+  const reasons = signals.map((s) => `- ${s.reason}`).join("\n");
 
   return {
     header: buildPrimaryAlertHeader(signals),
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      "hey, i found something worth checking",
-      `**User:** <@${message.author?.id}>`,
-      `**Channel:** <#${message.channelId}>`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Why:**\n${reasons}`,
-      `**Message:** ${trimExcerpt(message.content)}`
-    ].filter(Boolean).join("\n\n"),
-    color: signals.some((signal) => signal.type === "selling") ? DANGER : WARN
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields: [
+      { name: "User", value: `<@${message.author?.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Jump", value: link ? `[→ Open](${link})` : "—", inline: true },
+      { name: "Why", value: reasons },
+      { name: "Message", value: trimExcerpt(message.content) }
+    ],
+    color: WARN
   };
 }
 
@@ -2170,14 +2171,15 @@ function buildSellingDmPayload({ message, signals, state, durationMs }) {
     embeds: [
       buildPanel({
         header: isProhibitedSale ? "Prohibited Sale Timeout" : "Scam/Trade Timeout",
-        thumbnail: resolveAvatarURL(message.author),
-        body: [
-          isProhibitedSale
-            ? "Hey! I noticed your recent messages looked like a prohibited-goods sale."
-            : "Hey! I noticed your recent messages looked like scam/trade behavior.",
-          "The following action has been taken:\n- Messages deleted\n- Timeout (" + formatDuration(durationMs) + ")\n- Staff have been notified",
-          "If you think this is a mistake, please contact a staff member."
-        ].join("\n\n"),
+        body: isProhibitedSale
+          ? "Your recent messages looked like a prohibited-goods sale."
+          : "Your recent messages looked like scam/trade activity.",
+        fields: [
+          { name: "Timeout", value: formatDuration(durationMs), inline: true },
+          { name: "Messages Deleted", value: "yes", inline: true },
+          { name: "Staff Notified", value: "yes", inline: true },
+          { name: "Next Step", value: "If this was a mistake, contact a staff member in the server." }
+        ],
         color: DANGER
       })
     ]
@@ -2218,33 +2220,36 @@ function buildSellingLogPanel({
 }) {
   const isProhibitedSale = hasProhibitedSaleSignal(signals);
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const confidenceLines = signals
-    .map((signal) => `- ${signal.confidence || 0}% - ${signal.reason}`)
+    .map((s) => `- ${s.confidence || 0}% — ${s.reason}`)
     .join("\n");
   const aiLines = formatAiVerdictLines(signals);
   const deleteText = formatDeleteSummary(deleteResult);
-  const action =
-    state.action === "timeout"
-      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | delete ${deleteText} | dm ${dmSent ? "sent" : "not sent"}`
-      : `delete ${deleteText} | log only`;
+  const actionText = state.action === "timeout"
+    ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
+    : `delete ${deleteText} · log only`;
+
+  const fields = [
+    { name: "User", value: `<@${message.author?.id}>`, inline: true },
+    { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+    { name: "Jump", value: link ? `[→ Open](${link})` : "deleted", inline: true },
+    { name: "Action", value: actionText, inline: true },
+    { name: isProhibitedSale ? "Commerce Hits" : "Scam/Trade Hits", value: `${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`, inline: true },
+    { name: "Trigger", value: String(state.trigger || "watch window"), inline: true },
+    { name: "Why", value: confidenceLines },
+    aiLines ? { name: "AI Scam Verdict", value: aiLines } : null,
+    { name: "Evidence", value: formatSellingEvidence(message, recentMessages) }
+  ].filter(Boolean);
 
   const panel = {
     header: isProhibitedSale
       ? state.action === "timeout" ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
       : state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      `**User:** <@${message.author?.id}>`,
-      `**Channel:** <#${message.channelId}>`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Action:** ${action}`,
-      `**Confidence:** ${state.confidence}%`,
-      `**Trigger:** ${state.trigger}`,
-      `${isProhibitedSale ? "**Unsafe Commerce Hits:**" : "**Scam/Trade Hits:**"} ${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
-      `**Why:**\n${confidenceLines}`,
-      aiLines ? `**AI Scam Verdict:**\n${aiLines}` : null,
-      `**Evidence:**\n${formatSellingEvidence(message, recentMessages)}`
-    ].filter(Boolean).join("\n\n"),
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields,
+    footer: `Confidence: ${state.confidence}%`,
     color: state.action === "timeout" ? DANGER : WARN
   };
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);
@@ -2280,20 +2285,23 @@ function buildClassifierVerdictResult(result) {
 
 function buildScamAiClearedLogPanel({ message, candidateSignal, aiResult }) {
   const link = buildMessageUrl(message);
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+
   return {
     header: "Scam AI Cleared",
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      "scam/trade prefilter asked for a verdict and the classifier returned false",
-      `**User:** <@${message.author?.id}>`,
-      `**Channel:** <#${message.channelId}>`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Candidate:** ${candidateSignal.reason}`,
-      `**AI Answer:** ${aiResult.answer || "FALSE"}`,
-      `**Model:** ${aiResult.model || "Gemini"}`,
-      `**Message:** ${trimExcerpt(message.content)}`
-    ].filter(Boolean).join("\n\n"),
-    color: WARN
+    author: { name: displayName, iconURL: avatar || undefined },
+    body: "prefilter sent this for a verdict — classifier returned false",
+    fields: [
+      { name: "User", value: `<@${message.author?.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Jump", value: link ? `[→ Open](${link})` : "—", inline: true },
+      { name: "AI Answer", value: aiResult.answer || "FALSE", inline: true },
+      { name: "Model", value: aiResult.model || "Gemini", inline: true },
+      { name: "Candidate", value: candidateSignal.reason },
+      { name: "Message", value: trimExcerpt(message.content) }
+    ],
+    color: TEAL
   };
 }
 
@@ -2333,18 +2341,16 @@ function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
     embeds: [
       buildPanel({
         header: isTimeout ? "Link Timeout" : "Link Warning",
-        thumbnail: resolveAvatarURL(message.author),
-        body: [
-          isTimeout
-            ? `i timed you out for ${formatDuration(durationMs)} because that link looked high-risk`
-            : "i removed that link because it looked risky",
-          `**Channel:** <#${message.channelId}>`,
-          `**Threat Level:** ${signal.threatLevel}`,
-          `**Why:**\n${formatBlockedLinkReasons(signal)}`,
-          "**Blocked Link(s):**",
-          shownLinks,
-          "docs links, trusted staff-added links, common safe links, and gif links are allowed"
-        ].join("\n\n"),
+        body: isTimeout
+          ? `Timed out for ${formatDuration(durationMs)} — that link looked high-risk.`
+          : "That link was removed — it looked risky.",
+        fields: [
+          { name: "Threat Level", value: signal.threatLevel, inline: true },
+          { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+          { name: "Why", value: formatBlockedLinkReasons(signal) },
+          { name: "Blocked Link(s)", value: shownLinks || "—" },
+          { name: "Note", value: "docs links, staff-added trusted links, safe domains, and gif links are always allowed." }
+        ],
         color: WARN
       })
     ]
@@ -2353,37 +2359,33 @@ function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
 
 function buildBlockedLinkLogPanel({ message, signal, deleteResult, timeoutResult, dmSent, durationMs }) {
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
-  const isScamPulse = (signal.reasons || []).some((reason) => /FishFish|PhishTank|Scam Pulse/i.test(reason));
-  const shownLinks = signal.blockedLinks
-    .slice(0, 5)
-    .map((entry) => `- ${entry.raw}`)
-    .join("\n");
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+  const isScamPulse = (signal.reasons || []).some((r) => /FishFish|PhishTank|Scam Pulse/i.test(r));
+  const shownLinks = signal.blockedLinks.slice(0, 5).map((e) => `- ${e.raw}`).join("\n");
+  const deleteText = formatDeleteSummary(deleteResult);
+  const actionText = `${signal.action} · timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`;
 
   return {
-    header:
-      isScamPulse && signal.action === "timeout"
-        ? timeoutResult.applied ? "Scam Pulse Timeout" : "Scam Pulse Alert"
-        : signal.action === "timeout"
-          ? timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert"
+    header: isScamPulse && signal.action === "timeout"
+      ? timeoutResult.applied ? "Scam Pulse Timeout" : "Scam Pulse Alert"
+      : signal.action === "timeout"
+        ? timeoutResult.applied ? "Blocked Link Timeout" : "Blocked Link Alert"
         : signal.action === "warn"
           ? "Blocked Link Warning"
           : "Link Review",
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      `**User:** <@${message.author?.id}>`,
-      `**Channel:** <#${message.channelId}>`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Action:** ${signal.action} | timeout ${
-        timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason
-      } | delete ${formatDeleteSummary(deleteResult)} | dm ${dmSent ? "sent" : "not sent"}`,
-      `**Threat:** ${signal.threatLevel} (${signal.confidence || 0}%)`,
-      `**Policy:** docs/trusted/gif/common-safe links pass; risky links escalate by threat${isScamPulse ? "; Scam Pulse matches get the one-week timeout" : ""}`,
-      `**Blocked Link Count:** ${signal.blockedCount}`,
-      `**Why:**\n${formatBlockedLinkReasons(signal)}`,
-      "**Blocked Link(s):**",
-      shownLinks,
-      `**Evidence:** ${trimExcerpt(message.content)}`
-    ].filter(Boolean).join("\n\n"),
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields: [
+      { name: "User", value: `<@${message.author?.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Threat", value: `${signal.threatLevel} (${signal.confidence || 0}%)`, inline: true },
+      { name: "Action", value: actionText, inline: true },
+      { name: "Blocked Count", value: String(signal.blockedCount), inline: true },
+      link ? { name: "Jump", value: `[→ Open](${link})`, inline: true } : null,
+      { name: "Why", value: formatBlockedLinkReasons(signal) },
+      { name: "Blocked Links", value: shownLinks || "—" },
+      { name: "Evidence", value: trimExcerpt(message.content) }
+    ].filter(Boolean),
     color: timeoutResult.applied ? DANGER : WARN
   };
 }
@@ -2401,18 +2403,16 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
     embeds: [
       buildPanel({
         header: isTimeout ? "Suspicious Message Timeout" : "Suspicious Message Warning",
-        thumbnail: resolveAvatarURL(message.author),
         body: isTimeout
-          ? [
-              "Hey! One or more of your recent messages were flagged as suspicious.",
-              "The following action has been taken:\n- Timeout (" + formatDuration(durationMs) + ")\n- Staff have been notified",
-              "If you think this is a mistake, please contact a staff member."
-            ].join("\n\n")
-          : [
-              "Hey! One of your recent messages was flagged as suspicious.",
-              "The following action has been taken:\n- Message removed\n- Staff have been notified",
-              "Please don't repeat this kind of message."
-            ].join("\n\n"),
+          ? "One or more of your recent messages were flagged as suspicious."
+          : "One of your recent messages was flagged as suspicious.",
+        fields: [
+          isTimeout
+            ? { name: "Timeout", value: formatDuration(durationMs), inline: true }
+            : { name: "Action", value: "message removed", inline: true },
+          { name: "Staff Notified", value: "yes", inline: true },
+          { name: "Next Step", value: "If this was a mistake, contact a staff member in the server." }
+        ],
         color: isTimeout ? DANGER : WARN
       })
     ]
@@ -2421,32 +2421,33 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
 
 function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs, deleteResult = null, auditId = null }) {
   const link = deleteResult?.queued ? null : buildMessageUrl(message);
-  const action =
-    state.action === "timeout"
-      ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} | delete ${formatDeleteSummary(deleteResult)} | dm ${dmSent ? "sent" : "not sent"}`
-      : state.action === "warn"
-        ? `delete ${formatDeleteSummary(deleteResult)} | dm warning ${dmSent ? "sent" : "not sent"}`
-        : "log only";
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+  const deleteText = formatDeleteSummary(deleteResult);
+  const actionText = state.action === "timeout"
+    ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
+    : state.action === "warn"
+      ? `delete ${deleteText} · dm warning ${dmSent ? "✓" : "✗"}`
+      : "log only";
 
   const panel = {
-    header:
-      state.action === "timeout"
-        ? "Suspicious Message Timeout"
-        : state.action === "warn"
-          ? "Suspicious Message Warning"
-          : "Suspicious Message Alert",
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      `**User:** <@${message.author?.id}>`,
-      `**Channel:** <#${message.channelId}>`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Action:** ${action}`,
-      `**Confidence:** ${state.confidence || 0}%`,
-      `**Trigger:** ${state.trigger || "watch window"}`,
-      `**Suspicious Hits:** ${state.count} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
-      `**Why:**\n${formatSignalReasons(signals)}`,
-      `**Evidence:** ${trimExcerpt(message.content)}`
-    ].filter(Boolean).join("\n\n"),
+    header: state.action === "timeout"
+      ? "Suspicious Message Timeout"
+      : state.action === "warn"
+        ? "Suspicious Message Warning"
+        : "Suspicious Message Alert",
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields: [
+      { name: "User", value: `<@${message.author?.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Jump", value: link ? `[→ Open](${link})` : "deleted", inline: true },
+      { name: "Action", value: actionText, inline: true },
+      { name: "Hits", value: `${state.count} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`, inline: true },
+      { name: "Trigger", value: String(state.trigger || "watch window"), inline: true },
+      { name: "Why", value: formatSignalReasons(signals) },
+      { name: "Evidence", value: trimExcerpt(message.content) }
+    ],
+    footer: `Confidence: ${state.confidence || 0}%`,
     color: state.action === "timeout" ? DANGER : WARN
   };
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);
@@ -2455,20 +2456,23 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
 
 function buildToxicityShadowReviewPanel({ message, result, forms }) {
   const link = buildMessageUrl(message);
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+
   return {
     header: "Toxicity Shadow Review",
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      "shadow model scored this message high, but deterministic rules did not act",
-      `**User:** <@${message.author?.id}>`,
-      `**Channel:** <#${message.channelId}>`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Model:** ${result.model || "toxicity model"}`,
-      `**Score:** ${result.label || "unknown"} ${result.confidence || 0}%`,
-      `**Mixed Scripts:** ${forms?.scriptMix?.hasMixedScripts ? forms.scriptMix.usedScripts.join(", ") : "no"}`,
-      `**Normalized:** ${trimExcerpt(forms?.normalized || "", 220)}`,
-      `**Evidence:** ${trimExcerpt(message.content)}`
-    ].filter(Boolean).join("\n\n"),
+    author: { name: displayName, iconURL: avatar || undefined },
+    body: "shadow model scored high — deterministic rules didn't act",
+    fields: [
+      { name: "User", value: `<@${message.author?.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Jump", value: link ? `[→ Open](${link})` : "—", inline: true },
+      { name: "Model", value: result.model || "toxicity model", inline: true },
+      { name: "Score", value: `${result.label || "unknown"} ${result.confidence || 0}%`, inline: true },
+      { name: "Mixed Scripts", value: forms?.scriptMix?.hasMixedScripts ? forms.scriptMix.usedScripts.join(", ") : "no", inline: true },
+      { name: "Normalized", value: trimExcerpt(forms?.normalized || "", 220) },
+      { name: "Evidence", value: trimExcerpt(message.content) }
+    ],
     color: WARN
   };
 }
@@ -2478,14 +2482,13 @@ function buildRaidAlertPanel(message, raidAlert) {
 
   return {
     header: "Raid Alert",
-    thumbnail: resolveAvatarURL(message.author),
-    body: [
-      "hey, this looks like a raid wave or copy-paste spam",
-      `**Channel:** <#${message.channelId}>`,
-      `**Users:** ${raidAlert.uniqueUsers}`,
-      link ? `**Jump:** [Open message](${link})` : null,
-      `**Pattern:** ${trimExcerpt(raidAlert.signature, 180)}`
-    ].filter(Boolean).join("\n\n"),
+    body: "copy-paste wave or coordinated spam detected",
+    fields: [
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Unique Users", value: String(raidAlert.uniqueUsers), inline: true },
+      link ? { name: "Jump", value: `[→ Sample](${link})`, inline: true } : null,
+      { name: "Pattern", value: trimExcerpt(raidAlert.signature, 180) }
+    ].filter(Boolean),
     color: DANGER
   };
 }
@@ -3202,16 +3205,16 @@ function formatVisibleActionMessages(messages) {
 function buildActionMessagesPanel(action, visibleMessages) {
   return {
     header: "User Message Context",
-    body: [
-      `**User:** ${action.userId ? `<@${action.userId}>` : action.username || "unknown"}`,
-      action.channelId ? `**Channel:** <#${action.channelId}>` : null,
-      `**Original Action:** ${action.actionLabel}`,
-      `**Review Window:** closes ${formatModerationActionReviewWindow(action.expiresAt)}`,
-      action.messageUrl && !action.deleteApplied ? `**Original Jump:** [Open message](${action.messageUrl})` : null,
-      `**Stored Trigger:** ${trimExcerpt(action.messageContent || "(no text)", 220)}`,
-      `**Saved Evidence:**\n${formatCapturedActionMessages(action)}`,
-      `**Still Visible:**\n${formatVisibleActionMessages(visibleMessages)}`
-    ].filter(Boolean).join("\n\n"),
+    fields: [
+      { name: "User", value: action.userId ? `<@${action.userId}>` : action.username || "unknown", inline: true },
+      action.channelId ? { name: "Channel", value: `<#${action.channelId}>`, inline: true } : null,
+      { name: "Original Action", value: action.actionLabel, inline: true },
+      { name: "Review Window", value: `closes ${formatModerationActionReviewWindow(action.expiresAt)}` },
+      action.messageUrl && !action.deleteApplied ? { name: "Original Jump", value: `[→ Open](${action.messageUrl})` } : null,
+      { name: "Stored Trigger", value: trimExcerpt(action.messageContent || "(no text)", 220) },
+      { name: "Saved Evidence", value: formatCapturedActionMessages(action) },
+      { name: "Still Visible", value: formatVisibleActionMessages(visibleMessages) }
+    ].filter(Boolean),
     color: INFO
   };
 }
@@ -3243,19 +3246,15 @@ async function resolveActionUser(interaction, action, member) {
 }
 
 function buildRevertUserPayload({ action, actor }) {
-  const actorLabel = actor?.id
-    ? `<@${actor.id}>`
-    : actor?.username || actor?.tag || "staff";
+  const actorLabel = actor?.id ? `<@${actor.id}>` : actor?.username || actor?.tag || "staff";
   return {
     embeds: [
       buildPanel({
-        header: "Action Reverted",
-        body: [
-          `Your action was reverted by: ${actorLabel}`,
-          "Sorry for the mistake on my end.",
-          `**Original Action:** ${action.actionLabel}`,
-          action.channelId ? `**Channel:** <#${action.channelId}>` : null
-        ].filter(Boolean).join("\n\n"),
+        header: "Timeout Cleared",
+        body: `Your timeout was cleared by ${actorLabel}. Sorry for the wrong call.`,
+        fields: action.channelId ? [
+          { name: "Original Channel", value: `<#${action.channelId}>`, inline: true }
+        ] : [],
         color: SUCCESS
       })
     ],
@@ -3266,17 +3265,16 @@ function buildRevertUserPayload({ action, actor }) {
 function buildRevertLogPanel({ action, actor, dmSent }) {
   return {
     header: "Moderation Action Reverted",
-    body: [
-      "staff reverted a moderation timeout from the log controls",
-      `**User:** ${action.userId ? `<@${action.userId}>` : action.username || "unknown"}`,
-      `**Reverted By:** ${actor?.id ? `<@${actor.id}>` : actor?.username || "staff"}`,
-      action.channelId ? `**Channel:** <#${action.channelId}>` : null,
-      `**Original Action:** ${action.actionLabel}`,
-      `**Original Timeout:** ${formatDuration(action.timeoutMs || 0)}`,
-      action.messageUrl ? `**Original Jump:** [Open trigger](${action.messageUrl})` : null,
-      `**User DM:** ${dmSent ? "sent" : "not sent"}`,
-      "**Cleanup:** review record removed from SQLite"
-    ].filter(Boolean).join("\n\n"),
+    body: "staff reverted a moderation timeout from the log controls",
+    fields: [
+      { name: "User", value: action.userId ? `<@${action.userId}>` : action.username || "unknown", inline: true },
+      { name: "Reverted By", value: actor?.id ? `<@${actor.id}>` : actor?.username || "staff", inline: true },
+      action.channelId ? { name: "Channel", value: `<#${action.channelId}>`, inline: true } : null,
+      { name: "Original Action", value: action.actionLabel, inline: true },
+      { name: "Original Timeout", value: formatDuration(action.timeoutMs || 0), inline: true },
+      { name: "User DM", value: dmSent ? "sent" : "not sent", inline: true },
+      action.messageUrl ? { name: "Original Jump", value: `[→ Open trigger](${action.messageUrl})` } : null
+    ].filter(Boolean),
     color: SUCCESS
   };
 }

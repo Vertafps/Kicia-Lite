@@ -239,6 +239,27 @@ function buildModerationMessage(content, {
   };
 }
 
+function panelText(panel) {
+  const parts = [];
+  if (panel && typeof panel.body === "string") parts.push(panel.body);
+  if (panel && typeof panel.footer === "string") parts.push(panel.footer);
+  for (const f of (panel?.fields || [])) {
+    if (f.name) parts.push(f.name);
+    if (f.value) parts.push(f.value);
+  }
+  return parts.join("\n");
+}
+
+function embedText(embed) {
+  const parts = [];
+  if (embed?.data?.description) parts.push(embed.data.description);
+  for (const f of (embed?.data?.fields || [])) {
+    if (f.name) parts.push(f.name);
+    if (f.value) parts.push(f.value);
+  }
+  return parts.join("\n");
+}
+
 function getPanelButtonCustomIds(panel) {
   return (panel.components || [])
     .flatMap((row) => row.toJSON?.().components || row.components || [])
@@ -876,7 +897,7 @@ test("obfuscated trade wording is caught without remote AI", async () => {
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.equal(fixture.deleted.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-policy-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-policy-v3: TRUE/i);
 });
 
 test("edited obfuscated config selling is caught without remote AI", async () => {
@@ -912,7 +933,7 @@ test("edited obfuscated config selling is caught without remote AI", async () =>
   assert.equal(aiCalls, 0);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.deleted.length, 1);
-  assert.match(fixture.logs[0].body, /sell-related wording detected/i);
+  assert.match(panelText(fixture.logs[0]), /sell-related wording detected/i);
 });
 
 test("premium users use the same scam-trade confidence thresholds as everyone else", async () => {
@@ -934,7 +955,7 @@ test("premium users use the same scam-trade confidence thresholds as everyone el
   assert.equal(handled, true);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
-  assert.doesNotMatch(fixture.logs[0].body, /premium member confidence dampened|premium role dampening/i);
+  assert.doesNotMatch(panelText(fixture.logs[0]), /premium member confidence dampened|premium role dampening/i);
 });
 
 test("toxicity shadow model logs high scores without deleting or timing out", async () => {
@@ -1482,7 +1503,7 @@ test("blocked links are deleted, logged, and timed out", async () => {
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Timeout/i);
-  assert.match(fixture.logs[0].body, /file-sharing host is blocked/i);
+  assert.match(panelText(fixture.logs[0]), /file-sharing host is blocked/i);
 
   const snapshot = await getDailyStatsSnapshot();
   const blockedLinkTimeout = snapshot.moderation.find((entry) => entry.eventKey === "blocked_link_timeout");
@@ -1524,7 +1545,7 @@ test("new account link scrutiny warns without escalating to timeout by itself", 
   assert.equal(suspiciousFixture.timeouts.length, 0);
   assert.equal(suspiciousFixture.dms.length, 1);
   assert.match(suspiciousFixture.logs[0].header, /Blocked Link Warning/i);
-  assert.match(suspiciousFixture.logs[0].body, /new account|recent server join/i);
+  assert.match(panelText(suspiciousFixture.logs[0]), /new account|recent server join/i);
 });
 
 test("promoted comma-dot domains are deleted, DM warned, and logged", async () => {
@@ -1552,8 +1573,8 @@ test("promoted comma-dot domains are deleted, DM warned, and logged", async () =
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Warning/i);
-  assert.match(fixture.logs[0].body, /unknown offsite domain promoted/i);
-  assert.match(fixture.logs[0].body, /spirahl\.cc/i);
+  assert.match(panelText(fixture.logs[0]), /unknown offsite domain promoted/i);
+  assert.match(panelText(fixture.logs[0]), /spirahl\.cc/i);
 });
 
 test("homoglyph config promotion is normalized, deleted, DM warned, and logged", async () => {
@@ -1576,8 +1597,8 @@ test("homoglyph config promotion is normalized, deleted, DM warned, and logged",
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Warning/i);
-  assert.match(fixture.logs[0].body, /unknown offsite domain promoted/i);
-  assert.match(fixture.logs[0].body, /spirahl\.cc/i);
+  assert.match(panelText(fixture.logs[0]), /unknown offsite domain promoted/i);
+  assert.match(panelText(fixture.logs[0]), /spirahl\.cc/i);
 });
 
 test("normal bare domains are not removed without risky promo context", async () => {
@@ -1646,8 +1667,8 @@ test("suspicious config sales remove unknown dot-com bare domains", async () => 
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Blocked Link Warning/i);
-  assert.match(fixture.logs[0].body, /unknown offsite domain promoted/i);
-  assert.match(fixture.logs[0].body, /randomsite\.com/i);
+  assert.match(panelText(fixture.logs[0]), /unknown offsite domain promoted/i);
+  assert.match(panelText(fixture.logs[0]), /randomsite\.com/i);
 });
 
 test("generic safe hosts stay allowed for benign promo wording", async () => {
@@ -1752,8 +1773,8 @@ test("prohibited priced sale split across messages times out without scam AI", a
   assert.equal(second.dms.length, 1);
   assert.equal(second.logs.length, 1);
   assert.match(second.logs[0].header, /Prohibited Sale Timeout/i);
-  assert.match(second.logs[0].body, /SELLING MARUANA/i);
-  assert.match(second.logs[0].body, /\$100/i);
+  assert.match(panelText(second.logs[0]), /SELLING MARUANA/i);
+  assert.match(panelText(second.logs[0]), /\$100/i);
   const action = await getModerationAction(getActionIdFromPanel(second.logs[0], MODLOG_REVERT_PREFIX), { now: 2_000 });
   assert.equal(action.actionType, "prohibited_sale");
   assert.match(second.timeouts[0].reason, /prohibited sale/i);
@@ -1871,7 +1892,7 @@ test("private DM answer to purchase question is caught locally", async () => {
   assert.equal(handled, true);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /Private handoff answer to a purchase question/i);
+  assert.match(panelText(fixture.logs[0]), /Private handoff answer to a purchase question/i);
   assert.equal(fixture.replies.length, 1);
 });
 
@@ -1894,7 +1915,7 @@ test("private Kicia buying handoff is caught without remote AI", async () => {
   assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
   assert.equal(fixture.replies.length, 1);
 });
 
@@ -1917,8 +1938,8 @@ test("direct config buy solicitation is caught without remote AI", async () => {
   assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
-  assert.match(fixture.logs[0].body, /Direct protected-item market offer/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /Direct protected-item market offer/i);
   assert.equal(fixture.replies.length, 1);
 });
 
@@ -1941,8 +1962,8 @@ test("bare Kicia premium value exchange is caught without remote AI", async () =
   assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
-  assert.match(fixture.logs[0].body, /value-exchange/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /value-exchange/i);
 });
 
 test("private config request is deleted without timeout or remote AI", async () => {
@@ -1967,7 +1988,7 @@ test("private config request is deleted without timeout or remote AI", async () 
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Scam\/Trade Alert/i);
-  assert.match(fixture.logs[0].body, /private config\/resource handoff request/i);
+  assert.match(panelText(fixture.logs[0]), /private config\/resource handoff request/i);
   assert.equal(fixture.replies.length, 1);
 });
 
@@ -2064,8 +2085,8 @@ test("Kicia premium trade wording is caught locally without remote AI", async ()
   assert.equal(handled, true);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
-  assert.match(fixture.logs[0].body, /Kicia premium\/key trade wording/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /Kicia premium\/key trade wording/i);
 });
 
 test("concrete barter with protected items is caught locally", async () => {
@@ -2087,7 +2108,7 @@ test("concrete barter with protected items is caught locally", async () => {
   assert.equal(fixture.deleted.length, 1);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /Concrete protected-item barter/i);
+  assert.match(panelText(fixture.logs[0]), /Concrete protected-item barter/i);
   assert.equal(fixture.replies.length, 1);
 });
 
@@ -2122,8 +2143,8 @@ test("local classifier confirms obvious split selling context before remote AI",
   assert.equal(secondHandled, true);
   assert.equal(aiCalls, 0);
   assert.equal(fixture.replies.length, 1);
-  assert.match(fixture.logs[0].body, /AI Scam Verdict/i);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /AI Scam Verdict/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
 });
 
 test("scam action clears recent user context before a safe follow-up", async () => {
@@ -2195,8 +2216,8 @@ test("AI scam classifier uses replied-to message context", async () => {
 
   assert.equal(handled, true);
   assert.equal(capturedContext.repliedToMessage.content, "where is executor link");
-  assert.match(fixture.logs[0].body, /private DM handoff/i);
-  assert.match(fixture.logs[0].body, /test-gemini: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /private DM handoff/i);
+  assert.match(panelText(fixture.logs[0]), /test-gemini: TRUE/i);
 });
 
 test("AI scam context keeps the last five user messages with their reply context", async () => {
@@ -2262,7 +2283,7 @@ test("AI scam classifier can clear ambiguous market questions", async () => {
   assert.equal(fixture.timeouts.length, 0);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Scam AI Cleared/i);
-  assert.match(fixture.logs[0].body, /AI Answer:\*\* FALSE/i);
+  assert.match(panelText(fixture.logs[0]), /AI Answer\nFALSE/i);
 });
 
 test("scam confidence ladder maps confirmed intent to timeout durations", () => {
@@ -2291,7 +2312,7 @@ test("AI-confirmed moderate-confidence scam/trade gets the 30 minute tier", asyn
   assert.equal(handled, true);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 30 * 60 * 1000);
-  assert.match(fixture.logs[0].body, /confidence 72% > 70% => timeout 30m/i);
+  assert.match(panelText(fixture.logs[0]), /confidence 72% > 70% => timeout 30m/i);
 });
 
 test("AI-confirmed low-confidence scam/trade keeps repeat fallback instead of instant mute", async () => {
@@ -2309,7 +2330,7 @@ test("AI-confirmed low-confidence scam/trade keeps repeat fallback instead of in
   assert.equal(fixture.deleted.length, 1);
   assert.equal(fixture.timeouts.length, 0);
   assert.match(fixture.logs[0].header, /Scam\/Trade Alert/i);
-  assert.match(fixture.logs[0].body, /below immediate-timeout confidence/i);
+  assert.match(panelText(fixture.logs[0]), /below immediate-timeout confidence/i);
 });
 
 test("high-confidence scam/trade mutes and shows confidence in logs", async () => {
@@ -2332,11 +2353,11 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.doesNotMatch(fixture.replies[0].content, /\b(?:staff|ping|log|logs)\b/i);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Scam\/Trade Timeout/i);
-  assert.match(fixture.logs[0].body, /Confidence:\*\* \d+%/i);
-  assert.doesNotMatch(fixture.logs[0].body, /Confidence:\*\* 88%/i);
-  assert.match(fixture.logs[0].body, /delete queued 1 msg/i);
-  assert.match(fixture.logs[0].body, /confidence \d+% > 90% => timeout 1d/i);
-  assert.doesNotMatch(fixture.logs[0].body, /Staff Tools/i);
+  assert.match(panelText(fixture.logs[0]), /Confidence:\s*\d+%/i);
+  assert.doesNotMatch(panelText(fixture.logs[0]), /Confidence:\s*88%/i);
+  assert.match(panelText(fixture.logs[0]), /delete queued 1 msg/i);
+  assert.match(panelText(fixture.logs[0]), /confidence \d+% > 90% => timeout 1d/i);
+  assert.doesNotMatch(panelText(fixture.logs[0]), /Staff Tools/i);
   assert.match(fixture.logs[0].extra, /Context \+ undo controls expire/i);
   const buttons = getPanelButtonJson(fixture.logs[0]);
   assert.equal(buttons.length, 4);
@@ -2356,7 +2377,7 @@ test("high-confidence scam/trade mutes and shows confidence in logs", async () =
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 24 * 60 * 60 * 1000);
   assert.equal(fixture.dms.length, 1);
-  assert.match(fixture.dms[0].embeds[0].data.description, /scam\/trade behavior/i);
+  assert.match(fixture.dms[0].embeds[0].data.description, /scam\/trade activity/i);
 
   const snapshot = await getDailyStatsSnapshot();
   const sellingTimeout = snapshot.moderation.find((entry) => entry.eventKey === "selling_timeout");
@@ -2417,7 +2438,7 @@ test("moderation action logs evidence before deleting the user's last three mess
   assert.equal(first.deleted.length, 1);
   assert.equal(second.deleted.length, 1);
   assert.equal(third.deleted.length, 1);
-  assert.match(third.logs[0].body, /delete queued 3 msgs/i);
+  assert.match(panelText(third.logs[0]), /delete queued 3 msgs/i);
   const action = await getModerationAction(getActionIdFromPanel(third.logs[0], MODLOG_REVERT_PREFIX), { now: 3000 });
   assert.deepEqual(action.recentMessages.map((entry) => entry.messageId), ["msg-1", "msg-2", "msg-3"]);
 });
@@ -2463,12 +2484,12 @@ test("moderation log view button shows captured and visible user context", async
 
   assert.equal(consumed, true);
   assert.equal(ui.replies.length, 1);
-  const description = ui.replies[0].embeds[0].data.description;
+  const replyText = embedText(ui.replies[0].embeds[0]);
   assert.match(ui.replies[0].embeds[0].data.title, /User Message Context/i);
-  assert.match(description, /selling ue for 1 bucks/i);
-  assert.match(description, /visible still here/i);
-  assert.doesNotMatch(description, /Original Jump/i);
-  assert.match(description, /Saved Evidence/i);
+  assert.match(replyText, /selling ue for 1 bucks/i);
+  assert.match(replyText, /visible still here/i);
+  assert.doesNotMatch(replyText, /Original Jump/i);
+  assert.match(replyText, /Saved Evidence/i);
 });
 
 test("staff can revert a moderation timeout from the log button", async () => {
@@ -2503,8 +2524,8 @@ test("staff can revert a moderation timeout from the log button", async () => {
   assert.equal(ui.logPanels.length, 1);
   assert.match(ui.logPanels[0].header, /Moderation Action Reverted/i);
   assert.equal(fixture.dms.length, 2);
-  assert.match(fixture.dms[1].embeds[0].data.description, /Your action was reverted by: <@staff-user>/i);
-  assert.match(fixture.dms[1].embeds[0].data.description, /Sorry for the mistake on my end/i);
+  assert.match(fixture.dms[1].embeds[0].data.description, /cleared by <@staff-user>/i);
+  assert.match(fixture.dms[1].embeds[0].data.description, /Sorry for the wrong call/i);
 });
 
 test("non-staff cannot use moderation log controls", async () => {
@@ -2702,7 +2723,7 @@ test("suspicious messages timeout on the second hit in one hour", async () => {
   assert.match(fixture.replies[0].content, /\(1\/2\)$/);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Suspicious Message Alert/i);
-  assert.match(fixture.logs[0].body, /log only/i);
+  assert.match(panelText(fixture.logs[0]), /log only/i);
   assert.equal(fixture.dms.length, 0);
   assert.equal(fixture.timeouts.length, 0);
 
@@ -2719,7 +2740,7 @@ test("suspicious messages timeout on the second hit in one hour", async () => {
   assert.equal(fixture.replies.length, 2);
   assert.match(fixture.replies[1].content, /\(2\/2\)$/);
   assert.match(fixture.logs[1].header, /Suspicious Message Timeout/i);
-  assert.match(fixture.logs[1].body, /2 in 1h/i);
+  assert.match(panelText(fixture.logs[1]), /2 in 1h/i);
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 10 * 60 * 1000);
@@ -2745,8 +2766,8 @@ test("high-confidence suspicious messages timeout for one hour immediately", asy
   assert.match(fixture.replies[0].content, /\(2\/2\)$/);
   assert.equal(fixture.logs.length, 1);
   assert.match(fixture.logs[0].header, /Suspicious Message Timeout/i);
-  assert.match(fixture.logs[0].body, /Confidence:\*\* 93%/i);
-  assert.match(fixture.logs[0].body, /confidence 93% > 90%/i);
+  assert.match(panelText(fixture.logs[0]), /Confidence:\s*93%/i);
+  assert.match(panelText(fixture.logs[0]), /confidence 93% > 90%/i);
   assert.equal(fixture.dms.length, 1);
   assert.equal(fixture.timeouts.length, 1);
   assert.equal(fixture.timeouts[0].durationMs, 60 * 60 * 1000);
@@ -2915,7 +2936,7 @@ test("pipeline works correctly when scam embedder is absent (no download)", asyn
   assert.equal(handled, true);
   assert.equal(fixture.deleted.length, 1);
   assert.equal(fixture.logs.length, 1);
-  assert.match(fixture.logs[0].body, /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
 });
 
 test("executor support wording is not flagged as scam when embedder is absent", async () => {

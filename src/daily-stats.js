@@ -326,25 +326,145 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
   ].join("\n");
 }
 
+function buildServerStatsFields(snapshot, windowStartedAt, now) {
+  const totalMessages = sumMessageCounts(snapshot.users);
+  const activeUsers = snapshot.users.length;
+  const activeChannels = snapshot.channels.length;
+  const windowHours = Math.max(1 / 60, (now - windowStartedAt) / (60 * 60 * 1000));
+  const avgPerUser = activeUsers ? (totalMessages / activeUsers).toFixed(1) : "0.0";
+  const avgPerChannel = activeChannels ? (totalMessages / activeChannels).toFixed(1) : "0.0";
+  const msgsPerHour = (totalMessages / windowHours).toFixed(1);
+  const busiestHour = snapshot.hours[0] || null;
+  const topUser = snapshot.users[0] || null;
+  const topChannel = snapshot.channels[0] || null;
+  const latestUser = [...snapshot.users].sort((a, b) => b.lastMessageAt - a.lastMessageAt)[0] || null;
+
+  const topUsersText = topList(snapshot.users).map((e) => `- **${formatUserLabel(e)}** — ${e.messageCount}`).join("\n") || "none";
+  const topChannelsText = topList(snapshot.channels).map((e) => `- <#${e.channelId}> — ${e.messageCount}`).join("\n") || "none";
+  const topHoursText = topList(snapshot.hours, 3).map((e) => `- ${formatLocalHourLabel(e.localHour)} — ${e.messageCount}`).join("\n") || "none";
+
+  return [
+    { name: "Total Messages", value: String(totalMessages), inline: true },
+    { name: "Active Users", value: String(activeUsers), inline: true },
+    { name: "Active Channels", value: String(activeChannels), inline: true },
+    { name: "Avg / User", value: avgPerUser, inline: true },
+    { name: "Avg / Channel", value: avgPerChannel, inline: true },
+    { name: "Messages / Hour", value: msgsPerHour, inline: true },
+    { name: "Top User Share", value: topUser ? `${formatUserLabel(topUser)} — ${formatPercent(topUser.messageCount, totalMessages)}` : "none", inline: true },
+    { name: "Top Channel Share", value: topChannel ? `<#${topChannel.channelId}> — ${formatPercent(topChannel.messageCount, totalMessages)}` : "none", inline: true },
+    { name: "Busiest Hour", value: busiestHour ? `${formatLocalHourLabel(busiestHour.localHour)} — ${busiestHour.messageCount}` : "none", inline: true },
+    { name: "Most Recent Message", value: latestUser ? `${formatUserLabel(latestUser)} in <#${latestUser.lastChannelId}> ${formatDuration(Math.max(0, now - latestUser.lastMessageAt))} ago` : "none" },
+    { name: "Peak Hours", value: topHoursText },
+    { name: "Top Users", value: topUsersText },
+    { name: "Top Channels", value: topChannelsText }
+  ];
+}
+
+function buildStaffStatsFields(snapshot, staffRoster, windowStartedAt, now) {
+  const staffById = new Map(snapshot.staff.map((e) => [e.userId, e]));
+  const rosterMembers = staffRoster.members || [];
+  const staffMessages = sumMessageCounts(snapshot.staff);
+  const totalMessages = sumMessageCounts(snapshot.users);
+  const activeStaffCount = rosterMembers.filter((m) => {
+    const e = staffById.get(m.id);
+    return e && e.messageCount > 0;
+  }).length;
+  const mostRecentStaffEntry = [...snapshot.staff].sort((a, b) => b.lastMessageAt - a.lastMessageAt)[0] || null;
+  const staffShare = totalMessages ? ((staffMessages / totalMessages) * 100).toFixed(1) : "0.0";
+
+  const silentMembers = rosterMembers
+    .filter((m) => { const e = staffById.get(m.id); return !e || e.messageCount <= 0; })
+    .map((m) => ({ label: formatMemberLabel(m), inactiveForMs: now - windowStartedAt }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  const quietActiveMembers = rosterMembers
+    .map((m) => {
+      const e = staffById.get(m.id);
+      if (!e || e.messageCount <= 0) return null;
+      return { label: formatMemberLabel(m), inactiveForMs: Math.max(0, now - e.lastMessageAt), messageCount: e.messageCount };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.inactiveForMs - a.inactiveForMs)
+    .slice(0, 5);
+
+  const topStaffText = topList(snapshot.staff).map((e) => `- **${formatUserLabel(e)}** — ${e.messageCount}`).join("\n") || "none";
+  const silentText = topList(silentMembers, 10)
+    .map((e) => `- **${e.label}** — no staff messages this window (${formatDuration(e.inactiveForMs)})`)
+    .join("\n") || "none";
+  const quietActiveText = quietActiveMembers
+    .map((e) => `- **${e.label}** — last staff message ${formatDuration(e.inactiveForMs)} ago (${e.messageCount} msgs)`)
+    .join("\n") || "none";
+
+  return [
+    { name: "Staff Roster", value: `${rosterMembers.length}${staffRoster.partial ? " (partial)" : ""}`, inline: true },
+    { name: "Active Today", value: String(activeStaffCount), inline: true },
+    { name: "Staff Messages", value: String(staffMessages), inline: true },
+    { name: "Staff Silent This Window", value: String(silentMembers.length), inline: true },
+    { name: "Staff Share of Server Messages", value: `${staffShare}%`, inline: true },
+    mostRecentStaffEntry
+      ? { name: "Most Recent Staff", value: `${formatUserLabel(mostRecentStaffEntry)} in <#${mostRecentStaffEntry.lastChannelId}> ${formatDuration(Math.max(0, now - mostRecentStaffEntry.lastMessageAt))} ago`, inline: true }
+      : { name: "Most Recent Staff", value: "none", inline: true },
+    { name: "Top Staff Talkers", value: topStaffText },
+    { name: "Silent Staff", value: silentText },
+    { name: "Longest Since Staff Message", value: quietActiveText },
+    staffRoster.partial ? { name: "Note", value: "Full silent-staff coverage is partial — roster came from cache only." } : null
+  ].filter(Boolean);
+}
+
+function buildModerationStatsFields(snapshot, windowStartedAt, now) {
+  const counts = getModerationCounts(snapshot);
+  const linkGuardTotal = counts.blockedLinkReviews + counts.blockedLinkWarnings + counts.blockedLinkAlerts + counts.blockedLinkTimeouts;
+  const suspiciousTotal = counts.suspiciousAlerts + counts.suspiciousWarnings + counts.suspiciousTimeouts;
+  const restrictedReactionTotal = counts.restrictedReactionAlerts + counts.restrictedReactionTimeouts;
+  const scamTradeTotal = counts.sellingAlerts + counts.sellingTimeouts;
+  const totalEvents = sumModerationCounts(snapshot.moderation);
+  const latestEvent = [...(snapshot.moderation || [])]
+    .filter((e) => e.lastEventAt > 0)
+    .sort((a, b) => b.lastEventAt - a.lastEventAt)[0] || null;
+
+  return [
+    { name: "Total Events", value: String(totalEvents), inline: true },
+    { name: "Scam/Trade Guard", value: `${scamTradeTotal} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`, inline: true },
+    { name: "Suspicious Alerts", value: `${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`, inline: true },
+    { name: "Link Guard", value: `${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkWarnings} warnings | ${counts.blockedLinkReviews + counts.blockedLinkAlerts} reviews`, inline: true },
+    { name: "Raid Alerts", value: String(counts.raidAlerts), inline: true },
+    { name: "Restricted Reactions", value: `${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} legacy timeouts`, inline: true },
+    { name: "Retired Fake Info Alerts", value: String(counts.fakeInfoAlerts), inline: true },
+    latestEvent
+      ? { name: "Last Event", value: `${latestEvent.eventKey.replace(/_/g, " ")} — ${formatDuration(Math.max(0, now - latestEvent.lastEventAt))} ago`, inline: true }
+      : { name: "Last Event", value: "none", inline: true },
+    {
+      name: "Status",
+      value: totalEvents
+        ? "mod guard had activity this window — check the log channel for details"
+        : "clean window — no moderation guard events recorded"
+    }
+  ];
+}
+
 async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
   const windowStartedAt = await ensureDailyStatsWindowStartedAt(getDailyStatsBoundaryAtOrBefore(now));
   const snapshot = await getDailyStatsSnapshot();
   const staffRoster = await resolveTrackedStaffOnlyRoster(guild);
   const totalMessages = sumMessageCounts(snapshot.users);
 
+  const windowLine = `Window: ${formatDiscordTimestamp(windowStartedAt)} → ${formatDiscordTimestamp(now)} (${formatDuration(now - windowStartedAt)}) · Staff: <@&${STAFF_ROLE_IDS[0]}>`;
+
   const serverPanel = buildPanel({
     header: "Daily Server Stats",
-    body: buildDailyServerStatsBody(snapshot, windowStartedAt, now),
+    body: windowLine,
+    fields: buildServerStatsFields(snapshot, windowStartedAt, now),
     color: totalMessages ? SUCCESS : INFO
   });
   const staffPanel = buildPanel({
     header: "Daily Staff Activity",
-    body: buildDailyStaffStatsBody(snapshot, staffRoster, windowStartedAt, now),
+    fields: buildStaffStatsFields(snapshot, staffRoster, windowStartedAt, now),
     color: staffRoster.partial ? WARN : INFO
   });
   const moderationPanel = buildPanel({
     header: "Daily Moderation Summary",
-    body: buildDailyModerationStatsBody(snapshot, windowStartedAt, now),
+    body: `Window: ${formatDiscordTimestamp(windowStartedAt, "t")} → ${formatDiscordTimestamp(now, "t")}`,
+    fields: buildModerationStatsFields(snapshot, windowStartedAt, now),
     color: sumModerationCounts(snapshot.moderation) ? WARN : SUCCESS
   });
 

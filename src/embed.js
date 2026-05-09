@@ -180,6 +180,7 @@ function buildPanel({
   headerLevel = "#",
   headerAsTitle = true,
   autoFields = false,
+  fields,
   timestamp = true
 } = {}) {
   const parts = [];
@@ -206,7 +207,14 @@ function buildPanel({
   if (thumbnail && isEmbedMediaUrl(thumbnail)) e.setThumbnail(String(thumbnail));
   if (image && isEmbedMediaUrl(image)) e.setImage(String(image));
   const rowFields = buildRowFields(rows, { padRows });
-  const panelFields = [...parsedBody.fields, ...rowFields].slice(0, 25);
+  const extraFields = (Array.isArray(fields) ? fields : [])
+    .filter((f) => f?.name)
+    .map((f) => ({
+      name: String(f.name).slice(0, 256),
+      value: truncateFieldValue(f.value ?? "​"),
+      inline: Boolean(f.inline)
+    }));
+  const panelFields = [...parsedBody.fields, ...rowFields, ...extraFields].slice(0, 25);
   if (panelFields.length) e.addFields(panelFields);
   applyFooter(e, { footer, footerIcon });
   if (timestamp !== false) e.setTimestamp();

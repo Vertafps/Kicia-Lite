@@ -12,6 +12,7 @@ const {
   terminalBlock,
   kpi
 } = require("../embed");
+const viz = require("../embed-viz");
 const { sendLogPanel } = require("../log-channel");
 const { canUseLockCommands } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
@@ -206,18 +207,21 @@ function getPreflightIssues(guild, channels) {
   return issues;
 }
 
-async function replyWithPanel(message, panel) {
-  return safeReply(message, {
+function panelToPayload(panel) {
+  const payload = {
     embeds: [buildPanel(panel)],
     allowedMentions: { repliedUser: false }
-  });
+  };
+  if (Array.isArray(panel?.files) && panel.files.length) payload.files = panel.files;
+  return payload;
+}
+
+async function replyWithPanel(message, panel) {
+  return safeReply(message, panelToPayload(panel));
 }
 
 async function editPanelReply(sentMessage, panel) {
-  return safeEdit(sentMessage, {
-    embeds: [buildPanel(panel)],
-    allowedMentions: { repliedUser: false }
-  });
+  return safeEdit(sentMessage, panelToPayload(panel));
 }
 
 async function deliverFinalLockPanel(message, existingReply, panel, eventName) {
@@ -260,6 +264,17 @@ function formatResolveFailures(failures) {
     .join("\n");
 }
 
+function channelsForViz(channels, stateOverrides = null) {
+  return channels.map((entry) => {
+    const overrideState = stateOverrides?.get?.(entry.channel.id);
+    const state = overrideState !== undefined ? overrideState : getOverwriteSendMessagesState(entry.channel);
+    return {
+      name: entry.target.label || entry.channel.name || "channel",
+      status: state === false ? "locked" : state === true ? "unlocked" : "untouched"
+    };
+  });
+}
+
 function buildLockStatusPanel({ channels, failures }) {
   const aggregate = getAggregateLockState(channels);
   const grid = buildLockdownAnsiGrid(channels);
@@ -272,7 +287,10 @@ function buildLockStatusPanel({ channels, failures }) {
 
   const lockedCount = channels.filter((entry) => getOverwriteSendMessagesState(entry.channel) === false).length;
 
-  return {
+  const vizChannels = channelsForViz(channels);
+  const lockImg = viz.makeImageAttachment(`lockdown-status-${lockedCount}-${channels.length}`, viz.lockdownGridSvg({ channels: vizChannels }));
+
+  const panel = {
     header: "Channel Lock Status",
     author: brandAuthor("LOCKDOWN · STATUS"),
     body,
@@ -283,6 +301,11 @@ function buildLockStatusPanel({ channels, failures }) {
     ],
     color: failures.length ? WARN : INFO
   };
+  if (lockImg) {
+    panel.image = lockImg.url;
+    panel.files = [lockImg.attachment];
+  }
+  return panel;
 }
 
 function buildLockAuditPanel({ command, actor, channels, failures = [], error = null, finalStates = null }) {
@@ -301,7 +324,12 @@ function buildLockAuditPanel({ command, actor, channels, failures = [], error = 
 
 function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor, finalStates }) {
   const grid = buildLockdownAnsiGrid(resolved.channels, finalStates);
-  return {
+  const vizChannels = channelsForViz(resolved.channels, finalStates);
+  const lockImg = viz.makeImageAttachment(
+    `lockdown-${command}-${result.changed.length}-${result.skipped.length}`,
+    viz.lockdownGridSvg({ channels: vizChannels })
+  );
+  const panel = {
     header: success
       ? command === "lock" ? "Channels Locked — Manual" : "Channels Unlocked — Manual"
       : "Channel Lock Needs Review",
@@ -321,6 +349,11 @@ function buildLockResultPanel({ command, success, pastTenseLabel, resolved, resu
     footer: command === "lock" ? "run $unlock to revert" : "channels open again",
     color: success ? command === "lock" ? WARN : SUCCESS : DANGER
   };
+  if (lockImg) {
+    panel.image = lockImg.url;
+    panel.files = [lockImg.attachment];
+  }
+  return panel;
 }
 
 async function sendLockAuditLog(message, panel) {

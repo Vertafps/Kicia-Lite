@@ -42,6 +42,7 @@ const {
   kpi,
   kpiTone
 } = require("../embed");
+const viz = require("../embed-viz");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendIgnoreLogPanel, sendLogPanel } = require("../log-channel");
@@ -2292,6 +2293,20 @@ function buildSellingLogPanel({
     footer: `${BRAND.NAME} · ${displayName} · scam-ai · Confidence: ${state.confidence}%`,
     color: isTimeout ? DANGER : WARN
   };
+
+  const dialSignals = signals.slice(0, 5).map((s) => ({
+    name: String(s.reason || "signal").slice(0, 28),
+    weight: Math.max(0, Math.min(100, Number(s.confidence) || 0))
+  }));
+  const dialImg = viz.makeImageAttachment(
+    `scam-${Math.round(state.confidence / 10) * 10}-${dialSignals.length}`,
+    viz.scamConfidenceSvg({ score: Math.max(0, Math.min(100, Math.round(state.confidence))), signals: dialSignals })
+  );
+  if (dialImg) {
+    panel.image = dialImg.url;
+    panel.files = [dialImg.attachment];
+  }
+
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);
   return panel;
 }

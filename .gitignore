@@ -2,3 +2,6 @@ node_modules/
 .env
 npm-debug.log*
 data/*.sqlite*
+data/viz-cache/
+data/preview-*.png
+data/test.png

@@ -112,6 +112,56 @@ function describeLockState(channel, roleId) {
   return "neutral";
 }
 
+function buildJarvisProgressTokens(stepIndex, note) {
+  const completed = Math.max(0, Math.min(JARVIS_STEPS.length, stepIndex));
+  const progressWidth = 24;
+  const percent = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * 100);
+  const filled = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * progressWidth);
+  const activeStep = JARVIS_STEPS[Math.min(stepIndex, JARVIS_STEPS.length - 1)] || "Starting";
+  const phaseIndex = Math.min(JARVIS_STEPS.length, Math.max(1, stepIndex + 1));
+  const lines = [
+    [{ text: "JARVIS // Wizard of Kicia · systems sweep", color: "#79c0ff", bold: true }],
+    "",
+    [
+      { text: "phase   ", color: "#dbdee1" },
+      { text: String(phaseIndex).padStart(2, "0"), color: "#79c0ff", bold: true },
+      { text: "/" + String(JARVIS_STEPS.length).padStart(2, "0") + "  ", color: "#5b6168" },
+      { text: activeStep, color: "#f7c948" }
+    ],
+    [
+      { text: "scan    ", color: "#dbdee1" },
+      { text: "[", color: "#7ee787" },
+      { text: "#".repeat(filled), color: "#7ee787", bold: true },
+      { text: ".".repeat(Math.max(0, progressWidth - filled)), color: "#5b6168" },
+      { text: "]  ", color: "#7ee787" },
+      { text: String(percent).padStart(3, " ") + "%", color: "#79c0ff" }
+    ],
+    [
+      { text: "window  ", color: "#dbdee1" },
+      { text: `${formatDuration(JARVIS_MIN_VISIBLE_MS)}-${formatDuration(JARVIS_MAX_VISIBLE_MS)}`, color: "#5b6168" }
+    ],
+    [
+      { text: "matrix  runtime · docs · moderation · ", color: "#5b6168" },
+      { text: "security", color: "#f7c948" },
+      { text: " · intel", color: "#5b6168" }
+    ],
+    "",
+    ...JARVIS_STEPS.map((step, index) => {
+      if (index < stepIndex) return [{ text: `[OK  ] ${step}`, color: "#7ee787", bold: true }];
+      if (index === stepIndex) return [{ text: `[RUN ] ${step}`, color: "#f7c948", bold: true }];
+      return [{ text: `[WAIT] ${step}`, color: "#5b6168" }];
+    })
+  ];
+  if (note) {
+    lines.push("");
+    lines.push([
+      { text: "now    ", color: "#79c0ff" },
+      { text: String(note), color: "#5b6168" }
+    ]);
+  }
+  return { lines, percent, phaseIndex, total: JARVIS_STEPS.length, activeStep };
+}
+
 function buildJarvisProgressBody(stepIndex, note) {
   const completed = Math.max(0, Math.min(JARVIS_STEPS.length, stepIndex));
   const progressWidth = 24;
@@ -467,15 +517,15 @@ async function runJarvisDiagnostics(message, {
   await pace(6);
   const hasIssue = runtimeSection.hasIssue || kbSection.hasIssue || securitySection.hasIssue;
 
+  const sectionSummaries = [runtimeSection.summaryLine, kbSection.summaryLine, securitySection.summaryLine].filter(Boolean);
+
   const findings = terminalBlock([
-    ...[runtimeSection.summaryLine, kbSection.summaryLine, securitySection.summaryLine]
-      .filter(Boolean)
-      .map((s) => {
-        const tag = s.tone === "fail" ? "FAIL" : s.tone === "warn" ? "WARN" : "OK  ";
-        const tagColor = s.tone === "fail" ? "red" : s.tone === "warn" ? "yellow" : "green";
-        const labelPad = s.key.padEnd(10);
-        return `${ansi("[", tagColor)}${ansi(tag, tagColor, { bold: true })}${ansi("]", tagColor)} ${ansi(labelPad, "white")} ${ansi(s.detail, "dim")}`;
-      })
+    ...sectionSummaries.map((s) => {
+      const tag = s.tone === "fail" ? "FAIL" : s.tone === "warn" ? "WARN" : "OK  ";
+      const tagColor = s.tone === "fail" ? "red" : s.tone === "warn" ? "yellow" : "green";
+      const labelPad = s.key.padEnd(10);
+      return `${ansi("[", tagColor)}${ansi(tag, tagColor, { bold: true })}${ansi("]", tagColor)} ${ansi(labelPad, "white")} ${ansi(s.detail, "dim")}`;
+    })
   ]);
 
   const verdict = hasIssue
@@ -483,14 +533,25 @@ async function runJarvisDiagnostics(message, {
     : `${ansi("verdict", "green")}  ${ansi("all systems nominal", "green", { bold: true })}`;
   const findingsBlock = `## Findings\n${findings}\n${terminalBlock([verdict])}`;
 
+  const scorecard = sectionSummaries.map((s) => ({
+    key: s.key,
+    score: s.tone === "fail" ? 30 : s.tone === "warn" ? 78 : 100,
+    status: s.tone === "fail" ? "fail" : s.tone === "warn" ? "warn" : "ok",
+    detail: s.detail
+  }));
+
   return {
     body: [findingsBlock, runtimeSection.text, kbSection.text, securitySection.text, "Sweep complete."].join("\n\n"),
-    color: hasIssue ? WARN : SUCCESS
+    color: hasIssue ? WARN : SUCCESS,
+    hasIssue,
+    scorecard,
+    sectionSummaries
   };
 }
 
 module.exports = {
   buildJarvisProgressBody,
+  buildJarvisProgressTokens,
   buildIntelligenceGuardLines,
   buildModerationGuardLines,
   pickJarvisVisibleMs,

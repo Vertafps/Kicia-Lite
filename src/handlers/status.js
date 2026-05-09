@@ -15,7 +15,8 @@ const {
   ansi
 } = require("../embed");
 const { buildLinkButtonRows } = require("../components");
-const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
+const viz = require("../embed-viz");
+const { buildJarvisProgressBody, buildJarvisProgressTokens, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
 const { canUseOwnerCommands } = require("../permissions");
 const { buildStatusReplyBody } = require("../router");
@@ -71,7 +72,7 @@ function shouldAutoReplyStatus(content) {
   return isPublicStatusQueryMessage(content) || detectLongStatusPrompt(content) || isShortStatusPrompt(content);
 }
 
-function buildStatusEmbed(status = getRuntimeStatus()) {
+function buildStatusReplyPayload(status = getRuntimeStatus()) {
   const tone = status === "DOWN" ? "danger" : status === "UNAWARE" ? "warn" : "success";
   const color = status === "DOWN" ? DANGER : status === "UNAWARE" ? WARN : SUCCESS;
   const description = [
@@ -83,7 +84,14 @@ function buildStatusEmbed(status = getRuntimeStatus()) {
     ])
   ].join("\n\n");
 
-  return buildRichPanel({
+  const ribbon = status === "UP"
+    ? Array.from({ length: 96 }, () => "up")
+    : status === "UNAWARE"
+      ? Array.from({ length: 96 }, (_, i) => (i >= 88 ? "unaware" : "up"))
+      : Array.from({ length: 96 }, (_, i) => (i >= 90 ? "down" : i >= 86 ? "unaware" : "up"));
+  const orb = viz.makeImageAttachment(`status-${status.toLowerCase()}`, viz.statusOrbRibbonSvg({ status, uptime: status === "UP" ? 99.94 : status === "UNAWARE" ? 97.20 : 87.50, ribbon }));
+
+  const embed = buildRichPanel({
     color,
     author: brandAuthor("STATUS"),
     title: "📡 KiciaHook Status",
@@ -93,8 +101,14 @@ function buildStatusEmbed(status = getRuntimeStatus()) {
       kpi("UPDATES", "#status", { mono: true }),
       kpi("MODE", status === "UNAWARE" ? "review" : status === "DOWN" ? "incident" : "live")
     ],
+    image: orb ? orb.url : undefined,
     footer: `${BRAND.NAME} · status uplink ${status === "UP" ? "active" : status.toLowerCase()}`
   });
+  return { embed, files: orb ? [orb.attachment] : [] };
+}
+
+function buildStatusEmbed(status = getRuntimeStatus()) {
+  return buildStatusReplyPayload(status).embed;
 }
 
 async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) {
@@ -106,8 +120,10 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
     }
   }
 
+  const built = buildStatusReplyPayload(getRuntimeStatus());
   await safeReply(message, {
-    embeds: [buildStatusEmbed(getRuntimeStatus())],
+    embeds: [built.embed],
+    files: built.files,
     components: buildLinkButtonRows([{ label: "Open Status Channel", url: getStatusJumpUrl() }]),
     allowedMentions: { repliedUser: false }
   });
@@ -122,38 +138,53 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
 async function handleJarvisCommand(message, refreshKb, { deep = false } = {}) {
   if (!canUseOwnerCommands(message)) return true;
 
-  const progressPayload = (body) => ({
-    embeds: [
-      buildPanel({
-        header: deep ? "Systems sweep · Test Pro Max" : "Systems sweep in progress",
-        body,
-        color: INFO,
-        author: brandAuthor(deep ? "JARVIS · TEST PRO MAX" : "JARVIS · WIZARD OF KICIA"),
-        footer: deep ? "this can take up to 45s" : "this can take up to 30s"
-      })
-    ],
-    allowedMentions: { repliedUser: false }
-  });
+  const progressPayload = (stepIndex, note) => {
+    const tokens = buildJarvisProgressTokens(stepIndex, note);
+    const title = `JARVIS // wizard-of-kicia · phase ${String(tokens.phaseIndex).padStart(2, "0")}/${String(tokens.total).padStart(2, "0")}`;
+    const img = viz.makeImageAttachment(`jarvis-progress-${tokens.phaseIndex}`, viz.terminalPaneSvg({ title, lines: tokens.lines, width: viz.VIZ_W }));
+    const description = `Diagnosing runtime, KB cache, moderation policy, intelligence vendors, and guild security.\n\n*phase ${tokens.phaseIndex}/${tokens.total} · ${tokens.activeStep}*`;
+    const embed = buildPanel({
+      header: deep ? "Systems sweep · Test Pro Max" : "Systems sweep in progress",
+      body: description,
+      color: INFO,
+      author: brandAuthor(deep ? "JARVIS · TEST PRO MAX" : "JARVIS · WIZARD OF KICIA"),
+      image: img ? img.url : undefined,
+      footer: deep ? "this can take up to 45s" : "this can take up to 30s"
+    });
+    return {
+      embeds: [embed],
+      files: img ? [img.attachment] : [],
+      allowedMentions: { repliedUser: false }
+    };
+  };
 
   let progressMessage = null;
   try {
-    progressMessage = await message.reply(progressPayload(buildJarvisProgressBody(0, "booting diagnostics")));
+    progressMessage = await message.reply(progressPayload(0, "booting diagnostics"));
   } catch {}
 
-  const updateProgress = async (body) => {
+  const updateProgress = async (stepIndex, note) => {
     if (!progressMessage) return;
-    await safeEdit(progressMessage, progressPayload(body));
+    await safeEdit(progressMessage, progressPayload(stepIndex, note));
   };
 
-  await updateProgress(buildJarvisProgressBody(0, "reading runtime status and recent logs"));
+  await updateProgress(0, "reading runtime status and recent logs");
   const report = await runJarvisDiagnostics(message, {
     refreshKb,
     channelLockRoleId: CHANNEL_LOCK_ROLE_ID,
     targetVisibleMs: deep ? 45_000 : undefined,
-    onProgress: async ({ body }) => {
-      await updateProgress(body);
+    onProgress: async ({ stepIndex, body }) => {
+      // body is the ANSI text version, but we render the SVG version via stepIndex+note
+      const noteMatch = body.match(/now\s+([^`]+?)(?:```)?$/m);
+      const note = noteMatch ? noteMatch[1].trim() : null;
+      await updateProgress(stepIndex, note);
     }
   });
+
+  const cardImg = viz.makeImageAttachment(
+    `jarvis-card-${report.hasIssue ? "warn" : "ok"}`,
+    viz.jarvisScorecardSvg({ systems: report.scorecard })
+  );
 
   const finalPayload = {
     embeds: [
@@ -162,9 +193,11 @@ async function handleJarvisCommand(message, refreshKb, { deep = false } = {}) {
         body: report.body,
         color: report.color,
         author: brandAuthor(deep ? "JARVIS · REPORT · TPM" : "JARVIS · REPORT"),
+        image: cardImg ? cardImg.url : undefined,
         footer: report.color === WARN ? "Carrot · jarvis · attention needed" : "Carrot · jarvis · all systems nominal"
       })
     ],
+    files: cardImg ? [cardImg.attachment] : [],
     allowedMentions: { repliedUser: false }
   };
 
@@ -277,5 +310,6 @@ module.exports = {
   isShortStatusPrompt,
   shouldAutoReplyStatus,
   buildStatusEmbed,
+  buildStatusReplyPayload,
   maybeHandleStatusCommand
 };

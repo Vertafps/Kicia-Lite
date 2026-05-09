@@ -39,11 +39,15 @@ function buildLogPayload(panel) {
       ? panel
       : buildPanel({ autoFields: true, ...panel });
 
-  return {
+  const payload = {
     embeds: [embed],
     components: panel.components || [],
     allowedMentions: { parse: [] }
   };
+  if (Array.isArray(panel?.files) && panel.files.length) {
+    payload.files = panel.files;
+  }
+  return payload;
 }
 
 async function sendLogPanel(guild, panel) {

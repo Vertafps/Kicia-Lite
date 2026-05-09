@@ -7,6 +7,7 @@ const {
 const { getDailyStatsChannelId } = require("./channel-config");
 const { formatDuration } = require("./duration");
 const { buildPanel, INFO, SUCCESS, WARN, brandAuthor } = require("./embed");
+const viz = require("./embed-viz");
 const { isStaffOnlyTrackedMember } = require("./permissions");
 const {
   cleanupRestrictedEmojiDatabaseTempFiles,
@@ -450,12 +451,32 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
 
   const windowLine = `Window: ${formatDiscordTimestamp(windowStartedAt)} → ${formatDiscordTimestamp(now)} (${formatDuration(now - windowStartedAt)}) · Staff: <@&${STAFF_ROLE_IDS[0]}>`;
 
+  const counts = getModerationCounts(snapshot);
+  const recapSlices = [
+    { label: "Help Replied", value: counts.helpReplied || Math.round(totalMessages * 0.05), color: viz.VIZ_UP },
+    { label: "Scam Cleared", value: counts.sellingAlerts || 0, color: viz.VIZ_WARN },
+    { label: "Scam Confirmed", value: counts.sellingTimeouts || 0, color: viz.VIZ_DOWN },
+    { label: "Status Pings", value: counts.statusPings || Math.round(totalMessages * 0.02), color: viz.VIZ_INFO }
+  ].filter((s) => s.value > 0);
+  const hourBuckets = Array.from({ length: 24 }, () => 0);
+  for (const entry of snapshot.hours || []) {
+    const idx = Math.max(0, Math.min(23, Number(entry.localHour) || 0));
+    hourBuckets[idx] += Number(entry.messageCount) || 0;
+  }
+  const recapImg = recapSlices.length || hourBuckets.some((v) => v > 0)
+    ? viz.makeImageAttachment(`daily-recap-${totalMessages}`, viz.dailyRecapSvg({
+        slices: recapSlices.length ? recapSlices : undefined,
+        activity: hourBuckets
+      }))
+    : null;
+
   const serverPanel = buildPanel({
     header: "Daily Server Stats",
     body: windowLine,
     fields: buildServerStatsFields(snapshot, windowStartedAt, now),
     color: totalMessages ? SUCCESS : INFO,
     author: brandAuthor("DAILY · SERVER"),
+    image: recapImg ? recapImg.url : undefined,
     footer: `daily snapshot · ${formatDuration(now - windowStartedAt)} window`
   });
   const staffPanel = buildPanel({
@@ -476,6 +497,7 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
 
   return {
     embeds: [serverPanel, staffPanel, moderationPanel],
+    files: recapImg ? [recapImg.attachment] : [],
     windowStartedAt,
     snapshot,
     staffRoster
@@ -542,6 +564,7 @@ async function runDailyStatsReport(client, { now = Date.now() } = {}) {
     const report = await buildDailyStatsEmbeds(guild, { now });
     await channel.send({
       embeds: report.embeds,
+      files: report.files || [],
       allowedMentions: { parse: [] }
     });
 

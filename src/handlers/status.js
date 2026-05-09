@@ -1,7 +1,19 @@
-const { CHANNEL_LOCK_ROLE_ID } = require("../config");
+const { CHANNEL_LOCK_ROLE_ID, BRAND } = require("../config");
 const { getStatusJumpUrl } = require("../channel-config");
 const { isNoResponseMessage } = require("../channel-policy");
-const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
+const {
+  buildPanel,
+  buildRichPanel,
+  DANGER,
+  SUCCESS,
+  WARN,
+  INFO,
+  brandAuthor,
+  ansiPill,
+  kpi,
+  terminalBlock,
+  ansi
+} = require("../embed");
 const { buildLinkButtonRows } = require("../components");
 const { buildJarvisProgressBody, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
@@ -60,10 +72,28 @@ function shouldAutoReplyStatus(content) {
 }
 
 function buildStatusEmbed(status = getRuntimeStatus()) {
-  return buildPanel({
-    header: "\u{1F4E1} KiciaHook Status",
-    body: buildStatusReplyBody(status),
-    color: status === "DOWN" ? DANGER : status === "UNAWARE" ? WARN : SUCCESS
+  const tone = status === "DOWN" ? "danger" : status === "UNAWARE" ? "warn" : "success";
+  const color = status === "DOWN" ? DANGER : status === "UNAWARE" ? WARN : SUCCESS;
+  const description = [
+    buildStatusReplyBody(status),
+    terminalBlock([
+      `${ansi("status", "dim")}   ${ansi(status, tone, { bold: true })}`,
+      `${ansi("updates", "dim")}  ${ansi("posted in #status", "info")}`,
+      `${ansi("command", "dim")}  ${ansi("$status", "white", { bold: true })} ${ansi("·", "dim")} ${ansi("$status up|down|unaware", "dim")}`
+    ])
+  ].join("\n\n");
+
+  return buildRichPanel({
+    color,
+    author: brandAuthor("STATUS"),
+    title: "📡 KiciaHook Status",
+    description,
+    fields: [
+      kpi("STATE", status),
+      kpi("UPDATES", "#status", { mono: true }),
+      kpi("MODE", status === "UNAWARE" ? "review" : status === "DOWN" ? "incident" : "live")
+    ],
+    footer: `${BRAND.NAME} · status uplink ${status === "UP" ? "active" : status.toLowerCase()}`
   });
 }
 
@@ -95,9 +125,11 @@ async function handleJarvisCommand(message, refreshKb, { deep = false } = {}) {
   const progressPayload = (body) => ({
     embeds: [
       buildPanel({
-        header: deep ? "Test Pro Max" : "Jarvis",
+        header: deep ? "Systems sweep · Test Pro Max" : "Systems sweep in progress",
         body,
-        color: INFO
+        color: INFO,
+        author: brandAuthor(deep ? "JARVIS · TEST PRO MAX" : "JARVIS · WIZARD OF KICIA"),
+        footer: deep ? "this can take up to 45s" : "this can take up to 30s"
       })
     ],
     allowedMentions: { repliedUser: false }
@@ -126,9 +158,11 @@ async function handleJarvisCommand(message, refreshKb, { deep = false } = {}) {
   const finalPayload = {
     embeds: [
       buildPanel({
-        header: deep ? "Test Pro Max Report" : "Jarvis Report",
+        header: deep ? "Sweep complete · full report" : "Sweep complete",
         body: report.body,
-        color: report.color
+        color: report.color,
+        author: brandAuthor(deep ? "JARVIS · REPORT · TPM" : "JARVIS · REPORT"),
+        footer: report.color === WARN ? "Carrot · jarvis · attention needed" : "Carrot · jarvis · all systems nominal"
       })
     ],
     allowedMentions: { repliedUser: false }

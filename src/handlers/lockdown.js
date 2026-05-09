@@ -1,7 +1,17 @@
 const { PermissionFlagsBits } = require("discord.js");
 const { CHANNEL_LOCK_ROLE_ID } = require("../config");
 const { getChannelLockTargets } = require("../channel-config");
-const { buildPanel, DANGER, SUCCESS, WARN, INFO } = require("../embed");
+const {
+  buildPanel,
+  DANGER,
+  SUCCESS,
+  WARN,
+  INFO,
+  brandAuthor,
+  ansi,
+  terminalBlock,
+  kpi
+} = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { canUseLockCommands } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
@@ -120,6 +130,21 @@ function describeLockState(state) {
   return "➖ neutral";
 }
 
+function buildLockdownAnsiGrid(channels, stateOverrides = null) {
+  if (!channels.length) return terminalBlock([ansi("no configured lock targets resolved", "dim")]);
+  const lines = channels.map((entry) => {
+    const overrideState = stateOverrides?.get?.(entry.channel.id);
+    const state = overrideState !== undefined
+      ? overrideState
+      : getOverwriteSendMessagesState(entry.channel);
+    const tag = state === false ? "LOCKED  " : state === true ? "UNLOCKED" : "NEUTRAL ";
+    const tone = state === false ? "red" : state === true ? "green" : "dim";
+    const label = entry.target.label.padEnd(22).slice(0, 22);
+    return `${ansi("[", tone)}${ansi(tag, tone, { bold: true })}${ansi("]", tone)} ${ansi(label, "white")} ${ansi(`#${entry.channel.name || entry.channel.id}`, "dim")}`;
+  });
+  return terminalBlock(lines);
+}
+
 function getAggregateLockState(channels) {
   const states = channels.map((entry) => getOverwriteSendMessagesState(entry.channel || entry));
   return {
@@ -236,18 +261,26 @@ function formatResolveFailures(failures) {
 }
 
 function buildLockStatusPanel({ channels, failures }) {
+  const aggregate = getAggregateLockState(channels);
+  const grid = buildLockdownAnsiGrid(channels);
   const body = [
-    "## Targets",
     formatChannelStateLines(channels),
-    failures.length ? `\n## Resolve Issues\n${formatResolveFailures(failures)}` : null,
-    "",
-    "`$lock` denies Send Messages for the configured member role.",
-    "`$unlock` explicitly allows Send Messages for that role again."
-  ].filter(Boolean).join("\n");
+    grid,
+    failures.length ? `**Resolve Issues**\n${formatResolveFailures(failures)}` : null,
+    "`$lock` denies Send Messages for the configured member role. `$unlock` explicitly allows it again."
+  ].filter(Boolean).join("\n\n");
+
+  const lockedCount = channels.filter((entry) => getOverwriteSendMessagesState(entry.channel) === false).length;
 
   return {
     header: "Channel Lock Status",
+    author: brandAuthor("LOCKDOWN · STATUS"),
     body,
+    fields: [
+      kpi("LOCKED", `${lockedCount}/${channels.length}`),
+      kpi("TARGETS", String(channels.length)),
+      kpi("STATE", aggregate.allLocked ? "all locked" : aggregate.allUnlocked ? "all open" : "mixed")
+    ],
     color: failures.length ? WARN : INFO
   };
 }
@@ -267,20 +300,25 @@ function buildLockAuditPanel({ command, actor, channels, failures = [], error = 
 }
 
 function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor, finalStates }) {
+  const grid = buildLockdownAnsiGrid(resolved.channels, finalStates);
   return {
     header: success
-      ? command === "lock" ? "Channels Locked" : "Channels Unlocked"
+      ? command === "lock" ? "Channels Locked — Manual" : "Channels Unlocked — Manual"
       : "Channel Lock Needs Review",
+    author: brandAuthor(command === "lock" ? "LOCKDOWN · APPLIED" : "LOCKDOWN · UNLOCKED"),
     body: [
       success
         ? `${pastTenseLabel} channels: ${buildTargetChannelMentions(resolved.channels)}`
         : "I applied the command, but the final state was not exactly what I expected.",
-      `**Changed:** ${result.changed.length}`,
-      `**Skipped:** ${result.skipped.length}`,
-      `**By:** ${actor}`,
-      "",
-      formatChannelStateLines(resolved.channels, finalStates)
-    ].join("\n"),
+      `**Changed:** ${result.changed.length} · **Skipped:** ${result.skipped.length} · **By:** ${actor}`,
+      grid
+    ].join("\n\n"),
+    fields: [
+      kpi("CHANGED", String(result.changed.length)),
+      kpi("SKIPPED", String(result.skipped.length)),
+      kpi("BY", actor)
+    ],
+    footer: command === "lock" ? "run $unlock to revert" : "channels open again",
     color: success ? command === "lock" ? WARN : SUCCESS : DANGER
   };
 }

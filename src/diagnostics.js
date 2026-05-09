@@ -35,7 +35,7 @@ const {
   getStatusJumpUrl
 } = require("./channel-config");
 const { formatDuration } = require("./duration");
-const { SUCCESS, WARN } = require("./embed");
+const { SUCCESS, WARN, ansi, terminalBlock } = require("./embed");
 const { getScamPulseSnapshot } = require("./link-policy");
 const { getRestrictedEmojiDatabaseSnapshot } = require("./restricted-emoji-db");
 const { getRuntimeHealthSnapshot } = require("./runtime-health");
@@ -117,30 +117,37 @@ function buildJarvisProgressBody(stepIndex, note) {
   const progressWidth = 24;
   const percent = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * 100);
   const filled = Math.round((completed / Math.max(1, JARVIS_STEPS.length - 1)) * progressWidth);
-  const progressBar = `${"#".repeat(filled)}${".".repeat(Math.max(0, progressWidth - filled))}`;
+  const filledBar = ansi("#".repeat(filled), "green", { bold: true });
+  const emptyBar = ansi(".".repeat(Math.max(0, progressWidth - filled)), "dim");
   const activeStep = JARVIS_STEPS[Math.min(stepIndex, JARVIS_STEPS.length - 1)] || "Starting";
   const phaseIndex = Math.min(JARVIS_STEPS.length, Math.max(1, stepIndex + 1));
-  const lines = [
-    "`JARVIS // Wizard of Kicia systems sweep`",
-    "```text",
-    `phase   ${String(phaseIndex).padStart(2, "0")}/${String(JARVIS_STEPS.length).padStart(2, "0")}  ${activeStep}`,
-    `scan    [${progressBar}] ${String(percent).padStart(3, " ")}%`,
-    `window  ${formatDuration(JARVIS_MIN_VISIBLE_MS)}-${formatDuration(JARVIS_MAX_VISIBLE_MS)}`,
-    "matrix  runtime | docs | moderation | security | intel",
-    "",
-    ...JARVIS_STEPS.map((step, index) => {
-      if (index < stepIndex) return `[OK  ] ${step}`;
-      if (index === stepIndex) return `[RUN ] ${step}`;
-      return `[WAIT] ${step}`;
-    })
+
+  const head = [
+    `${ansi("JARVIS // Wizard of Kicia systems sweep", "cyan", { bold: true })}`
   ];
 
+  const meta = [
+    "",
+    `${ansi("phase", "white")}   ${ansi(String(phaseIndex).padStart(2, "0"), "cyan", { bold: true })}${ansi("/" + String(JARVIS_STEPS.length).padStart(2, "0"), "dim")}  ${ansi(activeStep, "yellow")}`,
+    `${ansi("scan", "white")}    ${ansi("[", "green")}${filledBar}${emptyBar}${ansi("]", "green")}  ${ansi(String(percent).padStart(3, " ") + "%", "cyan")}`,
+    `${ansi(`window  ${formatDuration(JARVIS_MIN_VISIBLE_MS)}-${formatDuration(JARVIS_MAX_VISIBLE_MS)}`, "dim")}`,
+    `${ansi("matrix  runtime | docs | moderation | security | intel", "dim")}`,
+    ""
+  ];
+
+  const steps = JARVIS_STEPS.map((step, index) => {
+    if (index < stepIndex) return `${ansi(`[OK  ] ${step}`, "green", { bold: true })}`;
+    if (index === stepIndex) return `${ansi(`[RUN ] ${step}`, "yellow", { bold: true })}`;
+    return `${ansi(`[WAIT] ${step}`, "dim")}`;
+  });
+
+  const lines = [...head, ...meta, ...steps];
+
   if (note) {
-    lines.push("", `now    ${note}`);
+    lines.push("", `${ansi("now    " + note, "dim")}`);
   }
 
-  lines.push("```");
-  return lines.join("\n");
+  return terminalBlock(lines);
 }
 
 function sleep(ms) {
@@ -158,9 +165,18 @@ function buildRuntimeSection(message) {
     `**Recent Errors:** ${formatRecentEvents(health.errors)}`
   ];
 
+  const summary = terminalBlock([
+    `${ansi("[", health.errors.length ? "red" : "green")}${ansi(health.errors.length ? "FAIL" : "OK  ", health.errors.length ? "red" : "green", { bold: true })}${ansi("]", health.errors.length ? "red" : "green")} ${ansi("runtime", "white")}      ${ansi(`gateway ${Number.isFinite(message.client?.ws?.ping) ? `${message.client.ws.ping}ms` : "unknown"} · ${health.warnings.length} warnings · ${health.errors.length} errors`, "dim")}`
+  ]);
+
   return {
-    text: `## Runtime\n${runtimeLines.join("\n")}`,
-    hasIssue: health.errors.length > 0
+    text: `## Runtime\n${summary}\n${runtimeLines.join("\n")}`,
+    hasIssue: health.errors.length > 0,
+    summaryLine: {
+      key: "RUNTIME",
+      tone: health.errors.length ? "fail" : "ok",
+      detail: `${Number.isFinite(message.client?.ws?.ping) ? `${message.client.ws.ping}ms` : "unknown"} · ${health.errors.length} errors`
+    }
   };
 }
 
@@ -226,14 +242,30 @@ async function buildKbSection(refreshKb) {
     const metaLines = [];
     if (kb?.meta?.version) metaLines.push(`**Version:** ${kb.meta.version}`);
     if (kb?.meta?.last_updated) metaLines.push(`**Last Updated:** ${kb.meta.last_updated}`);
+    const summary = terminalBlock([
+      `${ansi("[", "green")}${ansi("OK  ", "green", { bold: true })}${ansi("]", "green")} ${ansi("kb", "white")}           ${ansi(`${kb?.meta?.version || "loaded"} · refreshed · ${issueCount} issues · ${executorAliases} aliases`, "dim")}`
+    ]);
     return {
-      text: `## KB\n**Refresh:** ok\n${metaLines.length ? `${metaLines.join("\n")}\n` : ""}**Issues:** ${issueCount}\n**Executor Aliases:** ${executorAliases}`,
-      hasIssue: false
+      text: `## KB\n${summary}\n**Refresh:** ok\n${metaLines.length ? `${metaLines.join("\n")}\n` : ""}**Issues:** ${issueCount}\n**Executor Aliases:** ${executorAliases}`,
+      hasIssue: false,
+      summaryLine: {
+        key: "KB",
+        tone: "ok",
+        detail: `${kb?.meta?.version || "loaded"} · ${issueCount} issues`
+      }
     };
   } catch (err) {
+    const summary = terminalBlock([
+      `${ansi("[", "red")}${ansi("FAIL", "red", { bold: true })}${ansi("]", "red")} ${ansi("kb", "white")}           ${ansi(err.message, "red")}`
+    ]);
     return {
-      text: `## KB\n**Refresh:** failed\n**Error:** ${err.message}`,
-      hasIssue: true
+      text: `## KB\n${summary}\n**Refresh:** failed\n**Error:** ${err.message}`,
+      hasIssue: true,
+      summaryLine: {
+        key: "KB",
+        tone: "fail",
+        detail: err.message
+      }
     };
   }
 }
@@ -347,9 +379,19 @@ async function buildSecuritySection(message, channelLockRoleId) {
 
   securityLines.push(`**Status Channel:** [Open](${getStatusJumpUrl(guild.id)})`);
 
+  const detail = hasIssue ? "needs attention" : "all guards armed";
+  const summary = terminalBlock([
+    `${ansi("[", hasIssue ? "yellow" : "green")}${ansi(hasIssue ? "WARN" : "OK  ", hasIssue ? "yellow" : "green", { bold: true })}${ansi("]", hasIssue ? "yellow" : "green")} ${ansi("security", "white")}     ${ansi(detail, hasIssue ? "yellow" : "dim")}`
+  ]);
+
   return {
-    text: `## Security\n${securityLines.join("\n")}`,
-    hasIssue
+    text: `## Security\n${summary}\n${securityLines.join("\n")}`,
+    hasIssue,
+    summaryLine: {
+      key: "SECURITY",
+      tone: hasIssue ? "warn" : "ok",
+      detail
+    }
   };
 }
 
@@ -425,8 +467,24 @@ async function runJarvisDiagnostics(message, {
   await pace(6);
   const hasIssue = runtimeSection.hasIssue || kbSection.hasIssue || securitySection.hasIssue;
 
+  const findings = terminalBlock([
+    ...[runtimeSection.summaryLine, kbSection.summaryLine, securitySection.summaryLine]
+      .filter(Boolean)
+      .map((s) => {
+        const tag = s.tone === "fail" ? "FAIL" : s.tone === "warn" ? "WARN" : "OK  ";
+        const tagColor = s.tone === "fail" ? "red" : s.tone === "warn" ? "yellow" : "green";
+        const labelPad = s.key.padEnd(10);
+        return `${ansi("[", tagColor)}${ansi(tag, tagColor, { bold: true })}${ansi("]", tagColor)} ${ansi(labelPad, "white")} ${ansi(s.detail, "dim")}`;
+      })
+  ]);
+
+  const verdict = hasIssue
+    ? `${ansi("verdict", "yellow")}  ${ansi("attention needed", "yellow", { bold: true })}`
+    : `${ansi("verdict", "green")}  ${ansi("all systems nominal", "green", { bold: true })}`;
+  const findingsBlock = `## Findings\n${findings}\n${terminalBlock([verdict])}`;
+
   return {
-    body: [runtimeSection.text, kbSection.text, securitySection.text, "Sweep complete."].join("\n\n"),
+    body: [findingsBlock, runtimeSection.text, kbSection.text, securitySection.text, "Sweep complete."].join("\n\n"),
     color: hasIssue ? WARN : SUCCESS
   };
 }

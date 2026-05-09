@@ -6,7 +6,7 @@ const {
 } = require("./config");
 const { getDailyStatsChannelId } = require("./channel-config");
 const { formatDuration } = require("./duration");
-const { buildPanel, INFO, SUCCESS, WARN } = require("./embed");
+const { buildPanel, INFO, SUCCESS, WARN, brandAuthor } = require("./embed");
 const { isStaffOnlyTrackedMember } = require("./permissions");
 const {
   cleanupRestrictedEmojiDatabaseTempFiles,
@@ -454,18 +454,24 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
     header: "Daily Server Stats",
     body: windowLine,
     fields: buildServerStatsFields(snapshot, windowStartedAt, now),
-    color: totalMessages ? SUCCESS : INFO
+    color: totalMessages ? SUCCESS : INFO,
+    author: brandAuthor("DAILY · SERVER"),
+    footer: `daily snapshot · ${formatDuration(now - windowStartedAt)} window`
   });
   const staffPanel = buildPanel({
     header: "Daily Staff Activity",
     fields: buildStaffStatsFields(snapshot, staffRoster, windowStartedAt, now),
-    color: staffRoster.partial ? WARN : INFO
+    color: staffRoster.partial ? WARN : INFO,
+    author: brandAuthor("DAILY · STAFF"),
+    footer: staffRoster.partial ? "staff roster partial · cache only" : undefined
   });
   const moderationPanel = buildPanel({
     header: "Daily Moderation Summary",
     body: `Window: ${formatDiscordTimestamp(windowStartedAt, "t")} → ${formatDiscordTimestamp(now, "t")}`,
     fields: buildModerationStatsFields(snapshot, windowStartedAt, now),
-    color: sumModerationCounts(snapshot.moderation) ? WARN : SUCCESS
+    color: sumModerationCounts(snapshot.moderation) ? WARN : SUCCESS,
+    author: brandAuthor("DAILY · MODERATION"),
+    footer: sumModerationCounts(snapshot.moderation) ? "guard had activity · check #logs" : "clean window · no events"
   });
 
   return {

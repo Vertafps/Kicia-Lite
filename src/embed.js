@@ -1,14 +1,16 @@
 const { EmbedBuilder } = require("discord.js");
 const { BRAND } = require("./config");
+const carrot = require("./embed-carrot");
 
 const SURFACE = 0x2B2D31;
-const SUCCESS = 0x57F287;
-const DANGER = 0xED4245;
-const WARN = 0xFAA61A;
-const INFO = 0x5865F2;
-const MUTED = 0x4F545C;
-const PURPLE = 0x9B59B6;
-const TEAL = 0x1ABC9C;
+const SUCCESS = carrot.CARROT_SUCCESS;
+const DANGER = carrot.CARROT_DANGER;
+const WARN = carrot.CARROT_WARN;
+const INFO = carrot.CARROT_INFO;
+const MUTED = carrot.CARROT_MUTED;
+const PURPLE = carrot.CARROT_PURPLE;
+const TEAL = carrot.CARROT_BRAND;
+const BRAND_ACCENT = carrot.CARROT_BRAND;
 
 const MAX_DESC = 4090;
 
@@ -266,8 +268,25 @@ module.exports = {
   MUTED,
   PURPLE,
   TEAL,
+  BRAND_ACCENT,
   buildPanel,
   buildRichPanel,
   resolveAvatarURL,
-  resolveColor
+  resolveColor,
+  ANSI: carrot.ANSI,
+  ansi: carrot.ansi,
+  terminalBlock: carrot.terminalBlock,
+  statusPill: carrot.statusPill,
+  ansiPill: carrot.ansiPill,
+  kpi: carrot.kpi,
+  kpiTone: carrot.kpiTone,
+  divider: carrot.divider,
+  dividerField: carrot.dividerField,
+  brandLabel: carrot.brandLabel,
+  brandAuthor: carrot.brandAuthor,
+  carrotFooter: carrot.carrotFooter,
+  progressBar: carrot.progressBar,
+  ansiProgressBar: carrot.ansiProgressBar,
+  bracketLabel: carrot.bracketLabel,
+  colorForTone: carrot.colorForTone
 };

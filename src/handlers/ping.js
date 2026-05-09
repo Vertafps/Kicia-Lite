@@ -1,4 +1,4 @@
-const { buildPanel, SUCCESS, DANGER, WARN, INFO } = require("../embed");
+const { buildPanel, SUCCESS, DANGER, WARN, INFO, brandAuthor } = require("../embed");
 const { buildLinkButtonRows } = require("../components");
 const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
 const { getTicketJumpUrl } = require("../channel-config");
@@ -45,7 +45,8 @@ async function handleDm(message) {
       buildPanel({
         header: "\u{1F44B} Use Me In The Main Server",
         body: `I only work inside the ${BRAND.NAME} main server channels. Ping me there and I'll check the docs.`,
-        color: INFO
+        color: INFO,
+        author: brandAuthor("DM · REDIRECT")
       })
     ],
     allowedMentions: { repliedUser: false }
@@ -64,6 +65,15 @@ async function handleGuildPing(message) {
   const transcript = await buildTranscript(message);
   const kb = await fetchKb();
   const route = classifyTranscript(transcript, kb, getRuntimeStatus());
+  const sectionLabel = route.kind === "executor" || route.kind === "executor_unknown" || route.kind === "executor_list"
+    ? "EXECUTOR"
+    : route.kind === "status"
+      ? "STATUS"
+      : route.kind === "ticket"
+        ? "TICKET"
+        : route.kind === "docs"
+          ? "DOCS"
+          : "REPLY";
   const embed = buildPanel({
     header: route.header,
     body: route.body,
@@ -71,7 +81,8 @@ async function handleGuildPing(message) {
     tipStyle: route.tipStyle,
     tipLevel: route.tipLevel,
     extra: route.extra,
-    color: COLOR_BY_NAME[route.color] || INFO
+    color: COLOR_BY_NAME[route.color] || INFO,
+    author: brandAuthor(`KB · ${sectionLabel}`)
   });
 
   await safeReply(message, {
@@ -86,7 +97,8 @@ async function replyWithError(message) {
   const errorEmbed = buildPanel({
     header: "\u26A0\uFE0F Docs Lookup Is Down Right Now",
     body: `I couldn't reach the docs index just now.\n\nUse the **[ticket panel](${getTicketJumpUrl()})** instead.`,
-    color: DANGER
+    color: DANGER,
+    author: brandAuthor("KB \u00B7 OFFLINE")
   });
 
   try {

@@ -17,7 +17,8 @@ const {
   SELLING_REPEAT_WINDOW_MS,
   SELLING_REPEAT_TIMEOUT_THRESHOLD,
   SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
-  SELLING_TIMEOUT_MS
+  SELLING_TIMEOUT_MS,
+  BRAND
 } = require("../config");
 const {
   MODLOG_REVERT_PREFIX,
@@ -27,7 +28,20 @@ const {
 } = require("../components");
 const { buildNormalizedTextForms } = require("../text");
 const { formatDuration } = require("../duration");
-const { buildPanel, DANGER, INFO, SUCCESS, TEAL, WARN, resolveAvatarURL } = require("../embed");
+const {
+  buildPanel,
+  DANGER,
+  INFO,
+  SUCCESS,
+  TEAL,
+  WARN,
+  resolveAvatarURL,
+  brandAuthor,
+  ansi,
+  terminalBlock,
+  kpi,
+  kpiTone
+} = require("../embed");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendIgnoreLogPanel, sendLogPanel } = require("../log-channel");
@@ -2168,20 +2182,29 @@ function getSellingModerationStatKey(signals, action) {
 
 function buildSellingDmPayload({ message, signals, state, durationMs }) {
   const isProhibitedSale = hasProhibitedSaleSignal(signals);
+  const summary = terminalBlock([
+    `${ansi("[", "red")}${ansi("ACTION", "red", { bold: true })}${ansi("]", "red")} ${ansi("timeout", "white")}     ${ansi(formatDuration(durationMs), "yellow", { bold: true })}`,
+    `${ansi("[", "red")}${ansi("DELETE", "red", { bold: true })}${ansi("]", "red")} ${ansi("messages", "white")}    ${ansi("removed", "red")}`,
+    `${ansi("[", "yellow")}${ansi("NOTICE", "yellow", { bold: true })}${ansi("]", "yellow")} ${ansi("staff", "white")}       ${ansi("notified", "cyan")}`
+  ]);
   return {
     embeds: [
       buildPanel({
         header: isProhibitedSale ? "Prohibited Sale Timeout" : "Scam/Trade Timeout",
-        body: isProhibitedSale
-          ? "Your recent messages looked like a prohibited-goods sale."
-          : "Your recent messages looked like scam/trade activity.",
+        body: [
+          isProhibitedSale
+            ? "Your recent messages looked like a prohibited-goods sale."
+            : "Your recent messages looked like scam/trade activity.",
+          summary
+        ].join("\n\n"),
         fields: [
-          { name: "Timeout", value: formatDuration(durationMs), inline: true },
-          { name: "Messages Deleted", value: "yes", inline: true },
-          { name: "Staff Notified", value: "yes", inline: true },
-          { name: "Next Step", value: "If this was a mistake, contact a staff member in the server." }
+          kpi("TIMEOUT", formatDuration(durationMs)),
+          kpi("DELETED", "yes"),
+          kpi("STAFF", "notified"),
+          { name: "NEXT STEP", value: "If this was a mistake, contact a staff member in the server.", inline: false }
         ],
-        color: DANGER
+        color: DANGER,
+        author: brandAuthor("MODERATION · TIMEOUT")
       })
     ]
   };
@@ -2232,26 +2255,42 @@ function buildSellingLogPanel({
     ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
     : `delete ${deleteText} · log only`;
 
+  const signalBlock = terminalBlock([
+    ...signals.slice(0, 6).map((s) => {
+      const conf = Number(s.confidence) || 0;
+      const tone = conf >= 85 ? "red" : conf >= 65 ? "yellow" : "green";
+      const tag = conf >= 85 ? "+" : conf >= 65 ? "~" : "·";
+      return `${ansi(tag, tone, { bold: true })} ${ansi(String(conf).padStart(3) + "%", tone, { bold: true })} ${ansi(s.reason, "white")}`;
+    }),
+    ...(aiLines ? [
+      `${ansi("·", "dim")} ${ansi("AI", "cyan")} ${ansi(aiLines.replace(/\n/g, " "), "dim")}`
+    ] : [])
+  ]);
+
+  const isTimeout = state.action === "timeout";
+  const tone = isTimeout ? "danger" : "warn";
+
   const fields = [
-    { name: "User", value: `<@${message.author?.id}>`, inline: true },
-    { name: "Channel", value: `<#${message.channelId}>`, inline: true },
-    { name: "Jump", value: link ? `[→ Open](${link})` : "deleted", inline: true },
-    { name: "Action", value: actionText, inline: true },
-    { name: isProhibitedSale ? "Commerce Hits" : "Scam/Trade Hits", value: `${state.count}/${state.repeatThreshold} in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`, inline: true },
-    { name: "Trigger", value: String(state.trigger || "watch window"), inline: true },
-    { name: "Why", value: confidenceLines },
-    aiLines ? { name: "AI Scam Verdict", value: aiLines } : null,
-    { name: "Evidence", value: formatSellingEvidence(message, recentMessages) }
+    kpi("USER", `<@${message.author?.id}>`, { mono: false }),
+    kpi("CHANNEL", `<#${message.channelId}>`, { mono: false }),
+    kpi("JUMP", link ? `[→ Open](${link})` : "deleted", { mono: false }),
+    kpiTone("ACTION", actionText, isTimeout ? "danger" : "warn"),
+    kpi(isProhibitedSale ? "COMMERCE HITS" : "SCAM HITS", `${state.count}/${state.repeatThreshold} · ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`),
+    kpi("TRIGGER", String(state.trigger || "watch window")),
+    kpiTone("CONFIDENCE", `${state.confidence}%`, tone),
+    { name: "WHY", value: signalBlock, inline: false },
+    aiLines ? { name: "AI Scam Verdict", value: aiLines, inline: false } : null,
+    { name: "EVIDENCE", value: formatSellingEvidence(message, recentMessages), inline: false }
   ].filter(Boolean);
 
   const panel = {
     header: isProhibitedSale
-      ? state.action === "timeout" ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
-      : state.action === "timeout" ? "Scam/Trade Timeout" : "Scam/Trade Alert",
-    author: { name: displayName, iconURL: avatar || undefined },
+      ? isTimeout ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
+      : isTimeout ? "Scam/Trade Timeout" : "Scam/Trade Alert",
+    author: brandAuthor(isTimeout ? "SCAM AI · CONFIRMED" : "SCAM AI · REVIEW", { iconURL: avatar || undefined }),
     fields,
-    footer: `Confidence: ${state.confidence}%`,
-    color: state.action === "timeout" ? DANGER : WARN
+    footer: `${BRAND.NAME} · ${displayName} · scam-ai · Confidence: ${state.confidence}%`,
+    color: isTimeout ? DANGER : WARN
   };
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);
   return panel;

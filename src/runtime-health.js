@@ -6,6 +6,7 @@ const state = {
 };
 
 function recordRuntimeEvent(level, scope, detail) {
+  if (level !== "warn" && level !== "error") return;
   const bucket = level === "warn" ? state.warnings : state.errors;
   bucket.unshift({
     at: Date.now(),

@@ -3,7 +3,18 @@ const {
   getStaffChannelId
 } = require("./channel-config");
 const { buildOutageReviewButtonRows } = require("./components");
-const { buildPanel, DANGER, INFO, SUCCESS, WARN } = require("./embed");
+const {
+  buildPanel,
+  DANGER,
+  INFO,
+  SUCCESS,
+  WARN,
+  brandAuthor,
+  ansi,
+  terminalBlock,
+  kpi,
+  kpiTone
+} = require("./embed");
 const {
   applyAutomaticLockdown,
   applyAutomaticUnlockdown
@@ -253,16 +264,28 @@ function formatUnlockResult(unlockResult) {
 }
 
 function buildOutageGeneralPayload() {
+  const body = [
+    "An issue with KiciaHook has been detected and is being investigated.",
+    "Chat is paused while staff confirms — hold tight, updates will land here.",
+    terminalBlock([
+      `${ansi("status", "dim")}   ${ansi("UNAWARE", "yellow", { bold: true })}`,
+      `${ansi("mode", "dim")}     ${ansi("auto-paused", "yellow")}`,
+      `${ansi("updates", "dim")}  ${ansi("posted here", "cyan")}`
+    ])
+  ].join("\n\n");
   return {
     content: "## 🚨 Issue Detected · [Auto Detect]",
     embeds: [
       buildPanel({
         header: "KiciaHook Issue Detected",
-        body: [
-          "An issue with KiciaHook has been detected and is being investigated.",
-          "Chat is paused while staff confirms — hold tight, updates will land here."
-        ].join("\n"),
-        color: WARN
+        body,
+        fields: [
+          kpiTone("STATUS", "UNAWARE", "warn"),
+          kpi("MODE", "auto-paused"),
+          kpi("UPDATES", "posted here")
+        ],
+        color: WARN,
+        author: brandAuthor("OUTAGE WATCH")
       })
     ],
     allowedMentions: { parse: [] }
@@ -270,6 +293,12 @@ function buildOutageGeneralPayload() {
 }
 
 function buildOutageStaffPayload(result, { lockResult, reviewId } = {}) {
+  const autoActions = terminalBlock([
+    `${ansi("$", "dim")} ${ansi("status", "cyan")} ${ansi("set", "white")} ${ansi("UNAWARE", "yellow", { bold: true })}`,
+    `${ansi("$", "dim")} ${ansi("lockdown", "cyan")} ${ansi("apply", "white")} ${ansi(formatLockResult(lockResult).replace(/\(([^)]+)\)/, "$1"), "dim")}`,
+    `${ansi("$", "dim")} ${ansi("log", "cyan")}    ${ansi("post", "white")} ${ansi("ok", "green", { bold: true })} ${ansi("→ #logs", "dim")}`
+  ]);
+
   return {
     embeds: [
       buildPanel({
@@ -278,9 +307,7 @@ function buildOutageStaffPayload(result, { lockResult, reviewId } = {}) {
           `I detected an increase in users reporting Kicia is down — **${result.count}/${result.threshold}** distinct users in the last **${Math.round(result.windowMs / 60_000)} minutes**.`,
           "",
           "**Auto Actions**",
-          "- Status set to **Unaware**",
-          `- Auto Lock: ${formatLockResult(lockResult)}`,
-          "",
+          autoActions,
           "**Decide**",
           "- 🚨 **Confirm Outage** → keep channels locked + status **Down** (use when Kicia really is down)",
           "- ✅ **False Alarm** → unlock channels + status **Up** (use when Kicia is fine)",
@@ -288,7 +315,14 @@ function buildOutageStaffPayload(result, { lockResult, reviewId } = {}) {
           "**Recent Samples**",
           formatOutageSamples(result.events)
         ].join("\n"),
-        color: WARN
+        fields: [
+          kpiTone("DISTINCT", `${result.count}/${result.threshold}`, "warn"),
+          kpi("WINDOW", `${Math.round(result.windowMs / 60_000)}m`),
+          kpi("REVIEW ID", reviewId ? String(reviewId).slice(0, 12) : "—")
+        ],
+        color: WARN,
+        author: brandAuthor("OUTAGE REVIEW"),
+        footer: reviewId ? `Review ID · ${reviewId}` : undefined
       })
     ],
     components: buildOutageReviewButtonRows(reviewId),
@@ -304,6 +338,7 @@ function buildOutageLogPanel(result, {
 } = {}) {
   return {
     header: "Outage Auto Detection Triggered",
+    author: brandAuthor("OUTAGE LOG"),
     body: [
       `**Distinct Users:** ${result.count}/${result.threshold}`,
       `**Window:** ${Math.round(result.windowMs / 60_000)} minutes`,
@@ -316,6 +351,11 @@ function buildOutageLogPanel(result, {
       "**Recent Samples**",
       formatOutageSamples(result.events)
     ].filter(Boolean).join("\n"),
+    fields: [
+      kpiTone("DISTINCT", `${result.count}/${result.threshold}`, "warn"),
+      kpi("WINDOW", `${Math.round(result.windowMs / 60_000)}m`),
+      kpi("STATUS", "UNAWARE")
+    ],
     color: WARN,
     components: reviewId ? buildOutageReviewButtonRows(reviewId) : []
   };
@@ -329,9 +369,20 @@ function buildOutageResolvedGeneralPayload({ resolution, actor, unlockResult }) 
           header: "KiciaHook Outage Confirmed",
           body: [
             "Staff confirmed KiciaHook is currently having issues.",
-            "Chat stays locked while a fix is rolled out — updates will land in the status channel."
-          ].join("\n"),
-          color: DANGER
+            "Chat stays locked while a fix is rolled out — updates will land in the status channel.",
+            terminalBlock([
+              `${ansi("status", "dim")}    ${ansi("DOWN", "red", { bold: true })}`,
+              `${ansi("lock", "dim")}      ${ansi("channels held", "red")}`,
+              `${ansi("updates", "dim")}   ${ansi("posted in #status", "cyan")}`
+            ])
+          ].join("\n\n"),
+          fields: [
+            kpiTone("STATUS", "DOWN", "danger"),
+            kpi("LOCK", "held"),
+            kpi("UPDATES", "#status")
+          ],
+          color: DANGER,
+          author: brandAuthor("OUTAGE CONFIRMED")
         })
       ],
       allowedMentions: { parse: [] }
@@ -344,9 +395,19 @@ function buildOutageResolvedGeneralPayload({ resolution, actor, unlockResult }) 
         body: [
           "Staff reviewed the auto-detection and KiciaHook is fine.",
           unlockResult?.ok ? "Channels were unlocked." : "Manual unlock may still be needed.",
-          actor ? `Reviewed by ${actor}.` : null
-        ].filter(Boolean).join("\n"),
-        color: SUCCESS
+          terminalBlock([
+            `${ansi("status", "dim")}   ${ansi("UP", "green", { bold: true })}`,
+            `${ansi("lock", "dim")}     ${ansi(unlockResult?.ok ? "released" : "manual unlock pending", unlockResult?.ok ? "green" : "yellow")}`,
+            actor ? `${ansi("reviewed", "dim")} ${ansi(actor, "cyan")}` : null
+          ].filter(Boolean))
+        ].filter(Boolean).join("\n\n"),
+        fields: [
+          kpiTone("STATUS", "UP", "success"),
+          kpi("LOCK", unlockResult?.ok ? "released" : "manual"),
+          actor ? kpi("REVIEWED", actor) : null
+        ].filter(Boolean),
+        color: SUCCESS,
+        author: brandAuthor("ALL CLEAR")
       })
     ],
     allowedMentions: { parse: [] }

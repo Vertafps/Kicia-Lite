@@ -3,7 +3,7 @@ const {
   SCAM_REVIEW_FALSE_PREFIX,
   buildScamReviewButtonRows
 } = require("../components");
-const { buildPanel, DANGER, INFO, SUCCESS, WARN } = require("../embed");
+const { buildPanel, DANGER, INFO, SUCCESS, WARN, brandAuthor } = require("../embed");
 const { hasHigherStaffRole, hasAnyRole, isKernelUserId } = require("../permissions");
 const { STAFF_ROLE_IDS } = require("../config");
 const { labelScamDecisionAudit } = require("../restricted-emoji-db");
@@ -38,7 +38,7 @@ function getActorLabel(interaction) {
 
 async function replyEphemeral(interaction, panel) {
   const payload = {
-    embeds: [buildPanel(panel)],
+    embeds: [buildPanel({ author: brandAuthor("SCAM AI · REVIEW"), ...panel })],
     flags: 1 << 6,
     allowedMentions: { parse: [] }
   };

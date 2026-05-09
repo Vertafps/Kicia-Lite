@@ -634,7 +634,7 @@ test("same user inside 30 seconds gets user cooldown reaction", () => {
 
 test("different user inside 5 seconds gets global cooldown reaction", () => {
   markGuildReply("user-a", 1_000);
-  assert.equal(getCooldownReaction("user-b", 4_000), "🚧");
+  assert.equal(getCooldownReaction("user-b", 4_000), "🧊");
 });
 
 test("parses lock command aliases", () => {

@@ -230,21 +230,24 @@ function detectExecutorListIntent(text, kb) {
     return null;
   }
 
+  // Match "executor", "executors", and the slang abbreviations "exec", "execs", "execors".
+  const EX = "(?:executors?|execs?|execors?)";
   const asksChoice =
-    /\bwhat\s+executor\s+should\s+i\s+use\b/.test(normalized) ||
-    /\bwhich\s+executor\s+should\s+i\s+use\b/.test(normalized) ||
-    /\bany\s+good\s+executors?\b/.test(normalized);
+    new RegExp(`\\bwhat\\s+${EX}\\s+should\\s+i\\s+use\\b`).test(normalized) ||
+    new RegExp(`\\bwhich\\s+${EX}\\s+should\\s+i\\s+use\\b`).test(normalized) ||
+    new RegExp(`\\bany\\s+good\\s+${EX}\\b`).test(normalized);
   const asksList =
-    /\b(?:recommended|supported|best|good|list|show|working|work)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
-    /\bwhat\s+(?:are\s+)?(?:the\s+)?(?:recommended|supported|best|working)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
-    /\bwhat\s+(?:free\s+|paid\s+)?executors?\s+are\s+(?:recommended|supported|best|working|work)\b/.test(normalized) ||
-    /\bwhich\s+(?:free\s+|paid\s+)?executors?\s+(?:are\s+)?(?:recommended|supported|working|work)\b/.test(normalized) ||
-    /\bshow\s+me\s+(?:the\s+)?(?:recommended|supported|best|working)\s+(?:free\s+|paid\s+)?executors?\b/.test(normalized) ||
-    /\bexecutors?\s+(?:that|which)?\s*(?:are\s+)?(?:working|work|supported)\b/.test(normalized) ||
-    /\b(?:executor|executors)\s+list\b/.test(normalized) ||
-    /\blist\s+(?:free\s+|paid\s+)?(?:supported\s+|recommended\s+|working\s+)?executors?\b/.test(normalized) ||
-    /^executors?$/.test(normalized); // Support "executors" or "executor" alone
-  const mentionsExecutorSet = /\bexecutors?\b/.test(normalized);
+    new RegExp(`\\b(?:recommended|supported|best|good|list|show|working|work)\\s+(?:free\\s+|paid\\s+)?${EX}\\b`).test(normalized) ||
+    new RegExp(`\\bwhat\\s+(?:are\\s+)?(?:the\\s+)?(?:recommended|supported|best|working)\\s+(?:free\\s+|paid\\s+)?${EX}\\b`).test(normalized) ||
+    new RegExp(`\\bwhat\\s+(?:free\\s+|paid\\s+)?${EX}\\s+are\\s+(?:recommended|supported|best|working|work)\\b`).test(normalized) ||
+    new RegExp(`\\bwhich\\s+(?:free\\s+|paid\\s+)?${EX}\\s+(?:are\\s+)?(?:recommended|supported|working|work)\\b`).test(normalized) ||
+    new RegExp(`\\bshow\\s+me\\s+(?:the\\s+)?(?:recommended|supported|best|working)?\\s*(?:free\\s+|paid\\s+)?${EX}\\b`).test(normalized) ||
+    new RegExp(`\\b${EX}\\s+(?:that|which)?\\s*(?:are\\s+)?(?:working|work|supported)\\b`).test(normalized) ||
+    new RegExp(`\\b${EX}\\s+list\\b`).test(normalized) ||
+    new RegExp(`\\blist\\s+(?:of\\s+)?(?:free\\s+|paid\\s+)?(?:supported\\s+|recommended\\s+|working\\s+)?${EX}\\b`).test(normalized) ||
+    new RegExp(`\\bwhat'?s?\\s+(?:the\\s+)?(?:supported|recommended)\\s+${EX}\\s+list\\b`).test(normalized) ||
+    new RegExp(`^${EX}$`).test(normalized);
+  const mentionsExecutorSet = new RegExp(`\\b${EX}\\b`).test(normalized);
 
   if (!asksChoice && !(asksList && mentionsExecutorSet)) return null;
 
@@ -416,7 +419,12 @@ function buildExecutorListReply(kb, options = {}) {
     header: "\u{1F9E9} Executor Picks",
     body: `${intro}\n\n${lines.join("\n")}`,
     buttons: [{ label: "Open Supported Executors", url: getDocsJumpUrl() }],
-    color: "success"
+    color: "success",
+    executors: executors.map((e) => ({
+      name: e.name,
+      type: e.type || null,
+      compatibility: e.compatibility || null
+    }))
   };
 }
 

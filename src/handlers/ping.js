@@ -105,6 +105,31 @@ async function handleGuildPing(message) {
     return;
   }
 
+  if (route.kind === "executor_list" && Array.isArray(route.executors) && route.executors.length) {
+    const { AttachmentBuilder } = require("discord.js");
+    const buf = ui.canvas.renderExecutorList({ executors: route.executors });
+    const img = new AttachmentBuilder(buf, { name: "executor-list.png" });
+    const embed = buildPanel({
+      header: route.header,
+      body: route.body,
+      tip: route.tip,
+      tipStyle: route.tipStyle,
+      tipLevel: route.tipLevel,
+      extra: route.extra,
+      color: COLOR_BY_NAME[route.color] || INFO,
+      author: brandAuthor("KB · EXECUTOR")
+    });
+    embed.setImage("attachment://executor-list.png");
+    await safeReply(message, {
+      embeds: [embed],
+      components: buildLinkButtonRows(route.buttons),
+      files: [img],
+      allowedMentions: { repliedUser: false }
+    });
+    markGuildReply(message.author.id);
+    return;
+  }
+
   const sectionLabel = route.kind === "executor" || route.kind === "executor_unknown" || route.kind === "executor_list"
     ? "EXECUTOR"
     : route.kind === "status"

@@ -36,6 +36,7 @@ const canvas = {
   renderConfidenceMeter:  require('./canvas/confidenceMeter').renderConfidenceMeter,
   renderLockdownGrid:     require('./canvas/lockdownGrid').renderLockdownGrid,
   renderKbEditorial:      require('./canvas/kbEditorial').renderKbEditorial,
+  renderExecutorList:     require('./canvas/executorList').renderExecutorList,
 };
 
 module.exports = {

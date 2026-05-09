@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "@napi-rs/canvas": "^1.0.0",
     "@resvg/resvg-js": "^2.6.2",
     "discord.js": "14.26.3",
     "dotenv": "^16.4.5",

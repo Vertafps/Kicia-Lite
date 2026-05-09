@@ -193,7 +193,7 @@ test("confirming an outage review keeps status DOWN and posts a confirm panel", 
 
   assert.ok(result.ok);
   assert.equal(getRuntimeStatus(), "DOWN");
-  assert.match(sends.general[1].embeds[0].data.title, /KiciaHook Outage Confirmed/i);
+  assert.match(sends.general[1].embeds[0].data.title, /KiciaHook is currently DOWN/i);
 });
 
 test("dismissing as false alarm restores status UP and unlocks", async () => {
@@ -238,5 +238,5 @@ test("dismissing as false alarm restores status UP and unlocks", async () => {
   assert.ok(result.ok);
   assert.equal(unlockCalls.length, 1);
   assert.equal(getRuntimeStatus(), "UP");
-  assert.match(sends.general[1].embeds[0].data.title, /False Alarm/i);
+  assert.match(sends.general[1].embeds[0].data.title, /All clear/i);
 });

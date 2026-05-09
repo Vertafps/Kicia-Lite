@@ -16,6 +16,7 @@ const {
   kpiTone
 } = require("./embed");
 const viz = require("./embed-viz");
+const ui = require("./ui");
 const {
   applyAutomaticLockdown,
   applyAutomaticUnlockdown
@@ -265,88 +266,37 @@ function formatUnlockResult(unlockResult) {
 }
 
 function buildOutageGeneralPayload() {
-  const body = [
-    "An issue with KiciaHook has been detected and is being investigated.",
-    "Chat is paused while staff confirms — hold tight, updates will land here.",
-    terminalBlock([
-      `${ansi("status", "dim")}   ${ansi("UNAWARE", "yellow", { bold: true })}`,
-      `${ansi("mode", "dim")}     ${ansi("auto-paused", "yellow")}`,
-      `${ansi("updates", "dim")}  ${ansi("posted here", "cyan")}`
-    ])
-  ].join("\n\n");
-  const orb = viz.makeImageAttachment("outage-detected", viz.statusOrbRibbonSvg({
-    status: "UNAWARE",
-    uptime: 97.20,
-    ribbon: Array.from({ length: 96 }, (_, i) => (i >= 88 ? "unaware" : i >= 85 && i <= 87 ? "down" : "up"))
-  }));
+  const built = ui.buildOutagePublic({ since: "a few minutes ago" });
   return {
     content: "## 🚨 Issue Detected · [Auto Detect]",
-    embeds: [
-      buildPanel({
-        header: "KiciaHook Issue Detected",
-        body,
-        fields: [
-          kpiTone("STATUS", "UNAWARE", "warn"),
-          kpi("MODE", "auto-paused"),
-          kpi("UPDATES", "posted here")
-        ],
-        color: WARN,
-        author: brandAuthor("OUTAGE WATCH"),
-        image: orb ? orb.url : undefined
-      })
-    ],
-    files: orb ? [orb.attachment] : [],
+    embeds: built.embeds,
+    components: built.components,
+    files: built.files,
     allowedMentions: { parse: [] }
   };
 }
 
 function buildOutageStaffPayload(result, { lockResult, reviewId } = {}) {
-  const autoActions = terminalBlock([
-    `${ansi("$", "dim")} ${ansi("status", "cyan")} ${ansi("set", "white")} ${ansi("UNAWARE", "yellow", { bold: true })}`,
-    `${ansi("$", "dim")} ${ansi("lockdown", "cyan")} ${ansi("apply", "white")} ${ansi(formatLockResult(lockResult).replace(/\(([^)]+)\)/, "$1"), "dim")}`,
-    `${ansi("$", "dim")} ${ansi("log", "cyan")}    ${ansi("post", "white")} ${ansi("ok", "green", { bold: true })} ${ansi("→ #logs", "dim")}`
-  ]);
-
-  const seen = new Set();
-  let tIndex = 0;
-  const reports = (result.events || []).slice(0, 8).map((evt) => {
-    const u = evt.userId || evt.userTag || `u${tIndex++}`;
-    seen.add(u);
-    return { t: (tIndex + 0.5) * (10 / Math.max(1, (result.events || []).length)), user: u, conf: 80 };
+  const events = result.events || [];
+  const windowMin = Math.round(result.windowMs / 60_000);
+  const total = Math.max(1, events.length);
+  const reports = events.slice(0, 8).map((evt, idx) => {
+    const u = evt.userTag || evt.userId || `user${idx + 1}`;
+    const t = ((idx + 0.5) * windowMin) / total;
+    const conf = typeof evt.confidence === "number" ? evt.confidence : 80;
+    return { t, user: u, conf };
   });
-  const timelineImg = viz.makeImageAttachment(
-    `outage-timeline-${result.count}-${result.threshold}`,
-    viz.outageTimelineSvg({ reports, threshold: result.threshold, windowMin: Math.round(result.windowMs / 60_000) })
-  );
 
-  const embed = buildPanel({
-    header: "Outage Auto Detection — Review Needed",
-    body: [
-      `I detected an increase in users reporting Kicia is down — **${result.count}/${result.threshold}** distinct users in the last **${Math.round(result.windowMs / 60_000)} minutes**.`,
-      "",
-      "**Auto Actions**",
-      autoActions,
-      "**Decide**",
-      "- 🚨 **Confirm Outage** → keep channels locked + status **Down** (use when Kicia really is down)",
-      "- ✅ **False Alarm** → unlock channels + status **Up** (use when Kicia is fine)",
-      "",
-      "**Recent Samples**",
-      formatOutageSamples(result.events)
-    ].join("\n"),
-    fields: [
-      kpiTone("DISTINCT", `${result.count}/${result.threshold}`, "warn"),
-      kpi("WINDOW", `${Math.round(result.windowMs / 60_000)}m`),
-      kpi("REVIEW ID", reviewId ? String(reviewId).slice(0, 12) : "—")
-    ],
-    color: WARN,
-    author: brandAuthor("OUTAGE REVIEW"),
-    image: timelineImg ? timelineImg.url : undefined,
-    footer: reviewId ? `Review ID · ${reviewId}` : undefined
+  const built = ui.buildOutageStaffReview({
+    reports,
+    threshold: result.threshold,
+    windowMin,
+    caseId: reviewId ? String(reviewId).slice(0, 12) : "O-0000"
   });
 
   return {
-    embeds: [embed],
-    files: timelineImg ? [timelineImg.attachment] : [],
+    embeds: built.embeds,
+    files: built.files,
     components: buildOutageReviewButtonRows(reviewId),
     allowedMentions: { parse: [] }
   };
@@ -385,67 +335,19 @@ function buildOutageLogPanel(result, {
 
 function buildOutageResolvedGeneralPayload({ resolution, actor, unlockResult }) {
   if (resolution === "confirmed") {
-    const orb = viz.makeImageAttachment("outage-confirmed", viz.statusOrbRibbonSvg({
-      status: "DOWN",
-      uptime: 87.50,
-      ribbon: Array.from({ length: 96 }, (_, i) => (i >= 88 ? "down" : "up"))
-    }));
+    const built = ui.buildOutageConfirmed({ since: "a few minutes ago" });
     return {
-      embeds: [
-        buildPanel({
-          header: "KiciaHook Outage Confirmed",
-          body: [
-            "Staff confirmed KiciaHook is currently having issues.",
-            "Chat stays locked while a fix is rolled out — updates will land in the status channel.",
-            terminalBlock([
-              `${ansi("status", "dim")}    ${ansi("DOWN", "red", { bold: true })}`,
-              `${ansi("lock", "dim")}      ${ansi("channels held", "red")}`,
-              `${ansi("updates", "dim")}   ${ansi("posted in #status", "cyan")}`
-            ])
-          ].join("\n\n"),
-          fields: [
-            kpiTone("STATUS", "DOWN", "danger"),
-            kpi("LOCK", "held"),
-            kpi("UPDATES", "#status")
-          ],
-          color: DANGER,
-          author: brandAuthor("OUTAGE CONFIRMED"),
-          image: orb ? orb.url : undefined
-        })
-      ],
-      files: orb ? [orb.attachment] : [],
+      embeds: built.embeds,
+      components: built.components,
+      files: built.files,
       allowedMentions: { parse: [] }
     };
   }
-  const orb = viz.makeImageAttachment("outage-allclear", viz.statusOrbRibbonSvg({
-    status: "UP",
-    uptime: 99.81,
-    ribbon: Array.from({ length: 96 }, () => "up")
-  }));
+  const built = ui.buildOutageCleared({ uptime: 99.81 });
   return {
-    embeds: [
-      buildPanel({
-        header: "False Alarm — All Clear",
-        body: [
-          "Staff reviewed the auto-detection and KiciaHook is fine.",
-          unlockResult?.ok ? "Channels were unlocked." : "Manual unlock may still be needed.",
-          terminalBlock([
-            `${ansi("status", "dim")}   ${ansi("UP", "green", { bold: true })}`,
-            `${ansi("lock", "dim")}     ${ansi(unlockResult?.ok ? "released" : "manual unlock pending", unlockResult?.ok ? "green" : "yellow")}`,
-            actor ? `${ansi("reviewed", "dim")} ${ansi(actor, "cyan")}` : null
-          ].filter(Boolean))
-        ].filter(Boolean).join("\n\n"),
-        fields: [
-          kpiTone("STATUS", "UP", "success"),
-          kpi("LOCK", unlockResult?.ok ? "released" : "manual"),
-          actor ? kpi("REVIEWED", actor) : null
-        ].filter(Boolean),
-        color: SUCCESS,
-        author: brandAuthor("ALL CLEAR"),
-        image: orb ? orb.url : undefined
-      })
-    ],
-    files: orb ? [orb.attachment] : [],
+    embeds: built.embeds,
+    components: built.components,
+    files: built.files,
     allowedMentions: { parse: [] }
   };
 }

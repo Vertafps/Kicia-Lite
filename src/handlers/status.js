@@ -24,6 +24,7 @@ const { detectLongStatusPrompt, detectShortStatusPrompt } = require("../status-p
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
 const { safeEdit, safeReact, safeReply } = require("../utils/respond");
 const { getCooldownReaction, markGuildReply } = require("./cooldown");
+const ui = require("../ui");
 
 function parseStatusCommand(content) {
   const normalized = String(content || "").trim().toLowerCase();
@@ -73,38 +74,23 @@ function shouldAutoReplyStatus(content) {
 }
 
 function buildStatusReplyPayload(status = getRuntimeStatus()) {
-  const tone = status === "DOWN" ? "danger" : status === "UNAWARE" ? "warn" : "success";
-  const color = status === "DOWN" ? DANGER : status === "UNAWARE" ? WARN : SUCCESS;
-  const description = [
-    buildStatusReplyBody(status),
-    terminalBlock([
-      `${ansi("status", "dim")}   ${ansi(status, tone, { bold: true })}`,
-      `${ansi("updates", "dim")}  ${ansi("posted in #status", "info")}`,
-      `${ansi("command", "dim")}  ${ansi("$status", "white", { bold: true })} ${ansi("·", "dim")} ${ansi("$status up|down|unaware", "dim")}`
-    ])
-  ].join("\n\n");
-
   const ribbon = status === "UP"
     ? Array.from({ length: 96 }, () => "up")
     : status === "UNAWARE"
       ? Array.from({ length: 96 }, (_, i) => (i >= 88 ? "unaware" : "up"))
       : Array.from({ length: 96 }, (_, i) => (i >= 90 ? "down" : i >= 86 ? "unaware" : "up"));
-  const orb = viz.makeImageAttachment(`status-${status.toLowerCase()}`, viz.statusOrbRibbonSvg({ status, uptime: status === "UP" ? 99.94 : status === "UNAWARE" ? 97.20 : 87.50, ribbon }));
+  const uptime = status === "UP" ? 99.94 : status === "UNAWARE" ? 97.20 : 87.50;
 
-  const embed = buildRichPanel({
-    color,
-    author: brandAuthor("STATUS"),
-    title: "📡 KiciaHook Status",
-    description,
-    fields: [
-      kpi("STATE", status),
-      kpi("UPDATES", "#status", { mono: true }),
-      kpi("MODE", status === "UNAWARE" ? "review" : status === "DOWN" ? "incident" : "live")
-    ],
-    image: orb ? orb.url : undefined,
-    footer: `${BRAND.NAME} · status uplink ${status === "UP" ? "active" : status.toLowerCase()}`
+  const result = ui.buildStatusEmbed({
+    status,
+    uptime,
+    latencyMs: 0,
+    ribbon,
+    lastDown: status === "UP" ? "—" : "earlier today",
+    incidents7d: status === "UP" ? "0" : "1"
   });
-  return { embed, files: orb ? [orb.attachment] : [] };
+
+  return { embed: result.embeds[0], files: result.files };
 }
 
 function buildStatusEmbed(status = getRuntimeStatus()) {
@@ -181,23 +167,23 @@ async function handleJarvisCommand(message, refreshKb, { deep = false } = {}) {
     }
   });
 
-  const cardImg = viz.makeImageAttachment(
-    `jarvis-card-${report.hasIssue ? "warn" : "ok"}`,
-    viz.jarvisScorecardSvg({ systems: report.scorecard })
-  );
-
+  const findings = (report.sectionSummaries || [])
+    .filter((s) => s.tone !== "ok")
+    .map((s) => ({
+      key: s.key,
+      severity: s.tone === "fail" ? "fail" : "warn",
+      line: s.detail
+    }));
+  const runId = `J-${String(Date.now()).slice(-4)}`;
+  const sweep = ui.buildSweepReportEmbed({
+    systems: report.scorecard,
+    findings,
+    runId
+  });
   const finalPayload = {
-    embeds: [
-      buildPanel({
-        header: deep ? "Sweep complete · full report" : "Sweep complete",
-        body: report.body,
-        color: report.color,
-        author: brandAuthor(deep ? "JARVIS · REPORT · TPM" : "JARVIS · REPORT"),
-        image: cardImg ? cardImg.url : undefined,
-        footer: report.color === WARN ? "Carrot · jarvis · attention needed" : "Carrot · jarvis · all systems nominal"
-      })
-    ],
-    files: cardImg ? [cardImg.attachment] : [],
+    embeds: sweep.embeds,
+    components: sweep.components,
+    files: sweep.files,
     allowedMentions: { repliedUser: false }
   };
 

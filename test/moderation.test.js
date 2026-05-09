@@ -247,6 +247,15 @@ function panelText(panel) {
     if (f.name) parts.push(f.name);
     if (f.value) parts.push(f.value);
   }
+  if (panel?.embed?.data) {
+    if (typeof panel.embed.data.description === "string") parts.push(panel.embed.data.description);
+    if (panel.embed.data.footer?.text) parts.push(panel.embed.data.footer.text);
+    if (panel.embed.data.title) parts.push(panel.embed.data.title);
+    for (const f of (panel.embed.data.fields || [])) {
+      if (f.name) parts.push(f.name);
+      if (f.value) parts.push(f.value);
+    }
+  }
   return parts.join("\n");
 }
 

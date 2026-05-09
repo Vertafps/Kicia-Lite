@@ -1,4 +1,5 @@
 const { buildPanel, SUCCESS, DANGER, WARN, INFO, brandAuthor } = require("../embed");
+const ui = require("../ui");
 const { buildLinkButtonRows } = require("../components");
 const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
 const { getTicketJumpUrl } = require("../channel-config");
@@ -65,6 +66,45 @@ async function handleGuildPing(message) {
   const transcript = await buildTranscript(message);
   const kb = await fetchKb();
   const route = classifyTranscript(transcript, kb, getRuntimeStatus());
+
+  if (route.kind === "docs" && route.kb) {
+    const built = ui.buildKbMatchEmbed({
+      question: transcript,
+      title: route.kb.title,
+      tag: route.kb.tag,
+      steps: route.kb.steps,
+      step: 1,
+      match: route.kb.match,
+      source: route.kb.source,
+      url: route.kb.url
+    });
+    await safeReply(message, {
+      embeds: built.embeds,
+      components: buildLinkButtonRows(route.buttons),
+      files: built.files,
+      allowedMentions: { repliedUser: false }
+    });
+    markGuildReply(message.author.id);
+    return;
+  }
+
+  if (route.kind === "ticket" && route.kb) {
+    const built = ui.buildKbNoMatchEmbed({
+      question: transcript,
+      score: route.kb.score,
+      ticketUrl: getTicketJumpUrl(),
+      closestArticles: route.kb.closestArticles
+    });
+    await safeReply(message, {
+      embeds: built.embeds,
+      components: buildLinkButtonRows(route.buttons),
+      files: built.files,
+      allowedMentions: { repliedUser: false }
+    });
+    markGuildReply(message.author.id);
+    return;
+  }
+
   const sectionLabel = route.kind === "executor" || route.kind === "executor_unknown" || route.kind === "executor_list"
     ? "EXECUTOR"
     : route.kind === "status"

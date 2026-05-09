@@ -904,7 +904,7 @@ test("public status command is available to non-owners", async () => {
 
   assert.equal(handled, true);
   assert.ok(replyPayload);
-  assert.match(replyPayload.embeds[0].data.description, /status says it's up rn/i);
+  assert.match(replyPayload.embeds[0].data.description, /STATUS.*UP/);
   assert.equal(replyPayload.components.length, 1);
 });
 
@@ -925,7 +925,7 @@ test("generic no-ping working prompt auto-replies with status", async () => {
 
   assert.equal(handled, true);
   assert.ok(replyPayload);
-  assert.match(replyPayload.embeds[0].data.description, /status channel/i);
+  assert.match(replyPayload.embeds[0].data.description, /\bSTATUS\b/);
 });
 
 test("$status is silenced in the configured general channel", async () => {

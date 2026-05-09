@@ -769,10 +769,42 @@ function tryIssueMatch(transcript, kb) {
   return best.entry;
 }
 
+function searchKbIssues(transcript, kb, { limit = 3 } = {}) {
+  const normalizedTranscript = normalizeText(transcript);
+  if (!normalizedTranscript) return [];
+  const transcriptTokens = tokenize(transcript);
+  const ranked = [];
+
+  for (const entry of kb.issues || []) {
+    const transcriptScore = scoreEntryAgainstText(normalizedTranscript, transcriptTokens, entry);
+    if (!transcriptScore.qualifies && transcriptScore.score <= 0) continue;
+    ranked.push({ entry, score: transcriptScore.score });
+  }
+
+  ranked.sort((a, b) => b.score - a.score);
+
+  const peakScore = ranked[0]?.score || 1;
+  return ranked.slice(0, limit).map(({ entry, score }) => ({
+    entry,
+    score,
+    match: Math.max(0, Math.min(1, peakScore > 0 ? score / Math.max(peakScore, 12) : 0))
+  }));
+}
+
+function scoreIssueMatchConfidence(transcript, kb, entry) {
+  if (!entry) return 0;
+  const normalized = normalizeText(transcript);
+  const tokens = tokenize(transcript);
+  const detail = scoreEntryAgainstText(normalized, tokens, entry);
+  return Math.max(0, Math.min(1, detail.score / 30));
+}
+
 module.exports = {
   fetchKb,
   forceRefreshKb,
   normalizeKb,
   findExecutorMatch,
-  tryIssueMatch
+  tryIssueMatch,
+  searchKbIssues,
+  scoreIssueMatchConfidence
 };

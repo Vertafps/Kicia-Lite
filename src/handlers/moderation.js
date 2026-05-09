@@ -43,6 +43,7 @@ const {
   kpiTone
 } = require("../embed");
 const viz = require("../embed-viz");
+const ui = require("../ui");
 const { fetchKb } = require("../kb");
 const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
 const { sendIgnoreLogPanel, sendLogPanel } = require("../log-channel");
@@ -1955,6 +1956,12 @@ function withModerationLogTools(panel, {
 
   const existingRows = Array.isArray(panel.components) ? panel.components : [];
   const toolRows = buildModerationLogButtonRows(actionId, { canRevert });
+
+  if (panel.embed && typeof panel.embed.toJSON === "function" && panel.embed.data) {
+    const existing = panel.embed.data.footer?.text || "";
+    panel.embed.setFooter({ text: existing ? `${existing} · ${reviewNote}` : reviewNote });
+  }
+
   return {
     ...panel,
     extra: [panel.extra, reviewNote].filter(Boolean).join(" | "),
@@ -2244,68 +2251,64 @@ function buildSellingLogPanel({
   auditId = null
 }) {
   const isProhibitedSale = hasProhibitedSaleSignal(signals);
-  const link = deleteResult?.queued ? null : buildMessageUrl(message);
-  const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
-  const confidenceLines = signals
-    .map((s) => `- ${s.confidence || 0}% — ${s.reason}`)
-    .join("\n");
-  const aiLines = formatAiVerdictLines(signals);
   const deleteText = formatDeleteSummary(deleteResult);
-  const actionText = state.action === "timeout"
-    ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
-    : `delete ${deleteText} · log only`;
-
-  const signalBlock = terminalBlock([
-    ...signals.slice(0, 6).map((s) => {
-      const conf = Number(s.confidence) || 0;
-      const tone = conf >= 85 ? "red" : conf >= 65 ? "yellow" : "green";
-      const tag = conf >= 85 ? "+" : conf >= 65 ? "~" : "·";
-      return `${ansi(tag, tone, { bold: true })} ${ansi(String(conf).padStart(3) + "%", tone, { bold: true })} ${ansi(s.reason, "white")}`;
-    }),
-    ...(aiLines ? [
-      `${ansi("·", "dim")} ${ansi("AI", "cyan")} ${ansi(aiLines.replace(/\n/g, " "), "dim")}`
-    ] : [])
-  ]);
-
   const isTimeout = state.action === "timeout";
-  const tone = isTimeout ? "danger" : "warn";
-
-  const fields = [
-    kpi("USER", `<@${message.author?.id}>`, { mono: false }),
-    kpi("CHANNEL", `<#${message.channelId}>`, { mono: false }),
-    kpi("JUMP", link ? `[→ Open](${link})` : "deleted", { mono: false }),
-    kpiTone("ACTION", actionText, isTimeout ? "danger" : "warn"),
-    kpi(isProhibitedSale ? "COMMERCE HITS" : "SCAM HITS", `${state.count}/${state.repeatThreshold} · ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`),
-    kpi("TRIGGER", String(state.trigger || "watch window")),
-    kpiTone("CONFIDENCE", `${state.confidence}%`, tone),
-    { name: "WHY", value: signalBlock, inline: false },
-    aiLines ? { name: "AI Scam Verdict", value: aiLines, inline: false } : null,
-    { name: "EVIDENCE", value: formatSellingEvidence(message, recentMessages), inline: false }
-  ].filter(Boolean);
-
-  const panel = {
-    header: isProhibitedSale
-      ? isTimeout ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
-      : isTimeout ? "Scam/Trade Timeout" : "Scam/Trade Alert",
-    author: brandAuthor(isTimeout ? "SCAM AI · CONFIRMED" : "SCAM AI · REVIEW", { iconURL: avatar || undefined }),
-    fields,
-    footer: `${BRAND.NAME} · ${displayName} · scam-ai · Confidence: ${state.confidence}%`,
-    color: isTimeout ? DANGER : WARN
-  };
+  const aiLines = formatAiVerdictLines(signals);
+  const header = isProhibitedSale
+    ? isTimeout ? "Prohibited Sale Timeout" : "Prohibited Sale Alert"
+    : isTimeout ? "Scam/Trade Timeout" : "Scam/Trade Alert";
 
   const dialSignals = signals.slice(0, 5).map((s) => ({
     name: String(s.reason || "signal").slice(0, 28),
     weight: Math.max(0, Math.min(100, Number(s.confidence) || 0))
   }));
-  const dialImg = viz.makeImageAttachment(
-    `scam-${Math.round(state.confidence / 10) * 10}-${dialSignals.length}`,
-    viz.scamConfidenceSvg({ score: Math.max(0, Math.min(100, Math.round(state.confidence))), signals: dialSignals })
+
+  const channelLabel = message.channel?.name ? `#${message.channel.name}` : "#unknown";
+  const userTag = message.author?.tag || message.author?.username || displayName;
+  const caseId = auditId
+    ? `S-${String(auditId).slice(-4).toUpperCase()}`
+    : `S-${String(Date.now()).slice(-4)}`;
+  const actionLine = isTimeout
+    ? `Message removed · user timed out ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "sent" : "failed"}`
+    : `Logged for review · delete ${deleteText}`;
+
+  const built = ui.buildScamEmbed({
+    channel: channelLabel,
+    userTag,
+    userId: message.author?.id || "0",
+    message: message.content || "",
+    score: Math.max(0, Math.min(100, Math.round(state.confidence))),
+    signals: dialSignals,
+    action: actionLine,
+    caseId
+  });
+
+  const embed = built.embeds[0];
+  embed.setTitle(header);
+  const whyLines = signals.slice(0, 6).map((s) => `· ${Number(s.confidence) || 0}% — ${s.reason}`).join("\n");
+  const evidenceText = formatSellingEvidence(message, recentMessages);
+  embed.addFields(
+    { name: "Action", value: actionLine, inline: false },
+    { name: "Trigger", value: String(state.trigger || "watch window"), inline: false },
+    { name: "Why", value: whyLines || "no signals", inline: false }
   );
-  if (dialImg) {
-    panel.image = dialImg.url;
-    panel.files = [dialImg.attachment];
+  if (aiLines) {
+    embed.addFields({ name: "AI Scam Verdict", value: aiLines, inline: false });
   }
+  if (evidenceText) {
+    embed.addFields({ name: "Evidence", value: evidenceText, inline: false });
+  }
+  const existingFooter = embed.data.footer?.text || "";
+  const confidenceTag = `Confidence: ${state.confidence || 0}%`;
+  embed.setFooter({ text: existingFooter ? `${existingFooter} · ${confidenceTag}` : confidenceTag });
+
+  const panel = {
+    embed,
+    files: built.files,
+    header,
+    color: isTimeout ? DANGER : WARN
+  };
 
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);
   return panel;
@@ -2475,34 +2478,63 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
 }
 
 function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs, deleteResult = null, auditId = null }) {
-  const link = deleteResult?.queued ? null : buildMessageUrl(message);
-  const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const deleteText = formatDeleteSummary(deleteResult);
-  const actionText = state.action === "timeout"
+  const actionLine = state.action === "timeout"
+    ? `Timed out ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText}`
+    : state.action === "warn"
+      ? `DM warning ${dmSent ? "sent" : "failed"} · delete ${deleteText}`
+      : "Logged for review";
+
+  const dialSignals = (signals || []).slice(0, 5).map((s) => ({
+    name: String(s.reason || "signal").slice(0, 28),
+    weight: Math.max(0, Math.min(100, Number(s.confidence) || 0))
+  }));
+
+  const channelLabel = message.channel?.name ? `#${message.channel.name}` : "#unknown";
+  const userTag = message.author?.tag || message.author?.username || displayName;
+  const caseId = auditId
+    ? `S-${String(auditId).slice(-4).toUpperCase()}`
+    : `S-${String(Date.now()).slice(-4)}`;
+
+  const built = ui.buildScamEmbed({
+    channel: channelLabel,
+    userTag,
+    userId: message.author?.id || "0",
+    message: message.content || "",
+    score: Math.max(0, Math.min(100, Math.round(Number(state.confidence) || 0))),
+    signals: dialSignals,
+    action: actionLine,
+    caseId
+  });
+
+  const header = state.action === "timeout"
+    ? "Suspicious Message Timeout"
+    : state.action === "warn"
+      ? "Suspicious Message Warning"
+      : "Suspicious Message Alert";
+  const actionTextLegacy = state.action === "timeout"
     ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
     : state.action === "warn"
       ? `delete ${deleteText} · dm warning ${dmSent ? "✓" : "✗"}`
       : "log only";
+  const embed = built.embeds[0];
+  embed.setTitle(header);
+  const whyLines = formatSignalReasons(signals);
+  embed.addFields(
+    { name: "Action", value: actionTextLegacy, inline: false },
+    { name: "Trigger", value: String(state.trigger || "watch window"), inline: false },
+    { name: "Why", value: whyLines || "no signals", inline: false },
+    { name: "Evidence", value: trimExcerpt(message.content), inline: false }
+  );
+  const existingFooter = embed.data.footer?.text || "";
+  const confidenceTag = `Confidence: ${state.confidence || 0}%`;
+  embed.setFooter({ text: existingFooter ? `${existingFooter} · ${confidenceTag}` : confidenceTag });
 
   const panel = {
-    header: state.action === "timeout"
-      ? "Suspicious Message Timeout"
-      : state.action === "warn"
-        ? "Suspicious Message Warning"
-        : "Suspicious Message Alert",
-    author: { name: displayName, iconURL: avatar || undefined },
-    fields: [
-      { name: "User", value: `<@${message.author?.id}>`, inline: true },
-      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
-      { name: "Jump", value: link ? `[→ Open](${link})` : "deleted", inline: true },
-      { name: "Action", value: actionText, inline: true },
-      { name: "Hits", value: `${state.count} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`, inline: true },
-      { name: "Trigger", value: String(state.trigger || "watch window"), inline: true },
-      { name: "Why", value: formatSignalReasons(signals) },
-      { name: "Evidence", value: trimExcerpt(message.content) }
-    ],
-    footer: `Confidence: ${state.confidence || 0}%`,
+    embed,
+    files: built.files,
+    header,
     color: state.action === "timeout" ? DANGER : WARN
   };
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);

@@ -1,5 +1,5 @@
 const { getDocsJumpUrl, getStatusJumpUrl, getTicketJumpUrl } = require("./channel-config");
-const { findExecutorMatch, tryIssueMatch } = require("./kb");
+const { findExecutorMatch, tryIssueMatch, searchKbIssues, scoreIssueMatchConfidence } = require("./kb");
 const { detectStatusPrompt } = require("./status-prompts");
 const { normalizeText } = require("./text");
 
@@ -621,9 +621,14 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
   }
 
   if (safeIssueMatch && safeIssueMatch.category !== "support_only") {
-    // IMPROVEMENT: show the actual KB reply + steps inline instead of just
-    // linking to docs — the bot now actually answers the question.
     const issueBody = buildIssueBody(safeIssueMatch);
+    const matchScore = scoreIssueMatchConfidence(issueSearchText, kb, safeIssueMatch);
+    const inlineSteps = Array.isArray(safeIssueMatch.steps) && safeIssueMatch.steps.length
+      ? safeIssueMatch.steps.slice()
+      : (safeIssueMatch.reply ? [safeIssueMatch.reply] : []);
+    const tag = safeIssueMatch.category
+      ? `${String(safeIssueMatch.category).toUpperCase()} · FIX`
+      : "DOCS · FIX";
     return maybeAppendDownNote(
       {
         kind: "docs",
@@ -633,13 +638,24 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         tipStyle: "heading",
         tipLevel: "##",
         buttons: [{ label: "Open Full Docs", url: getDocsJumpUrl() }],
-        color: "success"
+        color: "success",
+        kb: {
+          title: safeIssueMatch.title,
+          tag,
+          steps: inlineSteps,
+          match: matchScore || 0.7,
+          source: "kb.json",
+          url: getDocsJumpUrl()
+        }
       },
       runtimeStatus
     );
   }
 
   const supportOnly = safeIssueMatch && safeIssueMatch.category === "support_only";
+  const closest = searchKbIssues(issueSearchText, kb, { limit: 3 })
+    .filter((c) => c.entry?.title)
+    .map((c) => ({ title: c.entry.title, match: c.match }));
   return maybeAppendDownNote(
     {
       kind: "ticket",
@@ -652,7 +668,11 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         : `Open a ticket here: **[ticket panel](${getTicketJumpUrl()})**.`,
       tip: "Drop screenshots and what you've already tried.",
       buttons: [{ label: "Open Ticket Panel", url: getTicketJumpUrl() }],
-      color: supportOnly ? "warn" : "info"
+      color: supportOnly ? "warn" : "info",
+      kb: {
+        score: closest[0] ? Math.round(closest[0].match * 100) : 25,
+        closestArticles: closest
+      }
     },
     runtimeStatus
   );

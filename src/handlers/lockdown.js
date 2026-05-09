@@ -13,6 +13,7 @@ const {
   kpi
 } = require("../embed");
 const viz = require("../embed-viz");
+const ui = require("../ui");
 const { sendLogPanel } = require("../log-channel");
 const { canUseLockCommands } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
@@ -208,6 +209,9 @@ function getPreflightIssues(guild, channels) {
 }
 
 function panelToPayload(panel) {
+  if (panel && panel.__payload) {
+    return { ...panel.__payload, allowedMentions: panel.__payload.allowedMentions || { repliedUser: false } };
+  }
   const payload = {
     embeds: [buildPanel(panel)],
     allowedMentions: { repliedUser: false }
@@ -276,36 +280,23 @@ function channelsForViz(channels, stateOverrides = null) {
 }
 
 function buildLockStatusPanel({ channels, failures }) {
-  const aggregate = getAggregateLockState(channels);
-  const grid = buildLockdownAnsiGrid(channels);
-  const body = [
-    formatChannelStateLines(channels),
-    grid,
-    failures.length ? `**Resolve Issues**\n${formatResolveFailures(failures)}` : null,
-    "`$lock` denies Send Messages for the configured member role. `$unlock` explicitly allows it again."
-  ].filter(Boolean).join("\n\n");
-
-  const lockedCount = channels.filter((entry) => getOverwriteSendMessagesState(entry.channel) === false).length;
-
   const vizChannels = channelsForViz(channels);
-  const lockImg = viz.makeImageAttachment(`lockdown-status-${lockedCount}-${channels.length}`, viz.lockdownGridSvg({ channels: vizChannels }));
-
-  const panel = {
-    header: "Channel Lock Status",
-    author: brandAuthor("LOCKDOWN · STATUS"),
-    body,
-    fields: [
-      kpi("LOCKED", `${lockedCount}/${channels.length}`),
-      kpi("TARGETS", String(channels.length)),
-      kpi("STATE", aggregate.allLocked ? "all locked" : aggregate.allUnlocked ? "all open" : "mixed")
-    ],
-    color: failures.length ? WARN : INFO
+  const built = ui.buildLockdownEmbed({
+    channels: vizChannels,
+    reason: failures.length ? "status check · with issues" : "status check",
+    actor: "system"
+  });
+  const embed = built.embeds[0];
+  embed.setTitle("Channel Lock Status");
+  const stateLines = formatChannelStateLines(channels);
+  const existing = embed.data.description || "";
+  embed.setDescription(`${existing}\n\n${stateLines}`.trim());
+  return {
+    __payload: {
+      embeds: [embed],
+      files: built.files
+    }
   };
-  if (lockImg) {
-    panel.image = lockImg.url;
-    panel.files = [lockImg.attachment];
-  }
-  return panel;
 }
 
 function buildLockAuditPanel({ command, actor, channels, failures = [], error = null, finalStates = null }) {
@@ -323,37 +314,30 @@ function buildLockAuditPanel({ command, actor, channels, failures = [], error = 
 }
 
 function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor, finalStates }) {
-  const grid = buildLockdownAnsiGrid(resolved.channels, finalStates);
   const vizChannels = channelsForViz(resolved.channels, finalStates);
-  const lockImg = viz.makeImageAttachment(
-    `lockdown-${command}-${result.changed.length}-${result.skipped.length}`,
-    viz.lockdownGridSvg({ channels: vizChannels })
-  );
-  const panel = {
-    header: success
-      ? command === "lock" ? "Channels Locked — Manual" : "Channels Unlocked — Manual"
-      : "Channel Lock Needs Review",
-    author: brandAuthor(command === "lock" ? "LOCKDOWN · APPLIED" : "LOCKDOWN · UNLOCKED"),
-    body: [
-      success
-        ? `${pastTenseLabel} channels: ${buildTargetChannelMentions(resolved.channels)}`
-        : "I applied the command, but the final state was not exactly what I expected.",
-      `**Changed:** ${result.changed.length} · **Skipped:** ${result.skipped.length} · **By:** ${actor}`,
-      grid
-    ].join("\n\n"),
-    fields: [
-      kpi("CHANGED", String(result.changed.length)),
-      kpi("SKIPPED", String(result.skipped.length)),
-      kpi("BY", actor)
-    ],
-    footer: command === "lock" ? "run $unlock to revert" : "channels open again",
-    color: success ? command === "lock" ? WARN : SUCCESS : DANGER
+  const built = ui.buildLockdownEmbed({
+    channels: vizChannels,
+    reason: command === "lock"
+      ? (success ? "manual lockdown" : "manual lockdown · partial")
+      : (success ? "manual unlock" : "manual unlock · partial"),
+    actor
+  });
+  const embed = built.embeds[0];
+  const title = success
+    ? command === "lock" ? "Channels Locked — Manual" : "Channels Unlocked — Manual"
+    : "Channel Lock Needs Review";
+  embed.setTitle(title);
+  const channelMentions = buildTargetChannelMentions(resolved.channels);
+  const verb = command === "lock" ? "Locked channels" : "Unlocked channels";
+  const stats = `**Changed:** ${result.changed.length} · **Skipped:** ${result.skipped.length} · **By:** ${actor}`;
+  const existing = embed.data.description || "";
+  embed.setDescription(`${existing}\n\n**${verb}:** ${channelMentions}\n${stats}`.trim());
+  return {
+    __payload: {
+      embeds: [embed],
+      files: built.files
+    }
   };
-  if (lockImg) {
-    panel.image = lockImg.url;
-    panel.files = [lockImg.attachment];
-  }
-  return panel;
 }
 
 async function sendLockAuditLog(message, panel) {

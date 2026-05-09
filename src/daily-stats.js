@@ -8,6 +8,7 @@ const { getDailyStatsChannelId } = require("./channel-config");
 const { formatDuration } = require("./duration");
 const { buildPanel, INFO, SUCCESS, WARN, brandAuthor } = require("./embed");
 const viz = require("./embed-viz");
+const ui = require("./ui");
 const { isStaffOnlyTrackedMember } = require("./permissions");
 const {
   cleanupRestrictedEmojiDatabaseTempFiles,
@@ -463,22 +464,32 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
     const idx = Math.max(0, Math.min(23, Number(entry.localHour) || 0));
     hourBuckets[idx] += Number(entry.messageCount) || 0;
   }
-  const recapImg = recapSlices.length || hourBuckets.some((v) => v > 0)
-    ? viz.makeImageAttachment(`daily-recap-${totalMessages}`, viz.dailyRecapSvg({
-        slices: recapSlices.length ? recapSlices : undefined,
-        activity: hourBuckets
-      }))
+  const dailyDate = new Date(now).toDateString();
+  const highlights = [];
+  const dailyBuilt = (recapSlices.length || hourBuckets.some((v) => v > 0))
+    ? ui.buildDailyRecapEmbed({
+        date: dailyDate,
+        slices: recapSlices.length ? recapSlices.map((s) => ({ label: s.label, value: s.value })) : undefined,
+        activity: hourBuckets,
+        highlights
+      })
     : null;
-
-  const serverPanel = buildPanel({
-    header: "Daily Server Stats",
-    body: windowLine,
-    fields: buildServerStatsFields(snapshot, windowStartedAt, now),
-    color: totalMessages ? SUCCESS : INFO,
-    author: brandAuthor("DAILY · SERVER"),
-    image: recapImg ? recapImg.url : undefined,
-    footer: `daily snapshot · ${formatDuration(now - windowStartedAt)} window`
-  });
+  const serverFields = buildServerStatsFields(snapshot, windowStartedAt, now);
+  let serverPanel;
+  if (dailyBuilt) {
+    serverPanel = dailyBuilt.embeds[0];
+    serverPanel.addFields(...serverFields);
+  } else {
+    serverPanel = buildPanel({
+      header: "Daily Server Stats",
+      body: windowLine,
+      fields: serverFields,
+      color: totalMessages ? SUCCESS : INFO,
+      author: brandAuthor("DAILY · SERVER"),
+      footer: `daily snapshot · ${formatDuration(now - windowStartedAt)} window`
+    });
+  }
+  const dailyFiles = dailyBuilt ? dailyBuilt.files : [];
   const staffPanel = buildPanel({
     header: "Daily Staff Activity",
     fields: buildStaffStatsFields(snapshot, staffRoster, windowStartedAt, now),
@@ -497,7 +508,7 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
 
   return {
     embeds: [serverPanel, staffPanel, moderationPanel],
-    files: recapImg ? [recapImg.attachment] : [],
+    files: dailyFiles,
     windowStartedAt,
     snapshot,
     staffRoster

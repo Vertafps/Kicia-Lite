@@ -46,6 +46,7 @@ const {
 const { recordRuntimeEvent } = require("../runtime-health");
 const { getRuntimeStatus } = require("../runtime-status");
 const { classifyScamContextWithGemini } = require("../scam-ai");
+const { classify: classifyScamDecomposed } = require("../scam-decompose");
 const {
   classifyScamContextLocally,
   classifyScamContextLocallyAsync,
@@ -2639,6 +2640,22 @@ async function handleSellingMessage(message, signals, {
   };
 }
 
+function buildDecomposedClassifierResult(decomposed, signals) {
+  const fired = decomposed.signals || [];
+  const reason = decomposed.label === "decomposed"
+    ? `decomposed signals: ${fired.join(", ")}`
+    : decomposed.label;
+  return {
+    verdict: decomposed.score >= 50,
+    confidence: Math.max(0, Math.min(99, decomposed.score)),
+    score: decomposed.score / 100,
+    reason,
+    stage: "decomposed",
+    model: "kicia-decomposed-v1",
+    decomposed
+  };
+}
+
 async function confirmScamTradeSignals(message, signals, scamContext, {
   classifyScam = classifyScamContextWithGemini,
   sendLog = sendLogPanel,
@@ -2676,6 +2693,63 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
       strongest,
       scamContext,
       localResult: policyResult,
+      now
+    });
+    return { signals: confirmedSignals, auditId };
+  }
+
+  const decomposed = classifyScamDecomposed({
+    rawTexts: Array.isArray(scamContext?.userMessages) ? scamContext.userMessages : [],
+    repliedToContent: scamContext?.repliedToMessage?.content || ""
+  });
+  const decomposedClassifier = buildDecomposedClassifierResult(decomposed, signals);
+  const strongestSignalConfidence = signals.reduce(
+    (max, signal) => Math.max(max, signal.confidence || 0),
+    0
+  );
+
+  const decomposedSignalCount = Array.isArray(decomposed.signals) ? decomposed.signals.length : 0;
+  const decomposedConfidentlyClear =
+    decomposed.label === "negation_or_report" ||
+    (decomposed.score < 50 && decomposedSignalCount <= 1);
+
+  if (
+    decomposedConfidentlyClear &&
+    strongestSignalConfidence < 88 &&
+    !signals.some((signal) => signal.confirmedByPolicy)
+  ) {
+    await sendClearedLog(message.guild, buildScamAiClearedLogPanel({
+      message,
+      candidateSignal: strongest,
+      aiResult: decomposedClassifier
+    })).catch(() => null);
+    await recordScamAudit(message, {
+      action: "decomposed_clear",
+      handled: false,
+      signals,
+      strongest,
+      scamContext,
+      localResult: decomposedClassifier,
+      now
+    });
+    return { signals: [], auditId: null };
+  }
+
+  if (decomposed.hardConfirm && decomposed.score >= 85) {
+    const decomposedVerdict = buildClassifierVerdictResult(decomposedClassifier);
+    const confirmedSignals = signals.map((signal) => ({
+      ...signal,
+      confidence: getConfirmedSignalConfidence(signal, decomposedVerdict),
+      reason: `decomposed-confirmed scam/trade intent: ${signal.reason}`,
+      ai: decomposedVerdict
+    }));
+    const { auditId } = await recordScamAudit(message, {
+      action: "decomposed_true",
+      handled: true,
+      signals: confirmedSignals,
+      strongest,
+      scamContext,
+      localResult: decomposedClassifier,
       now
     });
     return { signals: confirmedSignals, auditId };

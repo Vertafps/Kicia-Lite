@@ -2936,7 +2936,7 @@ test("pipeline works correctly when scam embedder is absent (no download)", asyn
   assert.equal(handled, true);
   assert.equal(fixture.deleted.length, 1);
   assert.equal(fixture.logs.length, 1);
-  assert.match(panelText(fixture.logs[0]), /local-kicia-intent-v3: TRUE/i);
+  assert.match(panelText(fixture.logs[0]), /(?:local-kicia-intent-v3|kicia-decomposed-v1): TRUE/i);
 });
 
 test("executor support wording is not flagged as scam when embedder is absent", async () => {

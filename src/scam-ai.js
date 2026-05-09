@@ -57,6 +57,30 @@ function enterGeminiCooldown(now, reason) {
   };
 }
 
+const FEW_SHOT_EXAMPLES = [
+  // FALSE — casual chat, banter, gameplay
+  { msg: "Bark for me like a good good boyyyyyyy", reply: null, json: { verdict: "FALSE", speaker_role: "chat", evidence: "banter, no commerce" } },
+  { msg: "U got matcha server?", reply: null, json: { verdict: "FALSE", speaker_role: "asker", evidence: "asking for community link" } },
+  { msg: "Send in dms", reply: null, json: { verdict: "FALSE", speaker_role: "chat", evidence: "vague, no item or offer" } },
+  { msg: "i use boneclaw more then aug", reply: null, json: { verdict: "FALSE", speaker_role: "chat", evidence: "describing own usage of executors" } },
+  { msg: "use paid executor", reply: null, json: { verdict: "FALSE", speaker_role: "chat", evidence: "advice to use paid exec, no sale" } },
+  { msg: "Buy UE", reply: null, json: { verdict: "FALSE", speaker_role: "asker", evidence: "telling someone to buy, no own offer" } },
+  { msg: "Its been 5 days without my Yub-X executor, mental state pandemonium", reply: null, json: { verdict: "FALSE", speaker_role: "chat", evidence: "venting about own executor" } },
+  { msg: "i got a cfg that slams ue only for premium tho need orbit aura", reply: null, json: { verdict: "FALSE", speaker_role: "chat", evidence: "describing own config, no offer" } },
+  // FALSE — support, purchase question, report
+  { msg: "where to buy kicia premium", reply: null, json: { verdict: "FALSE", speaker_role: "asker", evidence: "official purchase question" } },
+  { msg: "can I buy kicia with paypal", reply: null, json: { verdict: "FALSE", speaker_role: "asker", evidence: "payment-method question" } },
+  { msg: "stop selling configs in here", reply: null, json: { verdict: "FALSE", speaker_role: "reporter", evidence: "telling others to stop selling" } },
+  { msg: "is selling kicia allowed?", reply: null, json: { verdict: "FALSE", speaker_role: "asker", evidence: "policy question" } },
+  // TRUE — deal intent
+  { msg: "selling kicia premium cheap dm me", reply: null, json: { verdict: "TRUE", speaker_role: "seller", evidence: "sells kicia + private + cheap" } },
+  { msg: "wts kicia key 5usd paypal", reply: null, json: { verdict: "TRUE", speaker_role: "seller", evidence: "wts + price + payment" } },
+  { msg: "trading my account for robux", reply: null, json: { verdict: "TRUE", speaker_role: "seller", evidence: "trade account for currency" } },
+  { msg: "i sell executor configs hmu", reply: null, json: { verdict: "TRUE", speaker_role: "seller", evidence: "explicit self-sale" } },
+  { msg: "dm me", reply: "anyone selling cheap kicia premium?", json: { verdict: "TRUE", speaker_role: "seller", evidence: "DM handoff in reply to sale request" } },
+  { msg: "got cheap executor configs hmu", reply: null, json: { verdict: "TRUE", speaker_role: "seller", evidence: "spare configs + cheap + private contact" } }
+];
+
 function buildGeminiPrompt(context) {
   const messageContexts = Array.isArray(context.messageContexts) && context.messageContexts.length
     ? context.messageContexts
@@ -65,50 +89,82 @@ function buildGeminiPrompt(context) {
     .slice(-5)
     .map((entry, index) => {
       const reply = entry?.repliedToMessage?.content
-        ? ` | replied to ${entry.repliedToMessage.authorLabel || "other user"}: ${clip(entry.repliedToMessage.content, 220)}`
+        ? ` | replied_to(${entry.repliedToMessage.authorLabel || "other"}): ${clip(entry.repliedToMessage.content, 200)}`
         : "";
       return `${index + 1}. ${clip(entry?.content)}${reply}`;
     })
-    .join("\n") || "none";
+    .join("\n") || "(none)";
   const repliedTo = context.repliedToMessage?.content
-    ? `${context.repliedToMessage.authorLabel || "other user"}: ${clip(context.repliedToMessage.content)}`
-    : "none";
+    ? `${context.repliedToMessage.authorLabel || "other"}: ${clip(context.repliedToMessage.content)}`
+    : "(none)";
+
+  const exampleBlock = FEW_SHOT_EXAMPLES
+    .map((ex, i) => {
+      const replyLine = ex.reply ? `  reply: ${ex.reply}\n` : "";
+      return `[${i + 1}] target: ${ex.msg}\n${replyLine}  output: ${JSON.stringify(ex.json)}`;
+    })
+    .join("\n\n");
 
   return [
-    "You are a Discord moderation classifier for scam, selling, buying, trading, phishing, and private-deal behavior.",
-    "Classify ONLY the TARGET USER, using the last five target-user messages and any messages they replied to.",
-    "Return exactly TRUE or FALSE.",
-    "TRUE means the target user likely has disallowed intent: scamming, selling/trading/buying accounts/configs/scripts/keys/executors, moving a trade/download/link/account deal to DMs, phishing, or asking someone to bypass safety.",
-    "FALSE means harmless context: asking a support question, warning others, quoting or joking without offering a deal, asking whether something is allowed, or directing users to official docs/support.",
-    "KiciaHook server standards:",
-    "- FALSE: official Kicia/Kicia premium purchase/support questions such as 'where to buy kicia', 'how to buy kicia', prices, shop, ticket, staff, or official purchase flow.",
-    "- FALSE: payment-method questions about buying Kicia or this product, such as 'can I buy this/ts with roblox', 'can I buy Kicia with robux', or 'can I pay with PayPal'. These are support questions unless the target user moves the deal to DMs or offers private goods.",
-    "- FALSE: executor support wording about disabling/whitelisting antivirus or Windows Defender, unless paired with phishing, credentials, private sales, or unofficial downloads.",
-    "- TRUE: private or unofficial Kicia deals such as 'dms to buy kicia', 'buy kicia from me', cheaper reseller offers, or moving Kicia purchase/payment to private DMs.",
-    "- TRUE: offers or requests to buy/sell/trade/give/swap accounts, configs, scripts, executors, keys, licenses, robux/nitro as the traded item, or similar items.",
-    "- FALSE: explanation answers to a purchase question, e.g. if someone asks 'how to buy?' and the target replies 'buy in the resellers', 'open a ticket', 'use the official shop', or 'ask staff'.",
-    "- TRUE only when the TARGET USER is showing deal/scam intent. If they are asking if something is allowed, reporting someone, or quoting a bad phrase, return FALSE.",
+    "You are a Discord scam/sale classifier for KiciaHook (a Roblox executor community).",
+    "Decide if the TARGET USER is offering an unauthorized deal: selling/trading/buying premium/keys/accounts/configs/executors/robux/nitro privately, or running a phishing/giveaway scam.",
     "",
-    "Message replied to by target user:",
-    repliedTo,
+    "Return ONLY one JSON object on a single line:",
+    '{"verdict":"TRUE"|"FALSE","speaker_role":"seller"|"buyer"|"asker"|"reporter"|"chat","evidence":"<≤80 chars>"}',
     "",
-    "Target user's last messages, oldest to newest:",
-    userMessages
+    "Rules:",
+    "- TRUE only when the target user is the actor offering/seeking a deal. If unclear, FALSE.",
+    "- Casual chat about executors, configs, cheap things, gaming, banter, jokes, complaining, asking for help — FALSE.",
+    "- Asking how/where to buy through official channels, payment-method questions, asking if something is allowed, reporting someone — FALSE.",
+    "- 'dm me' / 'send in dms' / 'hmu' alone without a deal item or sale word — FALSE.",
+    "- Mentioning executors, configs, kicia, premium, robux, nitro, paid stuff in passing — FALSE unless the target is selling/trading/buying.",
+    "- TRUE: 'selling X', 'wts X', 'trading X for Y', 'buy from me', 'cheap X dm me', 'got spare X cheap', 'dm me' as a reply to someone asking to buy/sell.",
+    "",
+    "Examples:",
+    exampleBlock,
+    "",
+    "---",
+    `replied_to: ${repliedTo}`,
+    "target user's last messages (oldest to newest):",
+    userMessages,
+    "",
+    "output:"
   ].join("\n");
 }
 
-function parseGeminiBoolean(payload) {
+function parseGeminiResponse(payload) {
   const text = payload?.candidates?.[0]?.content?.parts
     ?.map((part) => part.text || "")
     .join("")
-    .trim()
-    .toUpperCase();
+    .trim();
 
-  if (text === "TRUE") return true;
-  if (text === "FALSE") return false;
-  if (/^TRUE\b/.test(text || "")) return true;
-  if (/^FALSE\b/.test(text || "")) return false;
-  return null;
+  if (!text) return { verdict: null };
+
+  const jsonMatch = text.match(/\{[^}]*"verdict"[^}]*\}/i);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const v = String(parsed.verdict || "").toUpperCase();
+      if (v === "TRUE" || v === "FALSE") {
+        return {
+          verdict: v === "TRUE",
+          speakerRole: typeof parsed.speaker_role === "string" ? parsed.speaker_role.toLowerCase() : null,
+          evidence: typeof parsed.evidence === "string" ? parsed.evidence.slice(0, 120) : null
+        };
+      }
+    } catch {
+      // fall through to text fallback
+    }
+  }
+
+  const upper = text.toUpperCase();
+  if (/\bTRUE\b/.test(upper) && !/\bFALSE\b/.test(upper)) return { verdict: true };
+  if (/\bFALSE\b/.test(upper) && !/\bTRUE\b/.test(upper)) return { verdict: false };
+  return { verdict: null };
+}
+
+function parseGeminiBoolean(payload) {
+  return parseGeminiResponse(payload).verdict;
 }
 
 async function classifyScamContextWithGemini(context, {
@@ -170,8 +226,8 @@ async function classifyScamContextWithGemini(context, {
           generationConfig: {
             temperature: 0,
             candidateCount: 1,
-            maxOutputTokens: 2,
-            stopSequences: ["\n"]
+            maxOutputTokens: 80,
+            responseMimeType: "application/json"
           }
         })
       },
@@ -191,13 +247,16 @@ async function classifyScamContextWithGemini(context, {
     }
 
     const payload = await response.json().catch(() => ({}));
-    const verdict = parseGeminiBoolean(payload);
+    const parsed = parseGeminiResponse(payload);
+    const verdict = parsed.verdict;
     const answer = verdict === true ? "TRUE" : verdict === false ? "FALSE" : null;
     const result = {
       attempted: true,
       skipped: verdict == null ? "invalid_answer" : null,
       verdict,
       answer,
+      speakerRole: parsed.speakerRole || null,
+      evidence: parsed.evidence || null,
       model: GEMINI_SCAM_MODEL
     };
     if (verdict != null) {
@@ -226,5 +285,7 @@ module.exports = {
   buildGeminiPrompt,
   classifyScamContextWithGemini,
   parseGeminiBoolean,
-  resetScamAiState
+  parseGeminiResponse,
+  resetScamAiState,
+  FEW_SHOT_EXAMPLES
 };

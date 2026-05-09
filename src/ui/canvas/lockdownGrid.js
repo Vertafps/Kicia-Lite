@@ -21,7 +21,10 @@ function renderLockdownGrid({ channels } = {}) {
   ];
 
   const W = EMBED_WIDTH;
-  const cols = 4;
+  // Pick a column count that suits the channel count and label widths.
+  // Fewer channels → wider cards so longer custom labels (e.g. "community
+  // support chat") have room without truncation.
+  const cols = ch.length <= 2 ? 2 : ch.length <= 4 ? 2 : ch.length <= 6 ? 3 : 4;
   const cellW = (W - 32 - 12 * (cols - 1)) / cols;
   const cellH = 56;
   const rows = Math.ceil(ch.length / cols);
@@ -34,6 +37,26 @@ function renderLockdownGrid({ channels } = {}) {
   text(ctx, `LOCKDOWN STATE · ${lockedCount}/${ch.length} CHANNELS LOCKED`, 16, 16, {
     font: '600 9px ' + TYPE.mono, color: SURFACE.textDim, letterSpacing: 1.5,
   });
+
+  // Truncate text to fit a target pixel width by progressively dropping characters.
+  function fitText(str, maxWidth, font) {
+    ctx.save();
+    ctx.font = font;
+    if (ctx.measureText(str).width <= maxWidth) {
+      ctx.restore();
+      return str;
+    }
+    let lo = 0;
+    let hi = str.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const candidate = str.slice(0, mid) + '…';
+      if (ctx.measureText(candidate).width <= maxWidth) lo = mid + 1;
+      else hi = mid;
+    }
+    ctx.restore();
+    return str.slice(0, Math.max(1, lo - 1)) + '…';
+  }
 
   ch.forEach((c, i) => {
     const col = i % cols, row = Math.floor(i / cols);
@@ -82,12 +105,17 @@ function renderLockdownGrid({ channels } = {}) {
     }
     ctx.restore();
 
-    // Channel name
-    text(ctx, '#' + c.name, x + 32, y + 22, {
-      font: 'bold 11px ' + TYPE.mono, color: SURFACE.text,
+    // Channel name — truncate to fit card minus the icon column and right pad.
+    const nameFont = 'bold 11px ' + TYPE.mono;
+    const stateFont = '9px ' + TYPE.mono;
+    const textBudget = cellW - 32 - 8;
+    const nameStr = fitText('#' + c.name, textBudget, nameFont);
+    text(ctx, nameStr, x + 32, y + 22, {
+      font: nameFont, color: SURFACE.text,
     });
-    text(ctx, c.status.toUpperCase(), x + 32, y + 38, {
-      font: '9px ' + TYPE.mono, color: tone, letterSpacing: 1.2,
+    const stateStr = fitText(c.status.toUpperCase(), textBudget, stateFont);
+    text(ctx, stateStr, x + 32, y + 38, {
+      font: stateFont, color: tone, letterSpacing: 1.2,
     });
   });
 

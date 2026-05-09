@@ -1,3 +1,4 @@
+const { EmbedBuilder } = require("discord.js");
 const {
   SCAM_REVIEW_TRUE_PREFIX,
   SCAM_REVIEW_FALSE_PREFIX,
@@ -129,16 +130,22 @@ async function maybeHandleScamReviewInteraction(interaction) {
       return isScamRow && disabledScamRow ? disabledScamRow : row;
     });
 
+    const updatedEmbeds = (interaction.message.embeds || []).map((embed, index) => {
+      const builder = EmbedBuilder.from(embed);
+      if (index === 0) builder.setFooter({ text: footerLine });
+      return builder;
+    });
+
+    // Preserve existing attachments (e.g. scam-dial.png) so the dial stays
+    // inside the embed instead of detaching to a banner above it.
+    const keepAttachments = (interaction.message.attachments?.values
+      ? [...interaction.message.attachments.values()]
+      : []);
+
     await interaction.message.edit({
       components: updatedRows,
-      embeds: interaction.message.embeds?.map((embed, index) => {
-        if (index !== 0) return embed;
-        const existing = embed?.data || embed?.toJSON?.() || embed;
-        return {
-          ...existing,
-          footer: { text: footerLine }
-        };
-      }) || interaction.message.embeds || []
+      embeds: updatedEmbeds,
+      attachments: keepAttachments
     }).catch(() => null);
   }
 

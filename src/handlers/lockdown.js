@@ -281,16 +281,24 @@ function channelsForViz(channels, stateOverrides = null) {
 
 function buildLockStatusPanel({ channels, failures }) {
   const vizChannels = channelsForViz(channels);
+  const lockedNow = vizChannels.filter((c) => c.status === "locked").length;
+  const stats = {
+    changed: 0,
+    already: lockedNow,
+    untouched: vizChannels.length - lockedNow
+  };
   const built = ui.buildLockdownEmbed({
     channels: vizChannels,
+    intent: "status",
+    title: "Channel Lock Status",
     reason: failures.length ? "status check · with issues" : "status check",
-    actor: "system"
+    actor: "system",
+    stats,
+    summaryLine: `Lock targets: ${vizChannels.length} · ${lockedNow} currently locked`
   });
   const embed = built.embeds[0];
-  embed.setTitle("Channel Lock Status");
   const stateLines = formatChannelStateLines(channels);
-  const existing = embed.data.description || "";
-  embed.setDescription(`${existing}\n\n${stateLines}`.trim());
+  embed.setDescription(`${embed.data.description || ""}\n\n${stateLines}`.trim());
   return {
     __payload: {
       embeds: [embed],
@@ -315,23 +323,32 @@ function buildLockAuditPanel({ command, actor, channels, failures = [], error = 
 
 function buildLockResultPanel({ command, success, pastTenseLabel, resolved, result, actor, finalStates }) {
   const vizChannels = channelsForViz(resolved.channels, finalStates);
-  const built = ui.buildLockdownEmbed({
-    channels: vizChannels,
-    reason: command === "lock"
-      ? (success ? "manual lockdown" : "manual lockdown · partial")
-      : (success ? "manual unlock" : "manual unlock · partial"),
-    actor
-  });
-  const embed = built.embeds[0];
+  const intent = command === "unlock" ? "unlock" : "lock";
   const title = success
     ? command === "lock" ? "Channels Locked — Manual" : "Channels Unlocked — Manual"
     : "Channel Lock Needs Review";
-  embed.setTitle(title);
+  const stats = {
+    changed: result.changed.length,
+    already: result.skipped.length,
+    untouched: 0
+  };
   const channelMentions = buildTargetChannelMentions(resolved.channels);
-  const verb = command === "lock" ? "Locked channels" : "Unlocked channels";
-  const stats = `**Changed:** ${result.changed.length} · **Skipped:** ${result.skipped.length} · **By:** ${actor}`;
-  const existing = embed.data.description || "";
-  embed.setDescription(`${existing}\n\n**${verb}:** ${channelMentions}\n${stats}`.trim());
+  const verb = command === "lock" ? "Locked" : "Unlocked";
+  const summaryLine = `${verb} ${result.changed.length}/${vizChannels.length} · ${result.skipped.length} already · by ${actor}`;
+  const built = ui.buildLockdownEmbed({
+    channels: vizChannels,
+    intent,
+    title,
+    reason: command === "lock"
+      ? (success ? "manual lockdown" : "manual lockdown · partial")
+      : (success ? "manual unlock" : "manual unlock · partial"),
+    actor,
+    stats,
+    summaryLine
+  });
+  const embed = built.embeds[0];
+  const statsLine = `**Changed:** ${result.changed.length} · **Skipped:** ${result.skipped.length} · **By:** ${actor}`;
+  embed.setDescription(`${embed.data.description || ""}\n\n**${verb} channels:** ${channelMentions}\n${statsLine}`.trim());
   return {
     __payload: {
       embeds: [embed],

@@ -32,10 +32,19 @@ const RESET = ESC + '0m';
 
 const wrap = (codes) => (s) => `${ESC}${codes}m${s}${RESET}`;
 
+// Discord's ANSI gray (30) renders as #4f545c — near-invisible on the embed
+// background (#2B2D31). The bundle uses `dim` everywhere for prefixes, flags,
+// comment lines, and separators, so we map `dim` to plain white (37, ~#dbdee1)
+// to keep the text legible. Hierarchy is preserved via bold + color on the
+// primary tokens (cyan command names, bold green/red/yellow tags) — plain
+// white reads as "secondary" because the highlighted tokens pop against it.
+//
+// `gray` is kept on code 30 for cases that genuinely want the muted look (e.g.
+// an inactive/wait tag).
 const ansi = {
   // Foreground
   gray:    wrap('30'),
-  dim:     wrap('30'),       // alias — Discord has no true dim
+  dim:     wrap('37'),
   red:     wrap('31'),
   green:   wrap('32'),
   yellow:  wrap('33'),

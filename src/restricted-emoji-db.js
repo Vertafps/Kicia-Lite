@@ -694,6 +694,22 @@ async function setEmojiTimeoutMs(durationMs) {
   return normalized;
 }
 
+const SCAM_DETECTION_ENABLED_KEY = "scam_detection_enabled";
+
+async function getScamDetectionEnabled() {
+  const db = await getDatabase();
+  const stored = getAppConfigValue(db, SCAM_DETECTION_ENABLED_KEY);
+  if (stored == null || stored === "") return true; // default ON
+  const value = String(stored).toLowerCase();
+  return value === "1" || value === "true" || value === "on" || value === "yes";
+}
+
+async function setScamDetectionEnabled(enabled) {
+  const db = await getDatabase();
+  setAppConfigValue(db, SCAM_DETECTION_ENABLED_KEY, enabled ? "1" : "0", { immediate: true });
+  return Boolean(enabled);
+}
+
 async function getBotPresenceState() {
   const db = await getDatabase();
   const stored = sanitizePresenceState(getAppConfigValue(db, BOT_PRESENCE_STATE_KEY));
@@ -1874,6 +1890,8 @@ module.exports = {
   getBotPresenceState,
   setBotPresenceState,
   resetBotPresenceState,
+  getScamDetectionEnabled,
+  setScamDetectionEnabled,
   hydrateChannelSettings,
   listChannelSettings,
   setChannelSetting,

@@ -53,6 +53,7 @@ const {
   cleanupExpiredModerationActions,
   deleteModerationAction,
   getModerationAction,
+  getScamDetectionEnabled,
   isModerationWhitelistedUser,
   listTrustedLinks,
   recordDailyModerationEvent,
@@ -3145,10 +3146,18 @@ async function maybeHandleModerationWatch(message, {
       }
     }
 
-    const signals = collectContentSignals(message.content, {
+    const allSignals = collectContentSignals(message.content, {
       kb: resolvedKb,
       runtimeStatus: runtimeStatus || getRuntimeStatus()
     });
+    // Owner-toggleable: when scam/trade detection is disabled, drop pattern-based
+    // selling signals entirely. We KEEP `selling/prohibited_sale` (drugs/weapons)
+    // because that's a separate policy layer, not the false-positive-prone scam
+    // pattern detection. Toggle with `$scam disable` / `$scam enable`.
+    const scamDetectionEnabled = await getScamDetectionEnabled().catch(() => true);
+    const signals = scamDetectionEnabled
+      ? allSignals
+      : allSignals.filter((s) => !(s.type === "selling" && s.subtype !== "prohibited_sale"));
     const suspiciousSignals = signals.filter((signal) => signal.type === "suspicious");
     const contentSignals = signals.filter((signal) => signal.type !== "suspicious");
     const shadowForms = buildNormalizedTextForms(message.content);
@@ -3166,6 +3175,7 @@ async function maybeHandleModerationWatch(message, {
     });
 
     if (
+      scamDetectionEnabled &&
       !contentSignals.some((signal) => signal.type === "selling") &&
       !suspiciousSignals.length
     ) {

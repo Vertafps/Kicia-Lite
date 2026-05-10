@@ -19,6 +19,8 @@ const viz = require("../embed-viz");
 const { buildJarvisProgressBody, buildJarvisProgressTokens, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
 const { canUseOwnerCommands } = require("../permissions");
+const { getScamDetectionEnabled, setScamDetectionEnabled } = require("../restricted-emoji-db");
+const { recordRuntimeEvent } = require("../runtime-health");
 const { buildStatusReplyBody } = require("../router");
 const { detectLongStatusPrompt, detectShortStatusPrompt } = require("../status-prompts");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
@@ -55,13 +57,26 @@ function isTestProMaxCommandMessage(content) {
   return String(content || "").trim().toLowerCase() === "$testpromax";
 }
 
+function parseScamCommand(content) {
+  const normalized = String(content || "").trim().toLowerCase();
+  if (normalized === "$scam" || normalized === "$scam status") return "status";
+  if (normalized === "$scam enable" || normalized === "$scam on") return "enable";
+  if (normalized === "$scam disable" || normalized === "$scam off") return "disable";
+  return null;
+}
+
+function isScamCommandMessage(content) {
+  return parseScamCommand(content) !== null;
+}
+
 function isOwnerCommandMessage(content) {
   return (
     parseStatusCommand(content) !== null ||
     (isStatusCommandMessage(content) && !isPublicStatusQueryMessage(content)) ||
     isFetchCommandMessage(content) ||
     isJarvisCommandMessage(content) ||
-    isTestProMaxCommandMessage(content)
+    isTestProMaxCommandMessage(content) ||
+    isScamCommandMessage(content)
   );
 }
 
@@ -121,6 +136,49 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
     markGuildReply(message.author.id);
   }
 
+  return true;
+}
+
+async function handleScamCommand(message, action) {
+  if (action === "status") {
+    const enabled = await getScamDetectionEnabled().catch(() => true);
+    const body = enabled
+      ? "scam/trade pattern detection is **ENABLED**.\n\nuse `$scam disable` to turn it off if false positives are spiking."
+      : "scam/trade pattern detection is **DISABLED**.\n\nuse `$scam enable` to turn it back on.\n_(prohibited commerce / drug+weapon detection and link policy stay active either way)_";
+    await safeReply(message, {
+      embeds: [buildPanel({ body, color: enabled ? SUCCESS : WARN })],
+      allowedMentions: { repliedUser: false }
+    });
+    return true;
+  }
+
+  const targetState = action === "enable";
+  let actualState;
+  try {
+    actualState = await setScamDetectionEnabled(targetState);
+  } catch (err) {
+    recordRuntimeEvent("error", "scam-toggle", err?.message || err);
+    await safeReply(message, {
+      embeds: [buildPanel({ body: "couldn't persist that toggle — db write failed.", color: DANGER })],
+      allowedMentions: { repliedUser: false }
+    });
+    return true;
+  }
+
+  recordRuntimeEvent(
+    "info",
+    "scam-toggle",
+    `set to ${actualState ? "enabled" : "disabled"} by ${message.author?.id || "unknown"}`
+  );
+
+  const body = actualState
+    ? "scam/trade pattern detection **enabled**. bot will flag scam-shaped messages again.\n\nuse `$scam disable` if it gets noisy."
+    : "scam/trade pattern detection **disabled**. bot will skip pattern matching for scam/trade intent.\n\n_(prohibited commerce / drug+weapon detection and link policy still active.)_\n\nuse `$scam enable` to turn it back on.";
+
+  await safeReply(message, {
+    embeds: [buildPanel({ body, color: actualState ? SUCCESS : INFO })],
+    allowedMentions: { repliedUser: false }
+  });
   return true;
 }
 
@@ -206,6 +264,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   const fetchCommand = isFetchCommandMessage(message.content);
   const jarvisCommand = isJarvisCommandMessage(message.content);
   const testProMaxCommand = isTestProMaxCommandMessage(message.content);
+  const scamCommand = parseScamCommand(message.content);
 
   const publicStatusQuery = statusCommand && isPublicStatusQueryMessage(message.content);
 
@@ -217,8 +276,12 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     return maybeReplyWithPublicStatus(message, { useCooldown: false });
   }
 
-  if (nextStatus || fetchCommand || jarvisCommand || testProMaxCommand || statusCommand) {
+  if (nextStatus || fetchCommand || jarvisCommand || testProMaxCommand || statusCommand || scamCommand) {
     if (!canUseOwnerCommands(message)) return true;
+  }
+
+  if (scamCommand) {
+    return handleScamCommand(message, scamCommand);
   }
 
   if (jarvisCommand || testProMaxCommand) {
@@ -274,7 +337,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     await safeReply(message, {
       embeds: [
         buildPanel({
-          body: "usage: `$status`, `$status up`, `$status down`, `$status unaware`, `$fetch`, `$jarvis`, or `$testpromax`",
+          body: "usage: `$status`, `$status up`, `$status down`, `$status unaware`, `$fetch`, `$jarvis`, `$testpromax`, or `$scam [enable|disable|status]`",
           color: INFO
         })
       ],
@@ -290,8 +353,10 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
 
 module.exports = {
   parseStatusCommand,
+  parseScamCommand,
   isFetchCommandMessage,
   isJarvisCommandMessage,
+  isScamCommandMessage,
   isTestProMaxCommandMessage,
   isStatusCommandMessage,
   isPublicStatusQueryMessage,

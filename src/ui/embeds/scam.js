@@ -1,12 +1,13 @@
 /**
  * Scam Detection embed.
  *
- * Layout (matches Carrot design):
- *   - Title:        "{header} — {actor}"
- *   - Subtitle:     plain summary line in the description (no code wrapper)
- *   - Code block:   `signals.log` style — fired signals, two columns, then the
- *                   action / trigger / ai verdict / evidence as `// …` notes.
- *   - Stat row:     ACTION | MESSAGE | AUDIT ID  (inline 3-up)
+ * Layout (scannable — readability first):
+ *   - Title:        e.g. "Scam/Trade Timeout"
+ *   - Top block:    short ANSI synopsis (`scam detect / [RUN] parse · "..." /
+ *                   [OK] signals · N fired / [OK] score · X/100 · CONFIRMED`).
+ *   - Identity row: User | Verdict | Case   (inline 3-up)
+ *   - Fields:       Action / Trigger / Why / AI Scam Verdict / Evidence —
+ *                   each on its own line so moderators can scan at a glance.
  *   - Image:        confidence dial + breakdown bars
  *   - Footer:       "{brand} · {caseId} · Confidence: {n}%"
  *
@@ -22,17 +23,16 @@
  * @property {Array<{name:string,weight:number}>} signals
  * @property {string} action         e.g. "Message removed · user timed out 24h"
  * @property {string} caseId         e.g. "S-2401"
- * @property {string} [trigger]      trigger rule string (e.g. "confidence 97% > 90% => timeout 1d")
+ * @property {string} [trigger]      trigger rule string
  * @property {string} [aiVerdict]    AI verdict line (e.g. "local-kicia-intent-v3: TRUE")
  * @property {string} [aiReason]     classifier reason
  * @property {Array<string>} [evidence]  recent message snippets
- * @property {string} [summary]      one-line subtitle. If absent we synthesize.
  */
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
         AttachmentBuilder } = require('discord.js');
 const { ACCENT, STATUS, BRAND } = require('../colors');
-const { ansi: A, line, block, pad } = require('../ansi');
+const { ansi: A, line, block } = require('../ansi');
 const { renderConfidenceDial } = require('../canvas/confidenceDial');
 
 function buildScamEmbed(data) {
@@ -45,8 +45,7 @@ function buildScamEmbed(data) {
   });
   const dialFile = new AttachmentBuilder(dialBuf, { name: 'scam-dial.png' });
 
-  // ── Description (signals.log style) ─────────────────────────────────────
-  // Top: short command synopsis
+  // ── Top synopsis ──────────────────────────────────────────────────────
   const head = block([
     line(A.dim('$'), A.cyan('scam'), A.white('detect'), A.dim('--user=' + d.userTag)),
     line(A.runTag(), A.white('parse · ' + truncate(d.message, 56))),
@@ -54,63 +53,56 @@ function buildScamEmbed(data) {
     line(A.okTag(),  A.boldGreen(`score · ${d.score}/100 · ` + verdict(d.score))),
   ]);
 
-  // signals.log — one row per fired signal. Reason runs full width, weight
-  // appears below as a `· N%` tail so long reasons don't get clipped.
-  const signalLines = d.signals.length
-    ? d.signals.slice(0, 6).flatMap((s) => {
-        const reasonStr = String(s.name || 'signal');
-        const right = `${Math.round(Math.max(0, Math.min(100, Number(s.weight) || 0)))}%`;
-        const tone = (Number(s.weight) || 0) >= 80 ? A.boldGreen : A.green;
-        return [
-          line(tone('+ ' + reasonStr), A.dim('· ' + right)),
-        ];
-      })
-    : [line(A.dim('// no signals fired'))];
-
-  const noteLines = [];
-  if (d.trigger) noteLines.push(line(A.dim('// trigger ·'), A.white(d.trigger)));
-  if (d.action)  noteLines.push(line(A.dim('// action  ·'), A.white(d.action)));
-  if (d.aiVerdict) {
-    const verdictLine = d.aiReason
-      ? `${d.aiVerdict} — ${truncate(d.aiReason, 100)}`
-      : d.aiVerdict;
-    noteLines.push(line(A.dim('// ai      ·'), A.white(verdictLine)));
-  }
-
-  const why = block([
-    line(A.dim('signals.log')),
-    ...signalLines,
-    ...(noteLines.length ? ['', ...noteLines] : []),
-  ]);
-
-  const evidence = d.evidence?.length
-    ? block([
-        line(A.dim('// evidence')),
-        ...d.evidence.slice(0, 4).map((e, i) =>
-          line(A.dim(String(i + 1) + '.'), A.white(truncate(String(e || ''), 70)))
-        ),
-      ])
-    : null;
-
-  // ── Title + subtitle ───────────────────────────────────────────────────
+  // ── Title ─────────────────────────────────────────────────────────────
   const title = d.title || `Scam ${verdict(d.score).toLowerCase()} · ${d.channel}`;
-  const subtitle = d.summary
-    || `User \`${d.userTag}\` in ${d.channel} · ${d.action || 'flagged for review'}`;
 
-  // ── Stat row ───────────────────────────────────────────────────────────
-  const statRow = [
-    { name: 'Action',   value: '`' + truncate(d.action || '—', 80) + '`',  inline: true },
-    { name: 'Message',  value: messageStateLabel(d.action),                inline: true },
-    { name: 'Audit ID', value: '`' + d.caseId + '`',                       inline: true },
+  // ── Identity row (inline 3-up) ────────────────────────────────────────
+  const identityRow = [
+    { name: 'User',    value: `<@${d.userId}>`,                      inline: true },
+    { name: 'Verdict', value: verdictLabel(d.score),                 inline: true },
+    { name: 'Case',    value: '`' + d.caseId + '`',                  inline: true },
   ];
+
+  // ── Detail fields (full-width, scannable) ─────────────────────────────
+  const detailFields = [];
+  if (d.action) {
+    detailFields.push({ name: 'Action', value: trim(d.action, 1000), inline: false });
+  }
+  if (d.trigger) {
+    detailFields.push({ name: 'Trigger', value: trim(d.trigger, 1000), inline: false });
+  }
+  const whyLines = d.signals.slice(0, 6).map((s) => {
+    const w = Math.round(Math.max(0, Math.min(100, Number(s.weight) || 0)));
+    return `· **${w}%** — ${String(s.name || 'signal')}`;
+  });
+  if (whyLines.length) {
+    detailFields.push({ name: 'Why', value: trim(whyLines.join('\n'), 1024), inline: false });
+  }
+  if (d.aiVerdict) {
+    // aiVerdict can be a single line ("local-kicia-intent-v3: TRUE") or the
+    // full multi-line block from formatAiVerdictLines() — either is rendered
+    // as the field value as-is so callers don't have to massage it.
+    const aiBody = d.aiReason
+      ? (d.aiVerdict.includes('\n')
+          ? `${d.aiVerdict}\n${d.aiReason}`
+          : `**${d.aiVerdict}** — ${d.aiReason}`)
+      : d.aiVerdict;
+    detailFields.push({ name: 'AI Scam Verdict', value: trim(aiBody, 1024), inline: false });
+  }
+  if (d.evidence?.length) {
+    const numbered = d.evidence.slice(0, 6)
+      .map((e, i) => `${i + 1}. ${String(e || '').replace(/\n+/g, ' ')}`)
+      .join('\n');
+    detailFields.push({ name: 'Evidence', value: trim(numbered, 1024), inline: false });
+  }
 
   const embed = new EmbedBuilder()
     .setColor(ACCENT.int) // chrome stays accent — verdict is conveyed by the dial + tag
     .setAuthor({ name: `${BRAND.botName} · scam review` })
     .setTitle(title)
-    .setDescription([subtitle, head, why, evidence].filter(Boolean).join('\n'))
+    .setDescription(head)
     .setImage('attachment://scam-dial.png')
-    .addFields(...statRow)
+    .addFields(...identityRow, ...detailFields)
     .setFooter({ text: `${BRAND.footerLine} · ${d.caseId} · Confidence: ${d.score}%` })
     .setTimestamp(d.timestamp || new Date());
 
@@ -191,17 +183,22 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
+function trim(value, max) {
+  const s = String(value || '');
+  if (s.length <= max) return s || '​';
+  return s.slice(0, max - 12) + ' …(trimmed)';
+}
+
 function verdict(score) {
   if (score >= 85) return 'CONFIRMED';
   if (score >= 65) return 'BORDERLINE';
   return 'CLEAN';
 }
 
-function messageStateLabel(action) {
-  const lc = String(action || '').toLowerCase();
-  if (/delet/.test(lc) || /remov/.test(lc)) return '🗑️ deleted';
-  if (/log/.test(lc)) return '📋 logged';
-  return '👁️ flagged';
+function verdictLabel(score) {
+  if (score >= 85) return '🔴 Confirmed';
+  if (score >= 65) return '🟡 Borderline';
+  return '🟢 Clean';
 }
 
 module.exports = { buildScamEmbed, buildScamPublicAlert };

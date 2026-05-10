@@ -2286,25 +2286,13 @@ function buildSellingLogPanel({
     action: actionLine,
     caseId,
     title: header,
-    summary: `User <@${message.author?.id}> in <#${message.channelId}> · ${actionLine}`,
     trigger: triggerLine,
-    aiVerdict: aiLines ? extractFirstLine(aiLines) : null,
-    aiReason: aiLines && aiLines.includes("\n") ? aiLines.slice(aiLines.indexOf("\n") + 1).trim() : null,
+    aiVerdict: aiLines || null,
     evidence: evidenceList
   });
 
-  const embed = built.embeds[0];
-
-  // Test compatibility: keep an "AI Scam Verdict" field so existing assertions
-  // still find the keyword. Folded into one inline field rather than a stack
-  // of five — the description code block already carries the full payload.
-  if (aiLines) {
-    const value = aiLines.length > 1024 ? aiLines.slice(0, 1011) + "…" : aiLines;
-    embed.addFields({ name: "AI Scam Verdict", value, inline: false });
-  }
-
   const panel = {
-    embed,
+    embed: built.embeds[0],
     files: built.files,
     header,
     color: isTimeout ? DANGER : WARN
@@ -2322,11 +2310,6 @@ function buildSellingEvidenceList(message, recentMessages = []) {
     ? [trimExcerpt(message.content)]
     : entries.map((entry) => trimExcerpt(entry.content, 150));
   return list.filter(Boolean);
-}
-
-function extractFirstLine(text) {
-  const idx = String(text || "").indexOf("\n");
-  return idx === -1 ? String(text || "") : String(text).slice(0, idx).trim();
 }
 
 function formatAiVerdictLines(signals) {
@@ -2528,10 +2511,9 @@ function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSen
     message: message.content || "",
     score: Math.max(0, Math.min(100, Math.round(Number(state.confidence) || 0))),
     signals: dialSignals,
-    action: actionLineHuman,
+    action: `${actionLineHuman} · ${actionLineLegacy}`,
     caseId,
     title: header,
-    summary: `User <@${message.author?.id}> in <#${message.channelId}> · ${actionLineHuman} · ${actionLineLegacy}`,
     trigger: String(state.trigger || "watch window"),
     evidence: [trimExcerpt(message.content)]
   });

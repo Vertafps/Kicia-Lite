@@ -1,18 +1,13 @@
 /**
- * Animated status orb + ribbon — APNG looping hero for $status.
+ * Animated status orb + ribbon — looping GIF for $status.
  *
- * Animation:
- *  - Orb radius breathes (sine, ±8% over the loop).
- *  - Outer bloom intensity follows a steeper sine (more pronounced halo).
- *  - When status is UP, the 24h ribbon gets a faint shimmer that travels L→R.
- *  - Concentric rings rotate slowly via shifted dash offsets.
- *
- * Same data shape as renderStatusOrbRibbon — drop-in replacement that
- * returns an APNG Buffer instead of a static PNG.
+ * Design rule: every frame must show the full status (orb + label + ribbon).
+ * Animation is *ambient* — the orb breathes, the ribbon shimmers when all-green.
+ * If a client only ever sees the first frame, it still reads correctly.
  */
 
 const { SURFACE, STATUS, TYPE } = require('../colors');
-const { renderApng, easeInOutSine } = require('./_animation');
+const { renderGif, easeInOutSine } = require('./_animation');
 
 function renderStatusOrbRibbonAnimated({
   status = 'UP', uptime = 99.94, ribbon,
@@ -25,20 +20,20 @@ function renderStatusOrbRibbonAnimated({
                            STATUS.up.hex;
   const allGreen = status === 'UP' && data.every((s) => s === 'up');
 
-  return renderApng((ctx, t) => {
-    drawFrame(ctx, t);
-  }, { width: W, height: H });
+  return renderGif((ctx, t) => drawFrame(ctx, t), { width: W, height: H });
 
   function drawFrame(ctx, t) {
     drawGrid(ctx);
 
-    const breathe = easeInOutSine((Math.sin(t * Math.PI * 2) + 1) / 2);
+    // Continuous breathing — phase 0 sits at the *settled* radius so first
+    // frame still looks alive, not "starting from scratch".
+    const phase = t * Math.PI * 2;
+    const breathe = (Math.sin(phase) + 1) / 2; // 0..1
     const radius = 28 + breathe * 2.4;
     const bloomAlpha = 0.55 + breathe * 0.35;
 
     drawOrb(ctx, 60, 70, radius, tone, bloomAlpha, t);
     drawStatusText(ctx);
-
     drawRibbon(ctx, t);
   }
 
@@ -54,7 +49,6 @@ function renderStatusOrbRibbonAnimated({
   }
 
   function drawOrb(ctx, cx, cy, r, color, bloomA, t) {
-    // Outer halo
     const haloR = 50 + (r - 28) * 1.6;
     const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
     halo.addColorStop(0, color + Math.floor(bloomA * 240).toString(16).padStart(2, '0'));
@@ -62,7 +56,7 @@ function renderStatusOrbRibbonAnimated({
     ctx.fillStyle = halo;
     ctx.beginPath(); ctx.arc(cx, cy, haloR, 0, Math.PI * 2); ctx.fill();
 
-    // Concentric rotating rings
+    // Two concentric arcs sweeping in opposite directions.
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = 0.6;
@@ -87,7 +81,6 @@ function renderStatusOrbRibbonAnimated({
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
 
-    // Crosshair ticks
     ctx.save();
     ctx.strokeStyle = color;
     ctx.globalAlpha = 0.7;
@@ -130,7 +123,6 @@ function renderStatusOrbRibbonAnimated({
     ctx.fillStyle = SURFACE.textDim;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '1.5px';
     ctx.fillText('24H UPTIME RIBBON', ribX, ribY - 8);
-
     ctx.textAlign = 'right';
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
     ctx.fillText('96 slots · 15m each', W - 16, ribY - 8);
@@ -148,7 +140,6 @@ function renderStatusOrbRibbonAnimated({
     ctx.globalAlpha = 1;
 
     if (allGreen) {
-      // Shimmer band traveling L→R
       const shimmerCenter = (t * (ribW + 60)) - 30;
       const grad = ctx.createLinearGradient(shimmerCenter - 30, 0, shimmerCenter + 30, 0);
       grad.addColorStop(0, '#FFFFFF00');
@@ -161,7 +152,6 @@ function renderStatusOrbRibbonAnimated({
       ctx.restore();
     }
 
-    // Hour ticks
     ctx.save();
     ctx.font = '9px ' + TYPE.mono;
     ctx.fillStyle = SURFACE.textDim;

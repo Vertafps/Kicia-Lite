@@ -28,6 +28,7 @@ const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reac
 const { maybeHandleStatusCommand } = require("./handlers/status");
 const { maybeHandleOutageReviewInteraction } = require("./handlers/outage-review");
 const { maybeHandleScamReviewInteraction } = require("./handlers/scam-review");
+const { maybeHandleSweepReviewInteraction } = require("./handlers/sweep-review");
 const { maybeHandleOutageDetection } = require("./outage-detector");
 const {
   cleanupExpiredModerationActions,
@@ -400,6 +401,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await maybeHandleOutageReviewInteraction(interaction)) return;
     if (await maybeHandleScamReviewInteraction(interaction)) return;
     if (await maybeHandleModerationLogInteraction(interaction)) return;
+    if (await maybeHandleSweepReviewInteraction(interaction)) return;
+
+    // If we got here, no handler claimed this interaction. Acknowledge the
+    // click so Discord doesn't show "interaction failed" to the user. We do
+    // this only for component interactions (buttons / select menus / modals);
+    // commands have their own ack flow.
+    if (interaction.isButton?.() || interaction.isAnySelectMenu?.() || interaction.isModalSubmit?.()) {
+      try {
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.reply({
+            content: "this button isn't wired up yet — bug logged.",
+            flags: 1 << 6,
+            allowedMentions: { parse: [] }
+          });
+        }
+      } catch (err) {
+        recordRuntimeEvent("warn", "interaction-fallback", err?.message || err);
+      }
+      recordRuntimeEvent(
+        "warn",
+        "interaction-unrouted",
+        `customId=${interaction.customId} type=${interaction.type}`
+      );
+    }
   });
 });
 

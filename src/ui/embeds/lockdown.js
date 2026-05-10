@@ -30,20 +30,22 @@ const { recordRuntimeEvent } = require('../../runtime-health');
 function renderLockdownHero(opts) {
   if (ANIMATED_HEROES) {
     try {
-      return renderLockdownGridAnimated(opts);
+      return { buffer: renderLockdownGridAnimated(opts), animated: true };
     } catch (err) {
       recordRuntimeEvent('warn', 'animated-hero-lockdown', err?.message || err);
     }
   }
-  return renderLockdownGrid(opts);
+  return { buffer: renderLockdownGrid(opts), animated: false };
 }
 
 function buildLockdownEmbed({
   channels = [], reason = 'precautionary', actor = 'mod',
   intent = 'lock', title, stats, summaryLine, hint,
 } = {}) {
-  const buf = renderLockdownHero({ channels });
-  const img = new AttachmentBuilder(buf, { name: 'lockdown-grid.png' });
+  const hero = renderLockdownHero({ channels });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `lockdown-grid.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
 
   const lockedCount = channels.filter((c) => c.status === 'locked').length;
   const unlockedCount = channels.filter((c) => c.status === 'unlocked').length;
@@ -84,7 +86,7 @@ function buildLockdownEmbed({
     .setAuthor({ name: `${BRAND.botName} · lockdown` })
     .setTitle(resolvedTitle)
     .setDescription(description)
-    .setImage('attachment://lockdown-grid.png')
+    .setImage(`attachment://${filename}`)
     .addFields(
       { name: 'Changed',   value: '`' + resolvedStats.changed + '`',   inline: true },
       { name: 'Already',   value: '`' + resolvedStats.already + '`',   inline: true },

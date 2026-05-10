@@ -1,14 +1,12 @@
 /**
- * Animated KB no-match card — APNG looping hero for the "let's get a human"
- * embed. Renders a radar sweep that arcs across a grid, lands on "no clear
- * match", and softly settles before looping back.
+ * Animated KB no-match — looping GIF for the "let's get a human" embed.
  *
- * Same data shape as renderConfidenceMeter (score, label) — drop-in for the
- * no-match embed.
+ * Design rule: full content always visible. Animation = a radar sweep arc
+ * orbiting a "no signal" pip. The headline + CTA pill never fade.
  */
 
 const { ACCENT, SURFACE, STATUS, TYPE } = require('../colors');
-const { renderApng, easeOutQuint, smoothstep } = require('./_animation');
+const { renderGif, easeInOutSine } = require('./_animation');
 
 function renderKbNoMatchAnimated({
   score = 38, label = 'no-match',
@@ -20,9 +18,7 @@ function renderKbNoMatchAnimated({
     score >= 45 ? STATUS.warn.hex :
                   STATUS.down.hex;
 
-  return renderApng((ctx, t) => {
-    drawFrame(ctx, t);
-  }, { width: W, height: H, durationSec: 1.5 });
+  return renderGif((ctx, t) => drawFrame(ctx, t), { width: W, height: H });
 
   function drawFrame(ctx, t) {
     drawGrid(ctx);
@@ -58,21 +54,20 @@ function renderKbNoMatchAnimated({
   }
 
   function drawRadar(ctx, t) {
-    // Concentric range rings
+    // Concentric range rings + crosshair — static, always visible.
     ctx.save();
     ctx.strokeStyle = SURFACE.panelBorder;
     ctx.lineWidth = 1;
     for (const r of [radarR, radarR * 0.66, radarR * 0.33]) {
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
     }
-    // Crosshair
     ctx.beginPath();
     ctx.moveTo(cx - radarR - 4, cy); ctx.lineTo(cx + radarR + 4, cy);
     ctx.moveTo(cx, cy - radarR - 4); ctx.lineTo(cx, cy + radarR + 4);
     ctx.stroke();
     ctx.restore();
 
-    // Sweeping wedge (alpha fades along the trail)
+    // Sweeping wedge.
     const sweepAngle = t * Math.PI * 2 - Math.PI / 2;
     const wedgeSpan = Math.PI / 2.2;
     ctx.save();
@@ -88,7 +83,7 @@ function renderKbNoMatchAnimated({
     ctx.fill();
     ctx.restore();
 
-    // Leading edge line
+    // Leading edge line.
     ctx.save();
     ctx.strokeStyle = zone;
     ctx.lineWidth = 1.2;
@@ -99,47 +94,44 @@ function renderKbNoMatchAnimated({
     ctx.stroke();
     ctx.restore();
 
-    // "No signal" pip — softly pulses at center after first sweep
-    const pipAlpha = smoothstep(Math.min(1, (t - 0.35) / 0.4));
-    if (pipAlpha > 0) {
-      const pulse = (Math.sin(t * Math.PI * 4) + 1) / 2;
-      ctx.save();
-      ctx.globalAlpha = pipAlpha * (0.5 + pulse * 0.5);
-      ctx.fillStyle = SURFACE.textMuted;
-      ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
-    }
+    // Center "no signal" pip — softly pulses, always visible.
+    const pulse = (Math.sin(t * Math.PI * 4) + 1) / 2;
+    ctx.save();
+    ctx.globalAlpha = 0.55 + pulse * 0.4;
+    ctx.fillStyle = SURFACE.textMuted;
+    ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
   }
 
   function drawCopy(ctx, t) {
-    const headlineAlpha = smoothstep(Math.min(1, (t - 0.45) / 0.4));
-    const subAlpha = smoothstep(Math.min(1, (t - 0.6) / 0.35));
     const tx = 192;
 
     ctx.save();
-    ctx.globalAlpha = headlineAlpha;
     ctx.font = 'bold 18px ' + TYPE.sans;
     ctx.fillStyle = SURFACE.text;
     ctx.fillText('No clear KB match', tx, 64);
     ctx.restore();
 
     ctx.save();
-    ctx.globalAlpha = subAlpha;
     ctx.font = '11px ' + TYPE.sans;
     ctx.fillStyle = SURFACE.textMuted;
     ctx.fillText('Routing this one to staff —', tx, 86);
     ctx.fillText('open a ticket and a moderator will pick it up.', tx, 102);
     ctx.restore();
 
-    // CTA pill
-    ctx.save();
-    ctx.globalAlpha = subAlpha;
+    // CTA pill — gentle breathing border, label always readable.
+    const breathe = (Math.sin(t * Math.PI * 2) + 1) / 2;
     const pillX = tx, pillY = 116, pillW = 130, pillH = 22;
+    ctx.save();
     ctx.fillStyle = STATUS.warn.hex + '22';
-    ctx.strokeStyle = STATUS.warn.hex + '88';
-    ctx.lineWidth = 1;
     ctx.fillRect(pillX, pillY, pillW, pillH);
+    ctx.strokeStyle = STATUS.warn.hex;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.5 + breathe * 0.5;
     ctx.strokeRect(pillX + 0.5, pillY + 0.5, pillW, pillH);
+    ctx.restore();
+
+    ctx.save();
     ctx.font = 'bold 9.5px ' + TYPE.mono;
     ctx.fillStyle = STATUS.warn.hex;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '1.4px';

@@ -43,11 +43,15 @@ async function replyEphemeral(interaction, panel) {
     flags: 1 << 6, // Ephemeral
     allowedMentions: { parse: [] }
   };
-  if (interaction.deferred || interaction.replied) {
-    await interaction.followUp?.(payload).catch(() => null);
-    return;
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp?.(payload);
+    } else {
+      await interaction.reply?.(payload);
+    }
+  } catch (err) {
+    recordRuntimeEvent("warn", "outage-review-ephemeral", err?.message || err);
   }
-  await interaction.reply?.(payload).catch(() => null);
 }
 
 async function disableSourceButtons(interaction, message) {
@@ -55,9 +59,13 @@ async function disableSourceButtons(interaction, message) {
   const reviewIdMatch =
     interaction.customId?.replace(OUTAGE_CONFIRM_PREFIX, "").replace(OUTAGE_DISMISS_PREFIX, "") ||
     "";
-  await message.edit({
-    components: buildOutageReviewButtonRows(reviewIdMatch, { disabled: true })
-  }).catch(() => null);
+  try {
+    await message.edit({
+      components: buildOutageReviewButtonRows(reviewIdMatch, { disabled: true })
+    });
+  } catch (err) {
+    recordRuntimeEvent("warn", "outage-review-disable-buttons", err?.message || err);
+  }
 }
 
 async function maybeHandleOutageReviewInteraction(interaction, deps = {}) {

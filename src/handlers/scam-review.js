@@ -55,11 +55,15 @@ async function replyEphemeral(interaction, panel, { components } = {}) {
     allowedMentions: { parse: [] }
   };
   if (Array.isArray(components) && components.length) payload.components = components;
-  if (interaction.deferred || interaction.replied) {
-    await interaction.followUp?.(payload).catch(() => null);
-    return;
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp?.(payload);
+    } else {
+      await interaction.reply?.(payload);
+    }
+  } catch (err) {
+    recordRuntimeEvent("warn", "scam-review-ephemeral", err?.message || err);
   }
-  await interaction.reply?.(payload).catch(() => null);
 }
 
 async function maybeHandleScamFeedbackInteraction(interaction) {
@@ -107,8 +111,12 @@ async function maybeHandleScamFeedbackInteraction(interaction) {
 
   // Disable the select on the original ephemeral so it can't be re-submitted.
   if (interaction.message?.edit) {
-    const disabledRows = buildScamFeedbackSelectRows(auditId, { disabled: true });
-    await interaction.message.edit({ components: disabledRows }).catch(() => null);
+    try {
+      const disabledRows = buildScamFeedbackSelectRows(auditId, { disabled: true });
+      await interaction.message.edit({ components: disabledRows });
+    } catch (err) {
+      recordRuntimeEvent("warn", "scam-feedback-edit", err?.message || err);
+    }
   }
 
   await replyEphemeral(interaction, {
@@ -214,11 +222,15 @@ async function maybeHandleScamReviewInteraction(interaction) {
       ? [...interaction.message.attachments.values()]
       : []);
 
-    await interaction.message.edit({
-      components: updatedRows,
-      embeds: updatedEmbeds,
-      attachments: keepAttachments
-    }).catch(() => null);
+    try {
+      await interaction.message.edit({
+        components: updatedRows,
+        embeds: updatedEmbeds,
+        attachments: keepAttachments
+      });
+    } catch (err) {
+      recordRuntimeEvent("warn", "scam-review-edit", err?.message || err);
+    }
   }
 
   const confirmBody = wasRelabeled

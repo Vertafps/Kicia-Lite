@@ -18,7 +18,7 @@
     "@resvg/resvg-js": "^2.6.2",
     "discord.js": "14.26.3",
     "dotenv": "^16.4.5",
-    "sql.js": "^1.14.1",
-    "upng-js": "^2.1.0"
+    "gifenc": "^1.0.3",
+    "sql.js": "^1.14.1"
   }
 }

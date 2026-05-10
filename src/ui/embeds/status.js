@@ -21,12 +21,12 @@ const { recordRuntimeEvent } = require('../../runtime-health');
 function renderStatusHero(opts) {
   if (ANIMATED_HEROES) {
     try {
-      return renderStatusOrbRibbonAnimated(opts);
+      return { buffer: renderStatusOrbRibbonAnimated(opts), animated: true };
     } catch (err) {
       recordRuntimeEvent('warn', 'animated-hero-status', err?.message || err);
     }
   }
-  return renderStatusOrbRibbon(opts);
+  return { buffer: renderStatusOrbRibbon(opts), animated: false };
 }
 
 function buildStatusEmbed({
@@ -34,8 +34,10 @@ function buildStatusEmbed({
   ribbon, lastDown = '—', incidents7d = '0',
 } = {}) {
 
-  const buf = renderStatusHero({ status, uptime, ribbon });
-  const img = new AttachmentBuilder(buf, { name: 'status-orb.png' });
+  const hero = renderStatusHero({ status, uptime, ribbon });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `status-orb.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
 
   const tone =
     status === 'DOWN'    ? STATUS.down :
@@ -63,7 +65,7 @@ function buildStatusEmbed({
     .setAuthor({ name: `${BRAND.botName} · ${BRAND.productName} watch` })
     .setTitle('Service status')
     .setDescription(desc)
-    .setImage('attachment://status-orb.png')
+    .setImage(`attachment://${filename}`)
     .addFields(
       { name: 'Status',     value: tone.hex === STATUS.down.hex ? '🔴 Down' :
                                    tone.hex === STATUS.warn.hex ? '🟡 Unaware' :

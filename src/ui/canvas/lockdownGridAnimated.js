@@ -1,17 +1,13 @@
 /**
- * Animated lockdown grid — APNG looping hero for $lock / $unlock.
+ * Animated lockdown grid — looping GIF for $lock / $unlock.
  *
- * Animation:
- *  - Cells light up in a left-to-right + top-to-bottom wave (delay per cell
- *    based on its position).
- *  - Locked cells get a red bloom that pulses gently after settling.
- *  - The header summary fades in last so the eye lands on the grid first.
- *
- * Same data shape as renderLockdownGrid — drop-in replacement returning APNG.
+ * Design rule: every cell is fully visible from frame 0. Animation = a soft
+ * scan beam that travels across the grid (highlighting each cell as it passes)
+ * and a gentle red bloom pulse on locked cells.
  */
 
 const { SURFACE, STATUS, TYPE } = require('../colors');
-const { renderApng, easeOutQuint, smoothstep } = require('./_animation');
+const { renderGif } = require('./_animation');
 
 function renderLockdownGridAnimated({ channels } = {}) {
   const ch = channels && channels.length ? channels : [
@@ -37,14 +33,13 @@ function renderLockdownGridAnimated({ channels } = {}) {
   const unlockedCount = ch.filter((c) => c.status === 'unlocked').length;
   const untouchedCount = ch.length - lockedCount - unlockedCount;
 
-  return renderApng((ctx, t) => {
-    drawFrame(ctx, t);
-  }, { width: W, height: H });
+  return renderGif((ctx, t) => drawFrame(ctx, t), { width: W, height: H });
 
   function drawFrame(ctx, t) {
     drawGrid(ctx);
-    drawHeader(ctx, t);
+    drawHeader(ctx);
     ch.forEach((c, i) => drawCell(ctx, t, c, i));
+    drawScanBeam(ctx, t);
   }
 
   function drawGrid(ctx) {
@@ -58,13 +53,11 @@ function renderLockdownGridAnimated({ channels } = {}) {
     ctx.restore();
   }
 
-  function drawHeader(ctx, t) {
-    const headerAlpha = smoothstep(Math.min(1, (t - 0.55) / 0.35));
+  function drawHeader(ctx) {
     ctx.save();
     ctx.font = '600 9.5px ' + TYPE.mono;
     ctx.fillStyle = SURFACE.textMuted;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '1.6px';
-    ctx.globalAlpha = headerAlpha;
     ctx.fillText('LOCKDOWN STATE', 16, 18);
 
     const headerRight = `${lockedCount}/${ch.length} LOCKED · ${unlockedCount} UNLOCKED · ${untouchedCount} UNTOUCHED`;
@@ -86,16 +79,8 @@ function renderLockdownGridAnimated({ channels } = {}) {
       c.status === 'unlocked' ? STATUS.up.hex   :
                                 SURFACE.textMuted;
 
-    // Per-cell delay: wave in reading order (col by col, row by row)
-    const cellDelay = (i / Math.max(1, ch.length - 1)) * 0.45;
-    const cellLocal = Math.max(0, Math.min(1, (t - cellDelay) / 0.4));
-    const intro = easeOutQuint(cellLocal);
-
-    if (intro <= 0) return;
-
-    // Card base
+    // Card base — always rendered fully.
     ctx.save();
-    ctx.globalAlpha = intro;
     ctx.fillStyle = SURFACE.panelBg;
     ctx.strokeStyle = c.status === 'untouched' ? SURFACE.panelBorder : tone + '88';
     ctx.lineWidth = 1;
@@ -106,10 +91,12 @@ function renderLockdownGridAnimated({ channels } = {}) {
     }
     ctx.restore();
 
-    // Pulse bloom on locked cells after settle
-    if (c.status === 'locked' && cellLocal >= 1) {
-      const pulse = (Math.sin((t - cellDelay) * Math.PI * 3.5) + 1) / 2;
-      const bloomR = 28 + pulse * 8;
+    // Locked cells get a continuous breathing bloom.
+    if (c.status === 'locked') {
+      // Phase per-cell so the row doesn't pulse in lockstep.
+      const phase = t * Math.PI * 2 + i * 0.6;
+      const pulse = (Math.sin(phase) + 1) / 2;
+      const bloomR = 26 + pulse * 6;
       const bcx = x + cellW / 2;
       const bcy = y + cellH / 2;
       ctx.save();
@@ -122,11 +109,9 @@ function renderLockdownGridAnimated({ channels } = {}) {
       ctx.restore();
     }
 
-    ctx.save();
-    ctx.globalAlpha = intro;
-
-    // Lock glyph
+    // Lock glyph.
     const glyphX = x + 12, glyphY = y + 14;
+    ctx.save();
     ctx.translate(glyphX, glyphY);
     ctx.fillStyle = tone;
     ctx.strokeStyle = tone;
@@ -145,20 +130,20 @@ function renderLockdownGridAnimated({ channels } = {}) {
       ctx.arc(8, 2, 4, Math.PI, 0, false);
       ctx.stroke();
     } else {
-      ctx.globalAlpha *= 0.55;
+      ctx.globalAlpha = 0.55;
       ctx.beginPath(); ctx.arc(7, 12, 3, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
 
-    // Channel name + pill
+    // Channel name.
     ctx.save();
-    ctx.globalAlpha = intro;
     ctx.font = 'bold 12px ' + TYPE.mono;
     ctx.fillStyle = SURFACE.text;
     const textBudget = cellW - 36 - 12;
     const nameStr = fitText(ctx, '#' + c.name, textBudget);
     ctx.fillText(nameStr, x + 36, y + 24);
 
+    // State pill.
     const pillText =
       c.status === 'locked'   ? 'LOCKED'   :
       c.status === 'unlocked' ? 'UNLOCKED' :
@@ -176,6 +161,20 @@ function renderLockdownGridAnimated({ channels } = {}) {
     ctx.fillStyle = tone;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '1.2px';
     ctx.fillText(pillText, pillX + 6, pillY + 10);
+    ctx.restore();
+  }
+
+  function drawScanBeam(ctx, t) {
+    // A vertical band of light sweeps left-to-right across the whole canvas.
+    const beamX = (t * (W + 80)) - 40;
+    const grad = ctx.createLinearGradient(beamX - 40, 0, beamX + 40, 0);
+    grad.addColorStop(0,   '#FFFFFF00');
+    grad.addColorStop(0.5, '#FFFFFF18');
+    grad.addColorStop(1,   '#FFFFFF00');
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, headerH, W, H - headerH);
     ctx.restore();
   }
 

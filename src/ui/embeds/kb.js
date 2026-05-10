@@ -28,23 +28,23 @@ const { recordRuntimeEvent } = require('../../runtime-health');
 function renderKbMatchHero(opts) {
   if (ANIMATED_HEROES) {
     try {
-      return renderKbEditorialAnimated(opts);
+      return { buffer: renderKbEditorialAnimated(opts), animated: true };
     } catch (err) {
       recordRuntimeEvent('warn', 'animated-hero-kb-match', err?.message || err);
     }
   }
-  return renderKbEditorial(opts);
+  return { buffer: renderKbEditorial(opts), animated: false };
 }
 
 function renderKbNoMatchHero(opts) {
   if (ANIMATED_HEROES) {
     try {
-      return renderKbNoMatchAnimated(opts);
+      return { buffer: renderKbNoMatchAnimated(opts), animated: true };
     } catch (err) {
       recordRuntimeEvent('warn', 'animated-hero-kb-nomatch', err?.message || err);
     }
   }
-  return renderConfidenceMeter(opts);
+  return { buffer: renderConfidenceMeter(opts), animated: false };
 }
 
 // ── Strong match ────────────────────────────────────────────────────────────
@@ -61,8 +61,10 @@ function buildKbMatchEmbed({
 
   const total = Math.max(steps.length, 1);
   const previewLine = pickPreviewLine(steps, body);
-  const buf = renderKbMatchHero({ title, tag, step, total, match, preview: previewLine });
-  const img = new AttachmentBuilder(buf, { name: 'kb-card.png' });
+  const hero = renderKbMatchHero({ title, tag, step, total, match, preview: previewLine });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `kb-card.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
 
   const headerStrip = block([
     line(A.okTag(), A.boldGreen(`match · ${match.toFixed(2)}`), A.dim('· source ' + source)),
@@ -89,7 +91,7 @@ function buildKbMatchEmbed({
     .setTitle(title)
     .setURL(url || null)
     .setDescription(description)
-    .setImage('attachment://kb-card.png')
+    .setImage(`attachment://${filename}`)
     .setFooter({ text: `${BRAND.footerLine} · source ${source}` });
 
   const components = [];
@@ -117,8 +119,10 @@ function buildKbNoMatchEmbed({
   closestArticles = [],    // [{title, match}]
 } = {}) {
 
-  const buf = renderKbNoMatchHero({ score, label: 'no-match' });
-  const img = new AttachmentBuilder(buf, { name: 'kb-meter.png' });
+  const hero = renderKbNoMatchHero({ score, label: 'no-match' });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `kb-meter.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
 
   const intro =
     "I couldn't find anything in the knowledge base that matches your message confidently.";
@@ -144,7 +148,7 @@ function buildKbNoMatchEmbed({
     .setAuthor({ name: `${BRAND.botName} · KB · no match` })
     .setTitle("Let's get a human on it.")
     .setDescription(description)
-    .setImage('attachment://kb-meter.png')
+    .setImage(`attachment://${filename}`)
     .setFooter({ text: BRAND.footerLine });
 
   const buttons = [];

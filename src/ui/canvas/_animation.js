@@ -1,30 +1,30 @@
 /**
- * Animation primitives — APNG frame stitching shared by every animated canvas.
+ * Animation primitives — GIF frame stitching shared by every animated canvas.
  *
- * Why APNG and not GIF: GIF caps at 256 indexed colors, which destroys the
- * orb glows + accent gradients we draw. APNG is full-color and Discord renders
- * it natively as a looping `.png` attachment.
+ * Why GIF (not APNG): Discord's embed image renderer plays animated GIFs
+ * reliably on every client (desktop, mobile, web) but only shows the first
+ * frame of APNG on most of them. We pay a 256-color palette cost in exchange
+ * for guaranteed playback. Our UI is dark with limited palette, so the
+ * quantization loss is mostly invisible.
  *
  * Frames are generated entirely in-memory via @napi-rs/canvas and encoded with
- * upng-js. Nothing touches disk — important on the storage-constrained VPS.
+ * gifenc. Nothing touches disk — important on the storage-tight VPS.
+ *
+ * Animation design rule (CRITICAL): every animated builder must be a
+ * **continuous, always-readable loop**. The first frame must show all the
+ * content the user needs — no fade-in entrance, no slide-from-offscreen. If
+ * Discord ever falls back to the first frame (or a slow client renders only
+ * the first frame), the embed must still be readable.
  */
 
 const { createCanvas } = require('@napi-rs/canvas');
-
-let UPNG = null;
-function loadUPNG() {
-  if (UPNG) return UPNG;
-  UPNG = require('upng-js');
-  return UPNG;
-}
+const { GIFEncoder, quantize, applyPalette } = require('gifenc');
 
 // Tuned for Discord render path:
-//  - 24 fps × 1.2 s = ~29 frames keeps motion smooth without ballooning size.
-//  - Scale 1 means native px (480px wide). Discord's animated PNG path serves
-//    images at native, not retina, so 2× was wasted bytes and CPU.
-//  - cnum=0 keeps full color (no palette quantization) — gradients survive.
+//   24 fps × 1.5 s = 36 frames keeps motion smooth without ballooning size.
+//   Native scale (1×) — Discord serves animated images at native, not retina.
 const DEFAULT_FPS = 24;
-const DEFAULT_DURATION_S = 1.2;
+const DEFAULT_DURATION_S = 1.5;
 const RENDER_SCALE = 1;
 
 function makeFrameCanvas(width, height, scale = RENDER_SCALE) {
@@ -37,15 +37,17 @@ function makeFrameCanvas(width, height, scale = RENDER_SCALE) {
 }
 
 function easeInOut(t) {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  const c = Math.max(0, Math.min(1, t));
+  return c < 0.5 ? 2 * c * c : 1 - Math.pow(-2 * c + 2, 2) / 2;
 }
 
 function easeOutQuint(t) {
-  return 1 - Math.pow(1 - t, 5);
+  const c = Math.max(0, Math.min(1, t));
+  return 1 - Math.pow(1 - c, 5);
 }
 
 function easeInOutSine(t) {
-  return -(Math.cos(Math.PI * t) - 1) / 2;
+  return -(Math.cos(Math.PI * Math.max(0, Math.min(1, t))) - 1) / 2;
 }
 
 function smoothstep(t) {
@@ -55,75 +57,59 @@ function smoothstep(t) {
 
 /**
  * Run drawFn across N frames. drawFn receives the canvas context, the frame's
- * normalized progress t ∈ [0, 1], and the loop index. Returns an APNG Buffer.
+ * normalized progress t ∈ [0, 1), and the frame index. Returns a GIF Buffer.
  *
  * @param {Object} opts
  * @param {number} opts.width
  * @param {number} opts.height
- * @param {number} [opts.fps=30]
+ * @param {number} [opts.fps=24]
  * @param {number} [opts.durationSec=1.5]
- * @param {number} [opts.loop=0]   APNG loop count (0 = infinite)
- * @param {number} [opts.cnum=0]   APNG palette size (0 = full color)
  * @param {(ctx, t, frame) => void} drawFn
  */
-function renderApng(drawFn, opts = {}) {
+function renderGif(drawFn, opts = {}) {
   const {
     width, height,
     fps = DEFAULT_FPS,
     durationSec = DEFAULT_DURATION_S,
-    loop = 0,
-    cnum = 0,
   } = opts;
 
   if (!Number.isFinite(width) || !Number.isFinite(height)) {
-    throw new Error('renderApng requires numeric width and height');
+    throw new Error('renderGif requires numeric width and height');
   }
 
   const totalFrames = Math.max(2, Math.round(fps * durationSec));
   const frameDelayMs = Math.round(1000 / fps);
-  const buffers = [];
-  const delays = [];
+  const W = Math.round(width * RENDER_SCALE);
+  const H = Math.round(height * RENDER_SCALE);
+
+  const enc = GIFEncoder();
+
+  // Compute a single global palette from a settled frame (t = 0.5) so colors
+  // stay stable across the loop. Per-frame palettes give marginally better
+  // color but produce much larger files; for a UI with limited color range
+  // a single palette is the better tradeoff.
+  const settled = makeFrameCanvas(width, height);
+  drawFn(settled.ctx, 0.5, Math.floor(totalFrames / 2));
+  const settledRgba = new Uint8Array(
+    settled.ctx.getImageData(0, 0, W, H).data.buffer
+  );
+  const palette = quantize(settledRgba, 256, { format: 'rgb565' });
 
   for (let i = 0; i < totalFrames; i++) {
-    const t = i / (totalFrames - 1);
-    const { canvas, ctx } = makeFrameCanvas(width, height);
+    const t = i / totalFrames; // [0, 1)
+    const { ctx } = makeFrameCanvas(width, height);
     drawFn(ctx, t, i);
-    // upng-js needs raw RGBA buffers, not ImageData objects. Extract as a
-    // typed-array-backed ArrayBuffer the encoder can read directly.
-    const raw = canvas.getContext('2d').getImageData(0, 0, width * RENDER_SCALE, height * RENDER_SCALE);
-    buffers.push(raw.data.buffer);
-    delays.push(frameDelayMs);
+    const rgba = new Uint8Array(ctx.getImageData(0, 0, W, H).data.buffer);
+    const indexed = applyPalette(rgba, palette, 'rgb565');
+    enc.writeFrame(indexed, W, H, { palette, delay: frameDelayMs });
   }
 
-  const upng = loadUPNG();
-  const apng = upng.encode(buffers, width * RENDER_SCALE, height * RENDER_SCALE, cnum, delays);
-  // upng returns an ArrayBuffer-like; wrap as Node Buffer for AttachmentBuilder.
-  const buf = Buffer.from(apng);
-  if (loop !== 0) {
-    // Patch the acTL chunk's `num_plays` field if a non-default loop was requested.
-    // upng writes 0 (infinite) by default; for our hero animations we always loop, so
-    // this branch is rarely needed but kept for completeness.
-    patchApngLoopCount(buf, loop);
-  }
-  return buf;
-}
-
-function patchApngLoopCount(buf, plays) {
-  // PNG signature is 8 bytes; chunks are length(4) + type(4) + data + crc(4).
-  let offset = 8;
-  while (offset < buf.length) {
-    const length = buf.readUInt32BE(offset);
-    const type = buf.toString('ascii', offset + 4, offset + 8);
-    if (type === 'acTL') {
-      buf.writeUInt32BE(plays >>> 0, offset + 8 + 4);
-      return;
-    }
-    offset += 12 + length;
-  }
+  enc.finish();
+  return Buffer.from(enc.bytes());
 }
 
 module.exports = {
-  renderApng,
+  renderGif,
   easeInOut,
   easeOutQuint,
   easeInOutSine,

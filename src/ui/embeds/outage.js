@@ -13,11 +13,35 @@ const { ACCENT, STATUS, BRAND } = require('../colors');
 const { ansi: A, line, block } = require('../ansi');
 const { renderOutageTimeline } = require('../canvas/outageTimeline');
 const { renderStatusOrbRibbon } = require('../canvas/statusOrb');
+const { renderStatusOrbRibbonAnimated } = require('../canvas/statusOrbAnimated');
+const { ANIMATED_HEROES } = require('../../config');
+const { recordRuntimeEvent } = require('../../runtime-health');
+
+function renderOrbHero(opts) {
+  if (ANIMATED_HEROES) {
+    try {
+      return { buffer: renderStatusOrbRibbonAnimated(opts), animated: true };
+    } catch (err) {
+      recordRuntimeEvent('warn', 'animated-hero-outage-orb', err?.message || err);
+    }
+  }
+  return { buffer: renderStatusOrbRibbon(opts), animated: false };
+}
 
 // ── Public alert (in #general) ───────────────────────────────────────────────
 
 function buildOutagePublic({ since = 'a few minutes ago' } = {}) {
-  // No counts, no reporter handles. Just signal + next-step.
+  // Yellow / UNAWARE orb so the public alert mirrors the bot's status display
+  // language. No counts, no reporter handles — just signal + next-step.
+  const hero = renderOrbHero({
+    status: 'UNAWARE',
+    uptime: 0,
+    ribbon: Array(96).fill('up').map((v, i) => i >= 90 ? 'unaware' : v),
+  });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `orb-investigating.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
+
   const desc = block([
     line(A.warnTag('STATUS'), A.boldYellow('UNAWARE'), A.dim('· investigating user reports')),
     line(A.dim('since'),  A.white(since)),
@@ -29,6 +53,7 @@ function buildOutagePublic({ since = 'a few minutes ago' } = {}) {
     .setAuthor({ name: `${BRAND.botName} · outage watch` })
     .setTitle('Investigating ' + BRAND.productName + ' status')
     .setDescription(desc)
+    .setImage(`attachment://${filename}`)
     .addFields(
       { name: '⚠️ Heads up', value:
         'We\'re looking into it. Hold off on bug reports until we post an update — ' +
@@ -37,7 +62,7 @@ function buildOutagePublic({ since = 'a few minutes ago' } = {}) {
     .setFooter({ text: `${BRAND.footerLine}` })
     .setTimestamp(new Date());
 
-  return { embeds: [embed], components: [], files: [] };
+  return { embeds: [embed], components: [], files: [img] };
 }
 
 // ── Staff review (in #staff) ────────────────────────────────────────────────
@@ -105,11 +130,13 @@ function buildOutageStaffReview({
 // ── Confirmed outage (auto-posted to #general after staff confirm) ──────────
 
 function buildOutageConfirmed({ since = 'a few minutes ago' } = {}) {
-  const buf = renderStatusOrbRibbon({
+  const hero = renderOrbHero({
     status: 'DOWN', uptime: 0,
     ribbon: Array(96).fill('up').map((v, i) => i >= 92 ? 'down' : v),
   });
-  const img = new AttachmentBuilder(buf, { name: 'orb-down.png' });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `orb-down.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
 
   const desc = block([
     line(A.failTag('STATUS'), A.boldRed('DOWN'), A.dim('· staff has confirmed an outage')),
@@ -122,7 +149,7 @@ function buildOutageConfirmed({ since = 'a few minutes ago' } = {}) {
     .setAuthor({ name: `${BRAND.botName} · outage watch` })
     .setTitle(BRAND.productName + ' is currently DOWN')
     .setDescription(desc)
-    .setImage('attachment://orb-down.png')
+    .setImage(`attachment://${filename}`)
     .setFooter({ text: BRAND.footerLine })
     .setTimestamp(new Date());
 
@@ -132,10 +159,12 @@ function buildOutageConfirmed({ since = 'a few minutes ago' } = {}) {
 // ── False-alarm "all clear" (#general) ──────────────────────────────────────
 
 function buildOutageCleared({ uptime = 99.97 } = {}) {
-  const buf = renderStatusOrbRibbon({
+  const hero = renderOrbHero({
     status: 'UP', uptime, ribbon: Array(96).fill('up'),
   });
-  const img = new AttachmentBuilder(buf, { name: 'orb-up.png' });
+  const ext = hero.animated ? 'gif' : 'png';
+  const filename = `orb-up.${ext}`;
+  const img = new AttachmentBuilder(hero.buffer, { name: filename });
 
   const desc = block([
     line(A.okTag('STATUS'), A.boldGreen('UP'), A.dim('· no outage detected')),
@@ -147,7 +176,7 @@ function buildOutageCleared({ uptime = 99.97 } = {}) {
     .setAuthor({ name: `${BRAND.botName} · outage watch` })
     .setTitle('All clear · ' + BRAND.productName + ' is operational')
     .setDescription(desc)
-    .setImage('attachment://orb-up.png')
+    .setImage(`attachment://${filename}`)
     .setFooter({ text: BRAND.footerLine })
     .setTimestamp(new Date());
 

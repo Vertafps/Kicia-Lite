@@ -517,7 +517,15 @@ function buildExecutorReply(executor, kb, { intent = "support" } = {}) {
       firstLink ? { label: `Open ${executor.name}`, url: firstLink.url } : null,
       { label: "Supported Executors", url: getDocsJumpUrl() }
     ].filter(Boolean),
-    color
+    color,
+    executor: {
+      name: executor.name,
+      type: executor.type || null,
+      status: executor.status || "supported",
+      compatibility: executor.compatibility || null,
+      notes: Array.isArray(executor.notes) ? executor.notes.slice(0, 2) : [],
+      link: firstLink ? firstLink.url : null
+    }
   };
 }
 
@@ -653,7 +661,8 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
           steps: inlineSteps,
           match: matchScore || 0.7,
           source: "kb.json",
-          url: getDocsJumpUrl()
+          url: getDocsJumpUrl(),
+          intro: typeof safeIssueMatch.reply === "string" ? safeIssueMatch.reply : null
         }
       },
       runtimeStatus

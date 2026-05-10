@@ -287,6 +287,13 @@ function buildLockStatusPanel({ channels, failures }) {
     already: lockedNow,
     untouched: vizChannels.length - lockedNow
   };
+  const stateLines = formatChannelStateLines(channels);
+  const summaryLine = [
+    `Lock targets: **${vizChannels.length}** · **${lockedNow}** currently locked, **${vizChannels.length - lockedNow}** open.`,
+    "",
+    "**Per-channel state:**",
+    stateLines
+  ].join("\n");
   const built = ui.buildLockdownEmbed({
     channels: vizChannels,
     intent: "status",
@@ -294,14 +301,12 @@ function buildLockStatusPanel({ channels, failures }) {
     reason: failures.length ? "status check · with issues" : "status check",
     actor: "system",
     stats,
-    summaryLine: `Lock targets: ${vizChannels.length} · ${lockedNow} currently locked`
+    summaryLine,
+    hint: lockedNow > 0 ? "run $unlock to release" : null
   });
-  const embed = built.embeds[0];
-  const stateLines = formatChannelStateLines(channels);
-  embed.setDescription(`${embed.data.description || ""}\n\n${stateLines}`.trim());
   return {
     __payload: {
-      embeds: [embed],
+      embeds: built.embeds,
       files: built.files
     }
   };
@@ -332,9 +337,11 @@ function buildLockResultPanel({ command, success, pastTenseLabel, resolved, resu
     already: result.skipped.length,
     untouched: 0
   };
+  const verb = command === "lock" ? "locked" : "unlocked";
   const channelMentions = buildTargetChannelMentions(resolved.channels);
-  const verb = command === "lock" ? "Locked" : "Unlocked";
-  const summaryLine = `${verb} ${result.changed.length}/${vizChannels.length} · ${result.skipped.length} already · by ${actor}`;
+  const summaryLine =
+    `Triggered by **${actor}** · **Changed:** ${result.changed.length} ${verb}, **${result.skipped.length}** already in state.\n` +
+    `**${command === "lock" ? "Locked" : "Unlocked"} channels:** ${channelMentions}`;
   const built = ui.buildLockdownEmbed({
     channels: vizChannels,
     intent,
@@ -344,14 +351,12 @@ function buildLockResultPanel({ command, success, pastTenseLabel, resolved, resu
       : (success ? "manual unlock" : "manual unlock · partial"),
     actor,
     stats,
-    summaryLine
+    summaryLine,
+    hint: command === "lock" ? "run $unlock to revert" : "run $lock to re-engage"
   });
-  const embed = built.embeds[0];
-  const statsLine = `**Changed:** ${result.changed.length} · **Skipped:** ${result.skipped.length} · **By:** ${actor}`;
-  embed.setDescription(`${embed.data.description || ""}\n\n**${verb} channels:** ${channelMentions}\n${statsLine}`.trim());
   return {
     __payload: {
-      embeds: [embed],
+      embeds: built.embeds,
       files: built.files
     }
   };

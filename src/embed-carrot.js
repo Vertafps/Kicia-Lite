@@ -43,8 +43,12 @@ const ANSI_TONE = {
   accent: ANSI.cyan,
   brand: ANSI.cyan,
   link: ANSI.cyan,
-  dim: ANSI.gray,
-  muted: ANSI.gray,
+  // "dim" and "muted" map to white (37) instead of gray (30): code 30
+  // renders #4f545c, near-invisible on the embed background. Hierarchy is
+  // preserved by *bold + colored* tokens popping against the lighter body.
+  // Use "gray" explicitly when you genuinely want the muted look.
+  dim: ANSI.white,
+  muted: ANSI.white,
   white: ANSI.white,
   pink: ANSI.pink,
   blue: ANSI.blue,

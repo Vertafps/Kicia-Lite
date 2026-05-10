@@ -1,8 +1,17 @@
 /**
  * KB embeds — strong match (editorial) and no-match (human-handoff).
  *
- *   buildKbMatchEmbed     — confident hit; show editorial card with article link.
+ *   buildKbMatchEmbed     — confident hit; show numbered steps + editorial card.
  *   buildKbNoMatchEmbed   — no/weak hit; lead with "let's get a human" routing.
+ *
+ * Layout (matches Carrot design):
+ *   - Title:   the article title or the no-match handoff line.
+ *   - Header strip:  small ANSI tag line at the top of the description showing
+ *                    `[OK] match · 0.97 · kb.json`. No more "$ kb lookup …"
+ *                    redundancy — the question is already on screen above.
+ *   - Steps:   numbered "**1. Title**\n   `code/inline samples`" list.
+ *   - Image:   editorial card (left stripe + title + step indicator + CTA).
+ *   - Footer:  brand line + source.
  */
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -21,28 +30,39 @@ function buildKbMatchEmbed({
   match = 0.92,
   source = 'kb.json',
   url, // optional canonical link
+  body, // optional intro paragraph that sits above the steps
 } = {}) {
 
   const total = Math.max(steps.length, 1);
-  const buf = renderKbEditorial({ title, tag, step, total, match });
+  const previewLine = pickPreviewLine(steps, body);
+  const buf = renderKbEditorial({ title, tag, step, total, match, preview: previewLine });
   const img = new AttachmentBuilder(buf, { name: 'kb-card.png' });
 
-  const head = block([
-    line(A.dim('$'), A.cyan('kb'), A.white('lookup'), A.dim(`"${truncate(question, 40)}"`)),
-    line(A.okTag(), A.boldGreen(`match · ${match.toFixed(2)}`), A.dim('· ' + source)),
+  const headerStrip = block([
+    line(A.okTag(), A.boldGreen(`match · ${match.toFixed(2)}`), A.dim('· source ' + source)),
   ]);
 
-  // Format steps as numbered list
+  // Numbered steps. If a step contains a `code` snippet we render it on a
+  // second indented line so the eye can pick it out. Otherwise the step text
+  // sits inline with the number.
   const stepsList = steps.length
-    ? steps.map((s, i) => `**${i + 1}.** ${s}`).join('\n')
+    ? steps.map((s, i) => formatStep(i + 1, s)).join('\n\n')
     : '_no steps provided_';
+
+  const introBlock = body && body.trim() ? body.trim() : null;
+
+  const description = [
+    headerStrip,
+    introBlock,
+    stepsList,
+  ].filter(Boolean).join('\n\n');
 
   const embed = new EmbedBuilder()
     .setColor(ACCENT.int)
     .setAuthor({ name: `${BRAND.botName} · KB` })
     .setTitle(title)
     .setURL(url || null)
-    .setDescription(head + '\n\n' + stepsList)
+    .setDescription(description)
     .setImage('attachment://kb-card.png')
     .setFooter({ text: `${BRAND.footerLine} · source ${source}` });
 
@@ -74,35 +94,32 @@ function buildKbNoMatchEmbed({
   const buf = renderConfidenceMeter({ score, label: 'no-match' });
   const img = new AttachmentBuilder(buf, { name: 'kb-meter.png' });
 
-  const head = block([
-    line(A.dim('$'), A.cyan('kb'), A.white('lookup'), A.dim(`"${truncate(question, 40)}"`)),
-    line(A.warnTag(), A.boldYellow(`no strong match · ${score}% confidence`)),
-    line(A.dim('//'), A.dim('escalating to human support')),
-  ]);
+  const intro =
+    "I couldn't find anything in the knowledge base that matches your message confidently.";
+  const nextStep = '**Best next step:** open a ticket — staff will pick it up there.';
 
   const route = [
-    '**1.** Join the KiciaHook support server and post in `#help`.',
-    '**2.** Or open a ticket — a moderator will pick it up directly.',
-    '**3.** Mention this question and we\'ll get you sorted.',
-  ].join('\n');
+    '**→ Step 1**\nOpen a ticket — a moderator will pick it up directly.',
+    '**→ Step 2**\nMention this question and include any error messages.',
+    '**→ Step 3**\nDrop a screenshot of the screen when it sits there.',
+  ].join('\n\n');
 
   const closestBlock = closestArticles.length
-    ? closestArticles.slice(0, 3).map((a) =>
-        `· *${a.title}* · ${(a.match * 100).toFixed(0)}%`
+    ? '**Closest KB guess**\n' +
+      closestArticles.slice(0, 3).map((a) =>
+        `· _${a.title}_ — ${(a.match * 100).toFixed(0)}% · below threshold`
       ).join('\n')
     : null;
+
+  const description = [intro, nextStep, route, closestBlock].filter(Boolean).join('\n\n');
 
   const embed = new EmbedBuilder()
     .setColor(STATUS.warn.int)
     .setAuthor({ name: `${BRAND.botName} · KB · no match` })
-    .setTitle('Let\'s get a human on it.')
-    .setDescription(head + '\n\n' + route)
+    .setTitle("Let's get a human on it.")
+    .setDescription(description)
     .setImage('attachment://kb-meter.png')
     .setFooter({ text: BRAND.footerLine });
-
-  if (closestBlock) {
-    embed.addFields({ name: 'Closest articles (low confidence)', value: closestBlock });
-  }
 
   const buttons = [];
   if (supportInviteUrl) buttons.push(
@@ -126,9 +143,49 @@ function buildKbNoMatchEmbed({
   return { embeds: [embed], components, files: [img] };
 }
 
-function truncate(s, n) {
-  s = String(s || '');
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Format a single step. If the step text contains an inline-code span (`...`),
+ * keep it; otherwise leave plain. We also pull a leading short "Title:" or
+ * **Bold:** prefix into the bold line and let the rest become the body.
+ */
+function formatStep(number, step) {
+  const text = String(step || '').trim();
+  if (!text) return `**${number}.** _(no detail)_`;
+
+  // Step shape: "Bold heading: rest of explanation"
+  const colonMatch = text.match(/^\*\*([^*]{2,80})\*\*\s*[:\-]\s*([\s\S]+)$/);
+  if (colonMatch) {
+    return `**${number}. ${colonMatch[1].trim()}**\n${colonMatch[2].trim()}`;
+  }
+
+  // Step shape: "**Heading**\nbody" or "Heading\nbody"
+  const splitNL = text.indexOf('\n');
+  if (splitNL > 0 && splitNL < 80) {
+    const heading = text.slice(0, splitNL).replace(/^\*\*|\*\*$/g, '').trim();
+    const rest = text.slice(splitNL + 1).trim();
+    if (heading && rest) return `**${number}. ${heading}**\n${rest}`;
+  }
+
+  return `**${number}.** ${text}`;
+}
+
+/**
+ * Pick a short preview line for the editorial card. Prefer the first concise
+ * step; fall back to the body intro if present.
+ */
+function pickPreviewLine(steps, body) {
+  for (const s of steps || []) {
+    const stripped = String(s || '').replace(/\*+/g, '').replace(/[\r\n]+/g, ' ').trim();
+    if (stripped && stripped.length <= 70) return stripped;
+    if (stripped) return stripped.slice(0, 67) + '…';
+  }
+  if (body) {
+    const stripped = String(body).replace(/\*+/g, '').replace(/[\r\n]+/g, ' ').trim();
+    if (stripped) return stripped.slice(0, 70);
+  }
+  return null;
 }
 
 module.exports = { buildKbMatchEmbed, buildKbNoMatchEmbed };

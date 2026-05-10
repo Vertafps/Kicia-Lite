@@ -2260,7 +2260,7 @@ function buildSellingLogPanel({
     : isTimeout ? "Scam/Trade Timeout" : "Scam/Trade Alert";
 
   const dialSignals = signals.slice(0, 5).map((s) => ({
-    name: String(s.reason || "signal").slice(0, 28),
+    name: String(s.reason || "signal"),
     weight: Math.max(0, Math.min(100, Number(s.confidence) || 0))
   }));
 
@@ -2273,35 +2273,35 @@ function buildSellingLogPanel({
     ? `Message removed · user timed out ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "sent" : "failed"}`
     : `Logged for review · delete ${deleteText}`;
 
+  const triggerLine = String(state.trigger || "watch window");
+  const evidenceList = buildSellingEvidenceList(message, recentMessages);
+
   const built = ui.buildScamEmbed({
     channel: channelLabel,
-    userTag,
+    userTag: displayName,
     userId: message.author?.id || "0",
     message: message.content || "",
     score: Math.max(0, Math.min(100, Math.round(state.confidence))),
     signals: dialSignals,
     action: actionLine,
-    caseId
+    caseId,
+    title: header,
+    summary: `User <@${message.author?.id}> in <#${message.channelId}> · ${actionLine}`,
+    trigger: triggerLine,
+    aiVerdict: aiLines ? extractFirstLine(aiLines) : null,
+    aiReason: aiLines && aiLines.includes("\n") ? aiLines.slice(aiLines.indexOf("\n") + 1).trim() : null,
+    evidence: evidenceList
   });
 
   const embed = built.embeds[0];
-  embed.setTitle(header);
-  const whyLines = signals.slice(0, 6).map((s) => `· ${Number(s.confidence) || 0}% — ${s.reason}`).join("\n");
-  const evidenceText = formatSellingEvidence(message, recentMessages);
-  embed.addFields(
-    { name: "Action", value: actionLine, inline: false },
-    { name: "Trigger", value: String(state.trigger || "watch window"), inline: false },
-    { name: "Why", value: whyLines || "no signals", inline: false }
-  );
+
+  // Test compatibility: keep an "AI Scam Verdict" field so existing assertions
+  // still find the keyword. Folded into one inline field rather than a stack
+  // of five — the description code block already carries the full payload.
   if (aiLines) {
-    embed.addFields({ name: "AI Scam Verdict", value: aiLines, inline: false });
+    const value = aiLines.length > 1024 ? aiLines.slice(0, 1011) + "…" : aiLines;
+    embed.addFields({ name: "AI Scam Verdict", value, inline: false });
   }
-  if (evidenceText) {
-    embed.addFields({ name: "Evidence", value: evidenceText, inline: false });
-  }
-  const existingFooter = embed.data.footer?.text || "";
-  const confidenceTag = `Confidence: ${state.confidence || 0}%`;
-  embed.setFooter({ text: existingFooter ? `${existingFooter} · ${confidenceTag}` : confidenceTag });
 
   const panel = {
     embed,
@@ -2312,6 +2312,21 @@ function buildSellingLogPanel({
 
   if (auditId) panel.components = buildScamReviewButtonRows(auditId);
   return panel;
+}
+
+function buildSellingEvidenceList(message, recentMessages = []) {
+  const entries = normalizeModerationActionContext(recentMessages, message)
+    .filter((entry) => cleanText(entry.content))
+    .slice(-SELL_CONTEXT_MAX_MESSAGES);
+  const list = entries.length <= 1
+    ? [trimExcerpt(message.content)]
+    : entries.map((entry) => trimExcerpt(entry.content, 150));
+  return list.filter(Boolean);
+}
+
+function extractFirstLine(text) {
+  const idx = String(text || "").indexOf("\n");
+  return idx === -1 ? String(text || "") : String(text).slice(0, idx).trim();
 }
 
 function formatAiVerdictLines(signals) {
@@ -2480,59 +2495,49 @@ function buildSuspiciousDmPayload({ message, signals, action, durationMs, count,
 function buildSuspiciousLogPanel({ message, signals, state, timeoutResult, dmSent, durationMs, deleteResult = null, auditId = null }) {
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const deleteText = formatDeleteSummary(deleteResult);
-  const actionLine = state.action === "timeout"
-    ? `Timed out ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText}`
+  const actionLineHuman = state.action === "timeout"
+    ? `Timed out ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "sent" : "failed"}`
     : state.action === "warn"
       ? `DM warning ${dmSent ? "sent" : "failed"} · delete ${deleteText}`
       : "Logged for review";
+  const actionLineLegacy = state.action === "timeout"
+    ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
+    : state.action === "warn"
+      ? `delete ${deleteText} · dm warning ${dmSent ? "✓" : "✗"}`
+      : "log only";
 
   const dialSignals = (signals || []).slice(0, 5).map((s) => ({
-    name: String(s.reason || "signal").slice(0, 28),
+    name: String(s.reason || "signal"),
     weight: Math.max(0, Math.min(100, Number(s.confidence) || 0))
   }));
 
   const channelLabel = message.channel?.name ? `#${message.channel.name}` : "#unknown";
-  const userTag = message.author?.tag || message.author?.username || displayName;
   const caseId = auditId
     ? `S-${String(auditId).slice(-4).toUpperCase()}`
     : `S-${String(Date.now()).slice(-4)}`;
-
-  const built = ui.buildScamEmbed({
-    channel: channelLabel,
-    userTag,
-    userId: message.author?.id || "0",
-    message: message.content || "",
-    score: Math.max(0, Math.min(100, Math.round(Number(state.confidence) || 0))),
-    signals: dialSignals,
-    action: actionLine,
-    caseId
-  });
-
   const header = state.action === "timeout"
     ? "Suspicious Message Timeout"
     : state.action === "warn"
       ? "Suspicious Message Warning"
       : "Suspicious Message Alert";
-  const actionTextLegacy = state.action === "timeout"
-    ? `timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteText} · dm ${dmSent ? "✓" : "✗"}`
-    : state.action === "warn"
-      ? `delete ${deleteText} · dm warning ${dmSent ? "✓" : "✗"}`
-      : "log only";
-  const embed = built.embeds[0];
-  embed.setTitle(header);
-  const whyLines = formatSignalReasons(signals);
-  embed.addFields(
-    { name: "Action", value: actionTextLegacy, inline: false },
-    { name: "Trigger", value: String(state.trigger || "watch window"), inline: false },
-    { name: "Why", value: whyLines || "no signals", inline: false },
-    { name: "Evidence", value: trimExcerpt(message.content), inline: false }
-  );
-  const existingFooter = embed.data.footer?.text || "";
-  const confidenceTag = `Confidence: ${state.confidence || 0}%`;
-  embed.setFooter({ text: existingFooter ? `${existingFooter} · ${confidenceTag}` : confidenceTag });
+
+  const built = ui.buildScamEmbed({
+    channel: channelLabel,
+    userTag: displayName,
+    userId: message.author?.id || "0",
+    message: message.content || "",
+    score: Math.max(0, Math.min(100, Math.round(Number(state.confidence) || 0))),
+    signals: dialSignals,
+    action: actionLineHuman,
+    caseId,
+    title: header,
+    summary: `User <@${message.author?.id}> in <#${message.channelId}> · ${actionLineHuman} · ${actionLineLegacy}`,
+    trigger: String(state.trigger || "watch window"),
+    evidence: [trimExcerpt(message.content)]
+  });
 
   const panel = {
-    embed,
+    embed: built.embeds[0],
     files: built.files,
     header,
     color: state.action === "timeout" ? DANGER : WARN

@@ -253,7 +253,93 @@ function getDerivedIssueTerms(entry, { reply = "" } = {}) {
       "reset keybind",
       "reset my keybind",
       "wrong binds",
-      "default config"
+      "default config",
+      "back to default",
+      "factory reset"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Anti Katata/i)) {
+    addTerms(phrases, [
+      "anti katana",
+      "anti katana broken",
+      "katana not working",
+      "katana broken",
+      "katana hits me",
+      "anti katata bypass"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Banned \/ Detected/i)) {
+    addTerms(phrases, [
+      "is this safe",
+      "kicia safe",
+      "anticheat issue",
+      "anti cheat issue",
+      "safe to use",
+      "is kicia banned"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Whitelist \/ Key Not Working/i)) {
+    addTerms(phrases, [
+      "key invalid",
+      "invalid key",
+      "key wrong",
+      "key not accepted",
+      "wrong key",
+      "key broke"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Script Expired \/ Key Expired/i)) {
+    addTerms(phrases, [
+      "key expired",
+      "expired key",
+      "script ended",
+      "script expired",
+      "renew key",
+      "renew my key"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Cannot Generate a New Key/i)) {
+    addTerms(phrases, [
+      "key limit",
+      "hit key limit",
+      "can not get key",
+      "cant generate key",
+      "cant make key"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Roblox Version Mismatch/i)) {
+    addTerms(phrases, [
+      "downgrade roblox",
+      "old roblox version",
+      "older roblox",
+      "previous roblox",
+      "roblox outdated",
+      "executor outdated"
+    ]);
+  }
+
+  if (titleIncludes(entry, /No HWID Found/i)) {
+    addTerms(phrases, [
+      "kicia not finding my hwid",
+      "kicia cannot find hwid",
+      "kicia cant find hwid",
+      "missing hwid"
+    ]);
+  }
+
+  if (titleIncludes(entry, /Workspace Folder/i)) {
+    addTerms(phrases, [
+      "workspace folder",
+      "where is workspace",
+      "workspace path",
+      "where do configs go",
+      "configs folder"
     ]);
   }
 

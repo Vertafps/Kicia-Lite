@@ -76,7 +76,8 @@ async function handleGuildPing(message) {
       step: 1,
       match: route.kb.match,
       source: route.kb.source,
-      url: route.kb.url
+      url: route.kb.url,
+      body: route.kb.intro
     });
     await safeReply(message, {
       embeds: built.embeds,
@@ -120,6 +121,31 @@ async function handleGuildPing(message) {
       author: brandAuthor("KB · EXECUTOR")
     });
     embed.setImage("attachment://executor-list.png");
+    await safeReply(message, {
+      embeds: [embed],
+      components: buildLinkButtonRows(route.buttons),
+      files: [img],
+      allowedMentions: { repliedUser: false }
+    });
+    markGuildReply(message.author.id);
+    return;
+  }
+
+  if (route.kind === "executor" && route.executor && route.executor.name) {
+    const { AttachmentBuilder } = require("discord.js");
+    const buf = ui.canvas.renderExecutorDetail(route.executor);
+    const img = new AttachmentBuilder(buf, { name: "executor-detail.png" });
+    const embed = buildPanel({
+      header: route.header,
+      body: route.body,
+      tip: route.tip,
+      tipStyle: route.tipStyle,
+      tipLevel: route.tipLevel,
+      extra: route.extra,
+      color: COLOR_BY_NAME[route.color] || INFO,
+      author: brandAuthor("KB · EXECUTOR")
+    });
+    embed.setImage("attachment://executor-detail.png");
     await safeReply(message, {
       embeds: [embed],
       components: buildLinkButtonRows(route.buttons),

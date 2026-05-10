@@ -37,6 +37,7 @@ const canvas = {
   renderLockdownGrid:     require('./canvas/lockdownGrid').renderLockdownGrid,
   renderKbEditorial:      require('./canvas/kbEditorial').renderKbEditorial,
   renderExecutorList:     require('./canvas/executorList').renderExecutorList,
+  renderExecutorDetail:   require('./canvas/executorDetail').renderExecutorDetail,
 };
 
 module.exports = {

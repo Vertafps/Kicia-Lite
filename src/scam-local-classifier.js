@@ -300,7 +300,43 @@ const SAFE_SAMPLES = [
   "kicia v3 came out yesterday",
   "is kicia released yet",
   "thanks for the untimeout",
-  "ty for unmuting me"
+  "ty for unmuting me",
+  // Figurative / gaming uses of trade/sell/buy that have FP'd in chat
+  "we were trading shots the whole match",
+  "trade kills with him in the lobby",
+  "yo we trading shots in rivals lol",
+  "buying time until v4 drops",
+  "the bot bought time for staff to react",
+  "selling out the show vibes",
+  "best selling kicia config no cap",
+  "swap loadouts dude",
+  "swap spots with me in the queue",
+  "lets exchange screenshots in a sec",
+  "exchange notes about the new patch",
+  "trade-in my old build for the new one",
+  "fair trade in chess",
+  // Casual slang where item words appear without deal intent
+  "ts is cheap af",
+  "idk why my premium is acting up",
+  "i really wanna play premium today",
+  "bro premium is so worth it just buy from official",
+  "i traded my freetime for grinding kicia lol",
+  // Negation patterns the previous regex missed
+  "wouldnt sell my account ever",
+  "nobody sells configs in this server",
+  "dont buy anything from random dms",
+  "im never trading with strangers",
+  // Support/feature questions that contain commerce-adjacent words
+  "is kicia premium worth it for me",
+  "kicia premium worth the money or what",
+  "what does premium add over free",
+  "should i pay for kicia or stick with free",
+  "is the free version of kicia good enough",
+  // Reseller meta questions (already covered but reinforce)
+  "where do i find a reseller",
+  "are resellers safe",
+  "official reseller link please",
+  "ill grab kicia from the official site"
 ];
 
 const KICIA_BRAND_RE = /\b(?:kicia|kiciahook|kcia|kicka|kh)\b/i;
@@ -331,7 +367,13 @@ const BARTER_RE = new RegExp(
   "i"
 );
 const NEGATED_DEAL_RE =
-  /\b(?:i\s+ain'?t|im\s+not|i\s+m\s+not|i\s+aint|cuz\s+i\s+ain'?t|cuz\s+i\s+aint|cuz\s+i'?m\s+not|never\s+gonna|not\s+gonna|wont\s+be|wouldn'?t\s+be|never\s+selling|never\s+buying|never\s+trading|stopped\s+(?:buying|selling|trading))\b.{0,30}\b(?:buying|selling|trading|giving|paying|getting|sending|swap|swapping)\b/i;
+  /\b(?:i\s+ain'?t|im\s+not|i\s+m\s+not|i\s+aint|cuz\s+i\s+ain'?t|cuz\s+i\s+aint|cuz\s+i'?m\s+not|never\s+gonna|not\s+gonna|wont\s+be|wouldn'?t\s+be|never\s+selling|never\s+buying|never\s+trading|stopped\s+(?:buying|selling|trading)|wouldnt\s+(?:sell|buy|trade)|don'?t\s+(?:sell|buy|trade)|nobody\s+(?:sells?|buys?|trades?))\b.{0,30}\b(?:buying|selling|trading|giving|paying|getting|sending|swap|swapping|deal|deals)\b/i;
+// Common figurative / non-commerce uses of trade/sell/buy verbs that would
+// otherwise look like a deal: "trade kills", "selling out the show",
+// "buy time", "best-selling book". We use this as a soft guard: matching
+// here is not by itself a verdict, but it lets ambiguous cases lean safe.
+const FIGURATIVE_TRADE_RE =
+  /\b(?:trade(?:s|d|ing)?\s+(?:kill|kills|shots?|fire|hp|health|insults?|blows?|punches?|jokes?|spots?|seats?))\b|\b(?:selling\s+(?:out|points?|the\s+(?:dream|game|show)))\b|\b(?:best[-\s]?selling)\b|\b(?:fair\s+trade|trade\s+school|trade\s+show|trade[-\s]in|trading\s+card|trading\s+cards|trading\s+post|stock\s+trade|stock\s+trading|day\s+trade|day\s+trading)\b|\b(?:buy(?:ing)?\s+(?:time|in)|bought\s+in)\b|\b(?:swap(?:ping)?\s+(?:notes?|stories|seats?|spots?|memes?|skins?|loadouts?|builds?))\b|\b(?:exchang(?:e|ing)\s+(?:notes?|messages?|words?|jokes?|memes?|stories|files?|info|screenshots?))\b/i;
 const SUPPORT_CONTEXT_GUARD_RE =
   /\b(?:supported|support|supports|works|working|work|compatible|compat|usable|usability|use|uses|using|run|runs|running|inject|injects|injecting|injection|load|loads|loading|crash(?:es|ed|ing)?|broken|down|fix|fixes|fixed|fixing|free|free\s+on|free\s+for|detection|detected|undetected|undetect|broken|update|updated|outdated|version|versions|build|installer|setup|installed|installing|launch|launching|launches|antivirus|defender|av\s+off|antivirus\s+off|disable|enable|enabling|disabling|whitelist|exclude|exclusion|allow|reset|reinstall|virus|trojan|rootkit|spyware|valorant|fortnite|minecraft|game|games|player|players)\b/i;
 const KICIA_TRADE_ASSET_RE = /\b(?:kicia|kiciahook|kcia|kicka|premium|prem|prm|license|licence|key|keys|ue)\b/i;
@@ -560,6 +602,25 @@ function extractPolicyIntent(context = {}, options = {}) {
       confidence: 92,
       score: 0.05,
       reason: "Negated deal phrasing — user explicitly disclaims buying/selling/trading."
+    });
+  }
+
+  // Figurative / gaming uses of trade/sell/buy verbs ("trade kills", "best
+  // selling", "trade-in") — only mark safe when there is no concurrent
+  // protected-item or payment-method evidence (which would suggest the
+  // figurative wording is being used to camouflage a real deal).
+  if (
+    FIGURATIVE_TRADE_RE.test(userText) &&
+    !KICIA_VALUE_EXCHANGE_RE.test(userText) &&
+    !PAYMENT_METHOD_RE.test(userText) &&
+    !PRIVATE_HANDOFF_RE.test(userText) &&
+    !/\b(?:wts|wtb|reseller|middleman|mm|cheap|cheaper|paid|paying|priced|for\s+sale|on\s+sale)\b/i.test(userText)
+  ) {
+    return localVerdict({
+      verdict: false,
+      confidence: 93,
+      score: 0.05,
+      reason: "Figurative / non-commercial use of trade/sell/buy verbs."
     });
   }
 

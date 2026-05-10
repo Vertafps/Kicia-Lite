@@ -1,24 +1,32 @@
 /**
  * Lockdown embed — fired when a moderator runs $lock / $unlock / $lock status.
  *
+ * Layout (matches Carrot design):
+ *   - Title:        e.g. "Channels locked — manual"
+ *   - Subtitle:     plain summary line
+ *                   "Triggered by @kernel · 3 channels updated, 1 already, 4 untouched"
+ *   - Stat row:     CHANGED | ALREADY | UNTOUCHED  (inline 3-up)
+ *   - Image:        lockdown grid showing every configured channel
+ *   - Footer:       "{brand} · run $unlock to revert"
+ *
  * @typedef {Object} LockdownData
  * @property {Array<{name:string,status:'locked'|'unlocked'|'untouched'}>} channels
  * @property {string} reason
- * @property {string} actor                moderator handle who triggered it
- * @property {'lock'|'unlock'|'status'} [intent]   action context (default 'lock')
- * @property {string} [title]              override embed title
+ * @property {string} actor
+ * @property {'lock'|'unlock'|'status'} [intent]
+ * @property {string} [title]
  * @property {{changed:number, already:number, untouched:number}} [stats]
- * @property {string} [summaryLine]        e.g. "Triggered by @kernel · 3 channels updated, 1 already, 4 untouched"
+ * @property {string} [summaryLine]
+ * @property {string} [hint]   optional extra hint (e.g. "run $unlock to revert")
  */
 
 const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
-const { STATUS, BRAND } = require('../colors');
-const { ansi: A, line, block } = require('../ansi');
+const { ACCENT, STATUS, BRAND } = require('../colors');
 const { renderLockdownGrid } = require('../canvas/lockdownGrid');
 
 function buildLockdownEmbed({
   channels = [], reason = 'precautionary', actor = 'mod',
-  intent = 'lock', title, stats, summaryLine,
+  intent = 'lock', title, stats, summaryLine, hint,
 } = {}) {
   const buf = renderLockdownGrid({ channels });
   const img = new AttachmentBuilder(buf, { name: 'lockdown-grid.png' });
@@ -27,55 +35,56 @@ function buildLockdownEmbed({
   const unlockedCount = channels.filter((c) => c.status === 'unlocked').length;
   const untouchedCount = channels.filter((c) => c.status === 'untouched').length;
 
-  const verbLine = intent === 'unlock'
-    ? line(A.okTag(),   A.boldGreen(`${unlockedCount}/${channels.length} channels unlocked`))
-    : intent === 'status'
-      ? line(A.warnTag(),A.boldYellow(`${lockedCount}/${channels.length} channels locked`))
-      : line(A.failTag(),A.boldRed(`${lockedCount}/${channels.length} channels locked`));
+  const resolvedStats = stats || {
+    changed: intent === 'unlock' ? unlockedCount : lockedCount,
+    already: 0,
+    untouched: untouchedCount,
+  };
 
-  const verbCmd = intent === 'unlock' ? 'unlock' : intent === 'status' ? 'status' : 'apply';
+  const accentColor =
+    intent === 'unlock' ? STATUS.up.int :
+    intent === 'status' ? STATUS.warn.int :
+    intent === 'lock' && resolvedStats.changed === 0 ? STATUS.warn.int :
+                          STATUS.down.int;
 
-  const lines = [
-    line(A.dim('$'), A.cyan('lockdown'), A.white(verbCmd), A.dim('--reason=' + reason)),
-    verbLine,
-    line(A.dim('actor'), A.white(actor)),
-  ];
-  if (summaryLine) lines.push(line(A.dim('//'), A.dim(summaryLine)));
-
-  const desc = block(lines);
-
-  const accentColor = intent === 'unlock'
-    ? STATUS.up.int
-    : intent === 'status'
-      ? STATUS.warn.int
-      : STATUS.down.int;
   const resolvedTitle = title
     || (intent === 'unlock' ? 'Channels Unlocked'
       : intent === 'status' ? 'Channel Lock Status'
       : 'Channels Locked');
 
-  const fields = stats
-    ? [
-        { name: 'Changed',   value: '`' + stats.changed + '`',   inline: true },
-        { name: 'Already',   value: '`' + stats.already + '`',   inline: true },
-        { name: 'Untouched', value: '`' + stats.untouched + '`', inline: true },
-      ]
-    : [
-        { name: 'Reason', value: reason,             inline: true },
-        { name: 'Actor',  value: '`' + actor + '`',  inline: true },
-        { name: intent === 'unlock' ? 'Unlocked' : 'Locked',
-          value: '`' + (intent === 'unlock' ? unlockedCount : lockedCount) + '/' + channels.length + '`',
-          inline: true },
-      ];
+  const verb =
+    intent === 'unlock' ? 'unlocked' :
+    intent === 'status' ? 'reviewed' :
+                          'updated';
+  const subtitle = summaryLine
+    || `Triggered by **${actor}** · ${resolvedStats.changed} channel${resolvedStats.changed === 1 ? '' : 's'} ${verb}, ${resolvedStats.already} already, ${resolvedStats.untouched} untouched.`;
+
+  const reasonLine = reason && reason !== 'precautionary'
+    ? `**Reason:** ${reason}`
+    : null;
+
+  const description = [subtitle, reasonLine].filter(Boolean).join('\n');
 
   const embed = new EmbedBuilder()
     .setColor(accentColor)
     .setAuthor({ name: `${BRAND.botName} · lockdown` })
     .setTitle(resolvedTitle)
-    .setDescription(desc)
+    .setDescription(description)
     .setImage('attachment://lockdown-grid.png')
-    .addFields(...fields)
-    .setFooter({ text: BRAND.footerLine })
+    .addFields(
+      { name: 'Changed',   value: '`' + resolvedStats.changed + '`',   inline: true },
+      { name: 'Already',   value: '`' + resolvedStats.already + '`',   inline: true },
+      { name: 'Untouched', value: '`' + resolvedStats.untouched + '`', inline: true },
+    )
+    .setFooter({
+      text: hint
+        ? `${BRAND.footerLine} · ${hint}`
+        : intent === 'lock'
+          ? `${BRAND.footerLine} · run $unlock to revert`
+          : intent === 'unlock'
+            ? `${BRAND.footerLine} · run $lock to re-engage`
+            : BRAND.footerLine,
+    })
     .setTimestamp(new Date());
 
   return { embeds: [embed], components: [], files: [img] };

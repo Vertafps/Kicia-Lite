@@ -19,7 +19,7 @@
  * @returns {Buffer} PNG buffer
  */
 function renderExecutorDetail({
-  name = 'Unknown', type = 'paid', status = 'supported',
+  name = 'Unknown', type, status = 'supported',
   compatibility, notes = [], link,
 } = {}) {
   const { makeCanvas, toBuffer, gridBackground, roundRect, text,
@@ -29,8 +29,14 @@ function renderExecutorDetail({
   const { canvas, ctx } = makeCanvas(W, H);
   gridBackground(ctx, W, H);
 
-  const isFree = String(type || '').toLowerCase() === 'free';
-  const typeTone = isFree ? STATUS.up : ACCENT;
+  // type is intentionally optional — many KB entries (especially
+  // not_recommended / unsupported) ship without a free/paid tag, and we
+  // would rather show no label than guess wrong. When type is missing the
+  // card leans on the *status* pill (SUPPORTED / NOT RECOMMENDED / etc.)
+  // for its colour and meaning, and skips the FREE/PAID badge entirely.
+  const typeStr = String(type || '').toLowerCase();
+  const knownType = typeStr === 'free' || typeStr === 'paid';
+  const isFree = typeStr === 'free';
   const statusTone =
     status === 'temporarily_not_working' ? STATUS.warn :
     status === 'not_recommended'         ? STATUS.warn :
@@ -41,6 +47,9 @@ function renderExecutorDetail({
     status === 'not_recommended'         ? 'NOT RECOMMENDED' :
     status === 'unsupported'             ? 'UNSUPPORTED' :
                                             'SUPPORTED';
+  const typeTone = knownType
+    ? (isFree ? STATUS.up : ACCENT)
+    : statusTone;
 
   // ── Outer card ──────────────────────────────────────────────────────────
   ctx.fillStyle = SURFACE.panelBg;
@@ -79,33 +88,39 @@ function renderExecutorDetail({
     return str.slice(0, Math.max(1, lo - 1)) + '…';
   }
 
-  // type badge (top-left of inner card, beside the name)
-  const badgeText = (type || 'paid').toUpperCase();
+  // Optional type badge (FREE / PAID) — only when the KB knows. For
+  // entries without a type we skip the badge entirely and let the name
+  // start at the card edge so the layout doesn't leave a hole.
   const badgeFont = 'bold 9.5px ' + TYPE.mono;
-  ctx.save();
-  ctx.font = badgeFont;
-  const badgeW = ctx.measureText(badgeText).width + 14;
-  const badgeH = 18;
   const badgeX = 28, badgeY = 50;
-  ctx.fillStyle = typeTone.hex;
-  ctx.globalAlpha = 0.92;
-  roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4); ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.restore();
-  text(ctx, badgeText, badgeX + 7, badgeY + 13, {
-    font: badgeFont, color: '#0E0F12', letterSpacing: 1.4,
-  });
+  let nameX = badgeX;
+  if (knownType) {
+    const badgeText = typeStr.toUpperCase();
+    ctx.save();
+    ctx.font = badgeFont;
+    const badgeW = ctx.measureText(badgeText).width + 14;
+    const badgeH = 18;
+    ctx.fillStyle = typeTone.hex;
+    ctx.globalAlpha = 0.92;
+    roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    text(ctx, badgeText, badgeX + 7, badgeY + 13, {
+      font: badgeFont, color: '#0E0F12', letterSpacing: 1.4,
+    });
+    nameX = badgeX + badgeW + 14;
+  }
 
   // executor name
   const nameFont = 'bold 26px ' + TYPE.sans;
-  const nameStr = fitText(name, W - badgeX - badgeW - 24 - 24, nameFont);
-  text(ctx, nameStr, badgeX + badgeW + 14, nameY, {
+  const nameStr = fitText(name, W - nameX - 24, nameFont);
+  text(ctx, nameStr, nameX, nameY, {
     font: nameFont, color: SURFACE.text,
   });
 
   // ── Compatibility line ─────────────────────────────────────────────────
   const compatStr = compatibility || (status === 'supported' ? 'fully compatible' : 'see notes');
-  text(ctx, compatStr, badgeX + badgeW + 14, nameY + 22, {
+  text(ctx, compatStr, nameX, nameY + 22, {
     font: '500 11px ' + TYPE.mono, color: statusTone.hex, letterSpacing: 0.8,
   });
 
@@ -131,7 +146,10 @@ function renderExecutorDetail({
   text(ctx, footL, 28, H - 14, {
     font: 'bold 10px ' + TYPE.mono, color: typeTone.hex, letterSpacing: 0.5,
   });
-  text(ctx, isFree ? 'FREE EXECUTOR' : 'PAID EXECUTOR', W - 28, H - 14, {
+  const footRight = knownType
+    ? (isFree ? 'FREE EXECUTOR' : 'PAID EXECUTOR')
+    : `STATUS · ${statusLabel}`;
+  text(ctx, footRight, W - 28, H - 14, {
     font: 'bold 10px ' + TYPE.mono, color: SURFACE.textMuted, align: 'right', letterSpacing: 1.2,
   });
 

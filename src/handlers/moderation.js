@@ -45,7 +45,7 @@ const {
 const viz = require("../embed-viz");
 const ui = require("../ui");
 const { fetchKb } = require("../kb");
-const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, extractUrlsFromText } = require("../link-policy");
+const { detectBlockedLinkSignal, detectBlockedLinkSignalAsync, detectFishFishOnlyLinkSignal, extractUrlsFromText } = require("../link-policy");
 const { sendIgnoreLogPanel, sendLogPanel } = require("../log-channel");
 const { canUseEmojiCommands, hasModerationBypassMessage } = require("../permissions");
 const { detectProhibitedCommerce, similarity } = require("../prohibited-commerce");
@@ -53,6 +53,7 @@ const {
   cleanupExpiredModerationActions,
   deleteModerationAction,
   getModerationAction,
+  getPolicyEnforcementEnabled,
   getScamDetectionEnabled,
   isModerationWhitelistedUser,
   listTrustedLinks,
@@ -3122,17 +3123,30 @@ async function maybeHandleModerationWatch(message, {
       resolvedKb = await fetchKbFn().catch(() => null);
     }
 
-    if (hasLink && resolvedKb) {
-      const trustedLinks = await listTrustedLinks().catch((err) => {
-        recordRuntimeEvent("warn", "trusted-link-list", err?.message || err);
-        return [];
-      });
-      const blockedLinkSignal = await detectBlockedLinkSignalAsync(message.content, {
-        kb: resolvedKb,
-        trustedLinks,
-        posterContext: getPosterLinkContext(message, now),
-        checkThreatIntel
-      });
+    // Owner-toggleable: when policy enforcement is disabled, drop the broad
+    // link checker (KB blocklist, threat intel, heuristics) and only consult
+    // the FishFish global phishing/malware feed. Toggle with `$policy`.
+    const policyEnforcementEnabled = await getPolicyEnforcementEnabled().catch(() => true);
+
+    if (hasLink) {
+      let blockedLinkSignal = null;
+      if (policyEnforcementEnabled && resolvedKb) {
+        const trustedLinks = await listTrustedLinks().catch((err) => {
+          recordRuntimeEvent("warn", "trusted-link-list", err?.message || err);
+          return [];
+        });
+        blockedLinkSignal = await detectBlockedLinkSignalAsync(message.content, {
+          kb: resolvedKb,
+          trustedLinks,
+          posterContext: getPosterLinkContext(message, now),
+          checkThreatIntel
+        });
+      } else {
+        blockedLinkSignal = await detectFishFishOnlyLinkSignal(message.content).catch((err) => {
+          recordRuntimeEvent("warn", "fishfish-only-check", err?.message || err);
+          return null;
+        });
+      }
       if (blockedLinkSignal) {
         const linkHandled = await handleBlockedLinkMessage(message, blockedLinkSignal, {
           sendLog,
@@ -3150,14 +3164,16 @@ async function maybeHandleModerationWatch(message, {
       kb: resolvedKb,
       runtimeStatus: runtimeStatus || getRuntimeStatus()
     });
-    // Owner-toggleable: when scam/trade detection is disabled, drop pattern-based
-    // selling signals entirely. We KEEP `selling/prohibited_sale` (drugs/weapons)
-    // because that's a separate policy layer, not the false-positive-prone scam
-    // pattern detection. Toggle with `$scam disable` / `$scam enable`.
+    // Two owner toggles gate selling-type signals:
+    //   $scam   → broad scam/trade pattern detection (false-positive-prone)
+    //   $policy → prohibited_sale (drugs/weapons commerce policy)
+    // `policyEnforcementEnabled` was already read above for the link branch.
     const scamDetectionEnabled = await getScamDetectionEnabled().catch(() => true);
-    const signals = scamDetectionEnabled
-      ? allSignals
-      : allSignals.filter((s) => !(s.type === "selling" && s.subtype !== "prohibited_sale"));
+    const signals = allSignals.filter((s) => {
+      if (s.type !== "selling") return true;
+      if (s.subtype === "prohibited_sale") return policyEnforcementEnabled;
+      return scamDetectionEnabled;
+    });
     const suspiciousSignals = signals.filter((signal) => signal.type === "suspicious");
     const contentSignals = signals.filter((signal) => signal.type !== "suspicious");
     const shadowForms = buildNormalizedTextForms(message.content);

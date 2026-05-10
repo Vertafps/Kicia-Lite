@@ -695,18 +695,34 @@ async function setEmojiTimeoutMs(durationMs) {
 }
 
 const SCAM_DETECTION_ENABLED_KEY = "scam_detection_enabled";
+const POLICY_ENFORCEMENT_ENABLED_KEY = "policy_enforcement_enabled";
+
+function readBooleanAppConfig(db, key, defaultValue) {
+  const stored = getAppConfigValue(db, key);
+  if (stored == null || stored === "") return defaultValue;
+  const value = String(stored).toLowerCase();
+  return value === "1" || value === "true" || value === "on" || value === "yes";
+}
 
 async function getScamDetectionEnabled() {
   const db = await getDatabase();
-  const stored = getAppConfigValue(db, SCAM_DETECTION_ENABLED_KEY);
-  if (stored == null || stored === "") return true; // default ON
-  const value = String(stored).toLowerCase();
-  return value === "1" || value === "true" || value === "on" || value === "yes";
+  return readBooleanAppConfig(db, SCAM_DETECTION_ENABLED_KEY, true);
 }
 
 async function setScamDetectionEnabled(enabled) {
   const db = await getDatabase();
   setAppConfigValue(db, SCAM_DETECTION_ENABLED_KEY, enabled ? "1" : "0", { immediate: true });
+  return Boolean(enabled);
+}
+
+async function getPolicyEnforcementEnabled() {
+  const db = await getDatabase();
+  return readBooleanAppConfig(db, POLICY_ENFORCEMENT_ENABLED_KEY, true);
+}
+
+async function setPolicyEnforcementEnabled(enabled) {
+  const db = await getDatabase();
+  setAppConfigValue(db, POLICY_ENFORCEMENT_ENABLED_KEY, enabled ? "1" : "0", { immediate: true });
   return Boolean(enabled);
 }
 
@@ -1892,6 +1908,8 @@ module.exports = {
   resetBotPresenceState,
   getScamDetectionEnabled,
   setScamDetectionEnabled,
+  getPolicyEnforcementEnabled,
+  setPolicyEnforcementEnabled,
   hydrateChannelSettings,
   listChannelSettings,
   setChannelSetting,

@@ -19,7 +19,12 @@ const viz = require("../embed-viz");
 const { buildJarvisProgressBody, buildJarvisProgressTokens, runJarvisDiagnostics } = require("../diagnostics");
 const { forceRefreshKb } = require("../kb");
 const { canUseOwnerCommands } = require("../permissions");
-const { getScamDetectionEnabled, setScamDetectionEnabled } = require("../restricted-emoji-db");
+const {
+  getScamDetectionEnabled,
+  setScamDetectionEnabled,
+  getPolicyEnforcementEnabled,
+  setPolicyEnforcementEnabled
+} = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { buildStatusReplyBody } = require("../router");
 const { detectLongStatusPrompt, detectShortStatusPrompt } = require("../status-prompts");
@@ -69,6 +74,18 @@ function isScamCommandMessage(content) {
   return parseScamCommand(content) !== null;
 }
 
+function parsePolicyCommand(content) {
+  const normalized = String(content || "").trim().toLowerCase();
+  if (normalized === "$policy" || normalized === "$policy status") return "status";
+  if (normalized === "$policy enable" || normalized === "$policy on") return "enable";
+  if (normalized === "$policy disable" || normalized === "$policy off") return "disable";
+  return null;
+}
+
+function isPolicyCommandMessage(content) {
+  return parsePolicyCommand(content) !== null;
+}
+
 function isOwnerCommandMessage(content) {
   return (
     parseStatusCommand(content) !== null ||
@@ -76,7 +93,8 @@ function isOwnerCommandMessage(content) {
     isFetchCommandMessage(content) ||
     isJarvisCommandMessage(content) ||
     isTestProMaxCommandMessage(content) ||
-    isScamCommandMessage(content)
+    isScamCommandMessage(content) ||
+    isPolicyCommandMessage(content)
   );
 }
 
@@ -136,6 +154,49 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
     markGuildReply(message.author.id);
   }
 
+  return true;
+}
+
+async function handlePolicyCommand(message, action) {
+  if (action === "status") {
+    const enabled = await getPolicyEnforcementEnabled().catch(() => true);
+    const body = enabled
+      ? "policy enforcement is **ENABLED** — prohibited commerce (drugs/weapons) detection AND the broad link policy (KB blocklist + threat intel + heuristics) are active.\n\nuse `$policy disable` to drop everything except the FishFish-based scam-link blocking."
+      : "policy enforcement is **DISABLED** — only the FishFish global phishing/malware blocklist is active. Prohibited commerce detection and broad link policy are OFF.\n\nuse `$policy enable` to turn the full layer back on.";
+    await safeReply(message, {
+      embeds: [buildPanel({ body, color: enabled ? SUCCESS : WARN })],
+      allowedMentions: { repliedUser: false }
+    });
+    return true;
+  }
+
+  const targetState = action === "enable";
+  let actualState;
+  try {
+    actualState = await setPolicyEnforcementEnabled(targetState);
+  } catch (err) {
+    recordRuntimeEvent("error", "policy-toggle", err?.message || err);
+    await safeReply(message, {
+      embeds: [buildPanel({ body: "couldn't persist that toggle — db write failed.", color: DANGER })],
+      allowedMentions: { repliedUser: false }
+    });
+    return true;
+  }
+
+  recordRuntimeEvent(
+    "info",
+    "policy-toggle",
+    `set to ${actualState ? "enabled" : "disabled"} by ${message.author?.id || "unknown"}`
+  );
+
+  const body = actualState
+    ? "policy enforcement **enabled**. prohibited commerce + broad link policy + threat intel back on.\n\nuse `$policy disable` to fall back to FishFish-only link blocking."
+    : "policy enforcement **disabled**. dropped:\n• prohibited commerce (drug/weapon detection)\n• KB-driven link blocklist\n• Google Safe Browsing / Web Risk / VirusTotal / PhishTank lookups\n• shortener expansion + URL heuristics\n\n_kept active:_ FishFish global scam/phishing/malware blocklist (`$status` Scam Pulse).\n\nuse `$policy enable` to turn the full layer back on.";
+
+  await safeReply(message, {
+    embeds: [buildPanel({ body, color: actualState ? SUCCESS : INFO })],
+    allowedMentions: { repliedUser: false }
+  });
   return true;
 }
 
@@ -265,6 +326,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   const jarvisCommand = isJarvisCommandMessage(message.content);
   const testProMaxCommand = isTestProMaxCommandMessage(message.content);
   const scamCommand = parseScamCommand(message.content);
+  const policyCommand = parsePolicyCommand(message.content);
 
   const publicStatusQuery = statusCommand && isPublicStatusQueryMessage(message.content);
 
@@ -276,12 +338,16 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     return maybeReplyWithPublicStatus(message, { useCooldown: false });
   }
 
-  if (nextStatus || fetchCommand || jarvisCommand || testProMaxCommand || statusCommand || scamCommand) {
+  if (nextStatus || fetchCommand || jarvisCommand || testProMaxCommand || statusCommand || scamCommand || policyCommand) {
     if (!canUseOwnerCommands(message)) return true;
   }
 
   if (scamCommand) {
     return handleScamCommand(message, scamCommand);
+  }
+
+  if (policyCommand) {
+    return handlePolicyCommand(message, policyCommand);
   }
 
   if (jarvisCommand || testProMaxCommand) {
@@ -337,7 +403,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     await safeReply(message, {
       embeds: [
         buildPanel({
-          body: "usage: `$status`, `$status up`, `$status down`, `$status unaware`, `$fetch`, `$jarvis`, `$testpromax`, or `$scam [enable|disable|status]`",
+          body: "usage: `$status`, `$status up`, `$status down`, `$status unaware`, `$fetch`, `$jarvis`, `$testpromax`, `$scam [enable|disable|status]`, or `$policy [enable|disable|status]`",
           color: INFO
         })
       ],
@@ -354,9 +420,11 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
 module.exports = {
   parseStatusCommand,
   parseScamCommand,
+  parsePolicyCommand,
   isFetchCommandMessage,
   isJarvisCommandMessage,
   isScamCommandMessage,
+  isPolicyCommandMessage,
   isTestProMaxCommandMessage,
   isStatusCommandMessage,
   isPublicStatusQueryMessage,

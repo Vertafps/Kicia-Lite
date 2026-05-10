@@ -1348,6 +1348,51 @@ async function assessUrlRiskWithExpansion(url, rules, text, options = {}) {
   return buildThreatIntelRisk(url, await threatIntelChecker(url));
 }
 
+/**
+ * FishFish-only link signal — used when the broader link policy is toggled off
+ * but the owner still wants the global phishing/malware blocklist active.
+ *
+ * Skips:
+ *   - KB allow/block list rules
+ *   - heuristic URL risk assessment
+ *   - shortener expansion
+ *   - Google Safe Browsing / Web Risk / VirusTotal / PhishTank
+ *
+ * Keeps:
+ *   - the locally-cached FishFish scam pulse feed (fast lookup)
+ *   - on-demand FishFish API check for unmatched URLs
+ */
+async function detectFishFishOnlyLinkSignal(text) {
+  const urls = extractUrlsFromText(text);
+  if (!urls.length) return null;
+
+  const blockedLinks = [];
+  for (const url of urls.slice(0, 5)) {
+    const verdict = getLocalScamPulseVerdict(url) || await checkFishFish(url);
+    if (!verdict) continue;
+    const risk = buildThreatIntelRisk(url, verdict);
+    if (risk) blockedLinks.push(risk);
+  }
+  if (!blockedLinks.length) return null;
+
+  const action = pickStrongestAction(blockedLinks);
+  const confidence = blockedLinks.reduce((max, url) => Math.max(max, url.confidence || 0), 0);
+  const timeoutMs = blockedLinks.reduce((max, url) => Math.max(max, Number(url.timeoutMs || 0)), 0);
+  const reasons = [...new Set(blockedLinks.flatMap((url) => url.reasons || []))];
+
+  return {
+    type: "blocked_link",
+    action,
+    threatLevel: getThreatLevelForAction(action),
+    confidence,
+    timeoutMs: timeoutMs || null,
+    reason: reasons[0] || "FishFish flagged a phishing link",
+    reasons,
+    blockedLinks,
+    blockedCount: blockedLinks.length
+  };
+}
+
 async function detectBlockedLinkSignalAsync(text, { kb, trustedLinks = [], posterContext = null, checkThreatIntel: threatIntelChecker = checkThreatIntel } = {}) {
   if (!kb) return null;
 
@@ -1392,5 +1437,6 @@ module.exports = {
   getScamPulseSnapshot,
   resetScamPulseFeedsForTests,
   detectBlockedLinkSignal,
-  detectBlockedLinkSignalAsync
+  detectBlockedLinkSignalAsync,
+  detectFishFishOnlyLinkSignal
 };

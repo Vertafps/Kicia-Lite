@@ -37,6 +37,7 @@ const {
 } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { loadOrBuildCache: loadScamEmbedCache } = require("./scam-embeddings-classifier");
+const { loadOrBuildKbCache } = require("./kb-embeddings");
 const { safeReply } = require("./utils/respond");
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
@@ -196,14 +197,19 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
   await applyReadyPresence(readyClient);
   try {
-    await fetchKb();
+    const kb = await fetchKb();
     console.log("KB cache primed");
+    loadOrBuildKbCache(kb).catch((err) => {
+      recordRuntimeEvent("warn", "kb-embed-cache", err?.message || err);
+    });
   } catch (err) {
     console.warn("Initial KB fetch failed:", err.message);
   }
 
   const timer = setInterval(() => {
-    fetchKb().catch((err) => console.warn("Scheduled KB refresh failed:", err.message));
+    fetchKb()
+      .then((kb) => loadOrBuildKbCache(kb).catch(() => null))
+      .catch((err) => console.warn("Scheduled KB refresh failed:", err.message));
   }, 10 * 60 * 1000);
   timer.unref?.();
 

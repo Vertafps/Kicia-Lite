@@ -14,13 +14,27 @@ const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
 const { ACCENT, STATUS, BRAND } = require('../colors');
 const { ansi: A, line, block } = require('../ansi');
 const { renderStatusOrbRibbon } = require('../canvas/statusOrb');
+const { renderStatusOrbRibbonAnimated } = require('../canvas/statusOrbAnimated');
+const { ANIMATED_HEROES } = require('../../config');
+const { recordRuntimeEvent } = require('../../runtime-health');
+
+function renderStatusHero(opts) {
+  if (ANIMATED_HEROES) {
+    try {
+      return renderStatusOrbRibbonAnimated(opts);
+    } catch (err) {
+      recordRuntimeEvent('warn', 'animated-hero-status', err?.message || err);
+    }
+  }
+  return renderStatusOrbRibbon(opts);
+}
 
 function buildStatusEmbed({
   status = 'UP', uptime = 100, latencyMs = 0,
   ribbon, lastDown = '—', incidents7d = '0',
 } = {}) {
 
-  const buf = renderStatusOrbRibbon({ status, uptime, ribbon });
+  const buf = renderStatusHero({ status, uptime, ribbon });
   const img = new AttachmentBuilder(buf, { name: 'status-orb.png' });
 
   const tone =

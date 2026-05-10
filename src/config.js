@@ -160,5 +160,12 @@ module.exports = {
   TRANSCRIPT_N: 3,
   RAID_WINDOW_MS: 45 * 1000,
   RAID_MIN_DISTINCT_USERS: 4,
-  RAID_ALERT_COOLDOWN_MS: 5 * 60 * 1000
+  RAID_ALERT_COOLDOWN_MS: 5 * 60 * 1000,
+  ANIMATED_HEROES: optionalBoolean("ANIMATED_HEROES", true),
+  EPHEMERAL_STAFF: optionalBoolean("EPHEMERAL_STAFF", true),
+  KB_EMBED_CACHE_PATH: optional("KB_EMBED_CACHE_PATH") || "data/kb-embeddings-cache.json",
+  KB_EMBED_LEXICAL_WEIGHT: Number(optional("KB_EMBED_LEXICAL_WEIGHT") || 0.65),
+  KB_EMBED_SEMANTIC_WEIGHT: Number(optional("KB_EMBED_SEMANTIC_WEIGHT") || 0.35),
+  KB_EMBED_TIEBREAK_RATIO: Number(optional("KB_EMBED_TIEBREAK_RATIO") || 0.85),
+  KB_EMBED_FLOOR: Number(optional("KB_EMBED_FLOOR") || 0.72)
 };

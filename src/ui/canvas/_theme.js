@@ -136,6 +136,63 @@ function sectionLabel(ctx, x, y, label, right) {
   }
 }
 
+// ── Polish helpers (gradients, bloom, hairlines) ─────────────────────────────
+
+/**
+ * Linear gradient fill across a region. `stops` is `[[offset, color], ...]`.
+ */
+function linearGradientFill(ctx, x0, y0, x1, y1, stops) {
+  const grad = ctx.createLinearGradient(x0, y0, x1, y1);
+  for (const [offset, color] of stops) grad.addColorStop(offset, color);
+  return grad;
+}
+
+/**
+ * Radial gradient fill. `stops` is `[[offset, color], ...]`.
+ */
+function radialGradientFill(ctx, x0, y0, r0, x1, y1, r1, stops) {
+  const grad = ctx.createRadialGradient(x0, y0, r0, x1, y1, r1);
+  for (const [offset, color] of stops) grad.addColorStop(offset, color);
+  return grad;
+}
+
+/**
+ * Soft glow at (x, y). Composites a radial gradient with `screen` blend mode
+ * so it lifts the underlying canvas instead of overwriting. `intensity` is
+ * 0..1 controlling the inner alpha.
+ */
+function bloom(ctx, x, y, radius, color, intensity = 0.6) {
+  const a = Math.max(0, Math.min(1, intensity));
+  const innerHex = Math.floor(a * 240).toString(16).padStart(2, '0');
+  const grad = radialGradientFill(ctx, x, y, 0, x, y, radius, [
+    [0,   color + innerHex],
+    [1,   color + '00'],
+  ]);
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Gradient-fading hairline — fades to transparent at both ends, classier than
+ * a flat 1 px line. Use for dividers between sections.
+ */
+function hairline(ctx, x1, y1, x2, y2, color = SURFACE.panelBorder) {
+  ctx.save();
+  const grad = linearGradientFill(ctx, x1, y1, x2, y2, [
+    [0,    color + '00'],
+    [0.2,  color + 'CC'],
+    [0.8,  color + 'CC'],
+    [1,    color + '00'],
+  ]);
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.restore();
+}
+
 // ── Embed image dimensions ───────────────────────────────────────────────────
 // Discord embeds clamp the inline image to ~488px wide. Drawing slightly
 // narrower (480) gives a 4px breathing margin against the embed border.
@@ -150,6 +207,10 @@ module.exports = {
   roundRect,
   text,
   sectionLabel,
+  bloom,
+  linearGradientFill,
+  radialGradientFill,
+  hairline,
   EMBED_WIDTH,
   // Re-export tokens for convenience
   SURFACE, STATUS, ACCENT, TYPE,

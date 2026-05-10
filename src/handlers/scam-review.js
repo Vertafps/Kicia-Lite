@@ -2,7 +2,10 @@ const { EmbedBuilder } = require("discord.js");
 const {
   SCAM_REVIEW_TRUE_PREFIX,
   SCAM_REVIEW_FALSE_PREFIX,
-  buildScamReviewButtonRows
+  SCAM_FEEDBACK_PREFIX,
+  SCAM_FEEDBACK_CATEGORIES,
+  buildScamReviewButtonRows,
+  buildScamFeedbackSelectRows
 } = require("../components");
 const { buildPanel, DANGER, INFO, SUCCESS, WARN, brandAuthor } = require("../embed");
 const { hasHigherStaffRole, hasAnyRole, isKernelUserId } = require("../permissions");
@@ -17,6 +20,14 @@ function isScamReviewInteraction(customId) {
   }
   if (id.startsWith(SCAM_REVIEW_FALSE_PREFIX)) {
     return { label: "false_positive", auditId: id.slice(SCAM_REVIEW_FALSE_PREFIX.length) };
+  }
+  return null;
+}
+
+function isScamFeedbackInteraction(customId) {
+  const id = String(customId || "");
+  if (id.startsWith(SCAM_FEEDBACK_PREFIX)) {
+    return { auditId: id.slice(SCAM_FEEDBACK_PREFIX.length) };
   }
   return null;
 }
@@ -37,12 +48,13 @@ function getActorLabel(interaction) {
   );
 }
 
-async function replyEphemeral(interaction, panel) {
+async function replyEphemeral(interaction, panel, { components } = {}) {
   const payload = {
     embeds: [buildPanel({ author: brandAuthor("SCAM AI · REVIEW"), ...panel })],
     flags: 1 << 6,
     allowedMentions: { parse: [] }
   };
+  if (Array.isArray(components) && components.length) payload.components = components;
   if (interaction.deferred || interaction.replied) {
     await interaction.followUp?.(payload).catch(() => null);
     return;
@@ -50,7 +62,67 @@ async function replyEphemeral(interaction, panel) {
   await interaction.reply?.(payload).catch(() => null);
 }
 
+async function maybeHandleScamFeedbackInteraction(interaction) {
+  const parsed = isScamFeedbackInteraction(interaction?.customId);
+  if (!parsed) return false;
+  if (!interaction?.isStringSelectMenu?.()) return true;
+
+  if (!interaction.inGuild?.()) {
+    await replyEphemeral(interaction, {
+      header: "Server Only",
+      body: "scam feedback only works inside the server",
+      color: WARN
+    });
+    return true;
+  }
+  if (!canReviewScamDecision(interaction.member, interaction.user?.id)) {
+    await replyEphemeral(interaction, {
+      header: "Staff Only",
+      body: "only staff and above can label scam decisions.",
+      color: WARN
+    });
+    return true;
+  }
+
+  const auditId = Number(parsed.auditId);
+  const category = String(interaction.values?.[0] || "").trim();
+  const valid = SCAM_FEEDBACK_CATEGORIES.find((opt) => opt.value === category);
+
+  if (!auditId || !valid) {
+    await replyEphemeral(interaction, {
+      header: "Feedback Not Saved",
+      body: "could not parse the feedback selection.",
+      color: WARN
+    });
+    return true;
+  }
+
+  // Persist as a runtime-health log line so the cache rebuild step can grep
+  // for it later. No DB schema change needed for this iteration.
+  recordRuntimeEvent(
+    "info",
+    "scam-review-feedback",
+    `auditId=${auditId} category=${category} reviewer=${interaction.user?.id || "unknown"}`
+  );
+
+  // Disable the select on the original ephemeral so it can't be re-submitted.
+  if (interaction.message?.edit) {
+    const disabledRows = buildScamFeedbackSelectRows(auditId, { disabled: true });
+    await interaction.message.edit({ components: disabledRows }).catch(() => null);
+  }
+
+  await replyEphemeral(interaction, {
+    header: "Thanks — Feedback Saved",
+    body: `recorded as **${valid.label}**. this helps the model learn what was wrong.`,
+    color: SUCCESS
+  });
+  return true;
+}
+
 async function maybeHandleScamReviewInteraction(interaction) {
+  const feedbackHandled = await maybeHandleScamFeedbackInteraction(interaction);
+  if (feedbackHandled) return true;
+
   const parsed = isScamReviewInteraction(interaction?.customId);
   if (!parsed) return false;
   if (!interaction?.isButton?.()) return true;
@@ -153,17 +225,27 @@ async function maybeHandleScamReviewInteraction(interaction) {
     ? `marked as **${labelDisplay}** (previously **${previousLabel.replace(/_/g, " ")}**).`
     : `marked as **${labelDisplay}**.`;
 
+  // For false-positive labels, follow up with a category select so staff can
+  // signal *why* it was wrong. The select submits to `scam_review_feedback:{auditId}`.
+  const followUpComponents = parsed.label === "false_positive"
+    ? buildScamFeedbackSelectRows(auditId)
+    : undefined;
+
   await replyEphemeral(interaction, {
     header: "Review Saved",
-    body: confirmBody,
+    body: parsed.label === "false_positive"
+      ? `${confirmBody}\n\nIf you have a sec, pick the category below — it helps tune the model.`
+      : confirmBody,
     color: SUCCESS
-  });
+  }, { components: followUpComponents });
 
   return true;
 }
 
 module.exports = {
   isScamReviewInteraction,
+  isScamFeedbackInteraction,
   canReviewScamDecision,
-  maybeHandleScamReviewInteraction
+  maybeHandleScamReviewInteraction,
+  maybeHandleScamFeedbackInteraction
 };

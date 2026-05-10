@@ -23,12 +23,26 @@
 const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
 const { ACCENT, STATUS, BRAND } = require('../colors');
 const { renderLockdownGrid } = require('../canvas/lockdownGrid');
+const { renderLockdownGridAnimated } = require('../canvas/lockdownGridAnimated');
+const { ANIMATED_HEROES } = require('../../config');
+const { recordRuntimeEvent } = require('../../runtime-health');
+
+function renderLockdownHero(opts) {
+  if (ANIMATED_HEROES) {
+    try {
+      return renderLockdownGridAnimated(opts);
+    } catch (err) {
+      recordRuntimeEvent('warn', 'animated-hero-lockdown', err?.message || err);
+    }
+  }
+  return renderLockdownGrid(opts);
+}
 
 function buildLockdownEmbed({
   channels = [], reason = 'precautionary', actor = 'mod',
   intent = 'lock', title, stats, summaryLine, hint,
 } = {}) {
-  const buf = renderLockdownGrid({ channels });
+  const buf = renderLockdownHero({ channels });
   const img = new AttachmentBuilder(buf, { name: 'lockdown-grid.png' });
 
   const lockedCount = channels.filter((c) => c.status === 'locked').length;

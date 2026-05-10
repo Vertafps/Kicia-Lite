@@ -1,6 +1,13 @@
 const { fetchWithTimeout } = require("./utils/fetch");
-const { KB_URL } = require("./config");
+const {
+  KB_URL,
+  KB_EMBED_LEXICAL_WEIGHT,
+  KB_EMBED_SEMANTIC_WEIGHT,
+  KB_EMBED_TIEBREAK_RATIO,
+  KB_EMBED_FLOOR
+} = require("./config");
 const { containsPhrase, fuzzyTokenMatch, isEditDistanceAtMost, normalizeText, tokenize, uniqueNormalized } = require("./text");
+const { findSemanticMatches, isReady: kbEmbedReady } = require("./kb-embeddings");
 
 let _cache = null;
 let _lastFetchOk = 0;
@@ -549,7 +556,22 @@ function chooseBestFuzzyAlias(text, kb) {
   return best ? best.executor : null;
 }
 
-function findExecutorMatch(candidate, kb, { fallbackText } = {}) {
+function lookupExecutorByName(kb, name) {
+  if (!name) return null;
+  const normalized = normalizeText(name);
+  if (normalized && kb.executorAliasIndex?.[normalized]) {
+    return kb.executorAliasIndex[normalized];
+  }
+  // Fall back to scanning executorsByStatus by raw name (handles cache key drift).
+  for (const status of Object.keys(kb.executorsByStatus || {})) {
+    for (const executor of kb.executorsByStatus[status] || []) {
+      if (executor.name === name) return executor;
+    }
+  }
+  return null;
+}
+
+function findExecutorMatch(candidate, kb, { fallbackText, semanticHints } = {}) {
   const normalizedCandidate = normalizeText(candidate);
   if (normalizedCandidate && kb.executorAliasIndex?.[normalizedCandidate]) {
     return kb.executorAliasIndex[normalizedCandidate];
@@ -562,11 +584,20 @@ function findExecutorMatch(candidate, kb, { fallbackText } = {}) {
   if (fuzzyCandidateMatch) return fuzzyCandidateMatch;
 
   if (fallbackText) {
-    return (
-      chooseLongestAlias(fallbackText, kb) ||
-      chooseBestFuzzyAlias(fallbackText, kb)
-    );
+    const fb = chooseLongestAlias(fallbackText, kb) || chooseBestFuzzyAlias(fallbackText, kb);
+    if (fb) return fb;
   }
+
+  // Last-resort semantic fallback. Only fires when nothing else matched and the
+  // semantic engine is confident enough — guards against wild leaps.
+  if (semanticHints && Array.isArray(semanticHints.executors)) {
+    for (const hint of semanticHints.executors) {
+      if (!hint || !hint.similarity || hint.similarity < KB_EMBED_FLOOR) break;
+      const executor = lookupExecutorByName(kb, hint.key);
+      if (executor) return executor;
+    }
+  }
+
   return null;
 }
 
@@ -776,7 +807,18 @@ function scoreEntryAgainstText(normalizedTranscript, transcriptTokens, entry) {
   };
 }
 
-function tryIssueMatch(transcript, kb) {
+function buildSemanticIssueMap(semanticHints) {
+  const map = new Map();
+  if (!semanticHints || !Array.isArray(semanticHints.issues)) return map;
+  for (const hint of semanticHints.issues) {
+    if (!hint || typeof hint.similarity !== "number") continue;
+    if (hint.similarity < 0) continue;
+    map.set(hint.key, hint.similarity);
+  }
+  return map;
+}
+
+function tryIssueMatch(transcript, kb, { semanticHints } = {}) {
   const normalizedTranscript = normalizeText(transcript);
   if (!normalizedTranscript) return null;
   const transcriptTokens = tokenize(transcript);
@@ -785,6 +827,7 @@ function tryIssueMatch(transcript, kb) {
     .map((line) => normalizeText(line))
     .filter(Boolean);
   const latestLine = transcriptLines[transcriptLines.length - 1] || null;
+  const semanticByTitle = buildSemanticIssueMap(semanticHints);
   const candidates = [];
 
   for (const entry of kb.issues || []) {
@@ -822,7 +865,12 @@ function tryIssueMatch(transcript, kb) {
       ? latestLineScore.score * (latestLineScore.strongScore >= 1 ? 1.8 : 0.7) +
         (latestLineScore.strongScore >= 1 ? 10 : 0)
       : 0;
-    const score = transcriptScore.score + lineFocusBonus + latestLineBonus;
+    const lexicalScore = transcriptScore.score + lineFocusBonus + latestLineBonus;
+    const semanticSim = semanticByTitle.get(entry.title) ?? 0;
+    // Hybrid score: lexical dominates, semantic adds modest boost. Normalize
+    // semantic to a similar scale (×30) so the additive blend is visible.
+    const score = lexicalScore * KB_EMBED_LEXICAL_WEIGHT
+      + semanticSim * 30 * KB_EMBED_SEMANTIC_WEIGHT;
 
     // Vague input penalty: if transcript is just one or two words and we don't
     // have a strong phrase match or a multi-word title match, require a higher score.
@@ -831,6 +879,8 @@ function tryIssueMatch(transcript, kb) {
     candidates.push({
       entry,
       score,
+      lexicalScore,
+      semanticSim,
       strongScore: transcriptScore.strongScore,
       exactStrongHits: transcriptScore.exactStrongHits,
       exactKeywordHits: transcriptScore.exactKeywordHits.size,
@@ -840,15 +890,38 @@ function tryIssueMatch(transcript, kb) {
   }
 
   candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
+  let best = candidates[0];
+
+  // Semantic-only rescue: if nothing qualified lexically but a strong semantic
+  // match exists, surface it. Only fires above the floor and only if no entry
+  // looked even half-plausible lexically.
+  if (!best && semanticByTitle.size && (kb.issues || []).length) {
+    const topSemTitle = [...semanticByTitle.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (topSemTitle && topSemTitle[1] >= KB_EMBED_FLOOR) {
+      const entry = (kb.issues || []).find((i) => i.title === topSemTitle[0]);
+      if (entry) return entry;
+    }
+  }
   if (!best) return null;
 
   const threshold = best.isVagueInput ? 10 : 6;
   if (!best.strongScore && best.score < threshold) return null;
 
   const runnerUp = candidates[1];
-  const margin = best.exactStrongHits || best.exactKeywordHits ? 0.25 : best.strongScore ? 1 : 3;
-  if (runnerUp && best.score - runnerUp.score < margin) {
+  const baseMargin = best.exactStrongHits || best.exactKeywordHits ? 0.25 : best.strongScore ? 1 : 3;
+  if (runnerUp && best.score - runnerUp.score < baseMargin) {
+    // Semantic tiebreaker: when scores are close lexically AND one entry has
+    // markedly higher semantic similarity, let semantic decide instead of
+    // returning null. This is the fix for "wrong executor with similar name"
+    // class of misses surfaced during planning.
+    const bestSem = best.semanticSim || 0;
+    const runnerSem = runnerUp.semanticSim || 0;
+    if (bestSem >= KB_EMBED_FLOOR && runnerSem * KB_EMBED_TIEBREAK_RATIO < bestSem) {
+      return best.entry;
+    }
+    if (runnerSem >= KB_EMBED_FLOOR && bestSem * KB_EMBED_TIEBREAK_RATIO < runnerSem) {
+      return runnerUp.entry;
+    }
     return null;
   }
 
@@ -885,6 +958,19 @@ function scoreIssueMatchConfidence(transcript, kb, entry) {
   return Math.max(0, Math.min(1, detail.score / 30));
 }
 
+async function getKbSemanticHints(text, { issueK = 5, executorK = 4 } = {}) {
+  if (!kbEmbedReady() || !text) return null;
+  try {
+    const [issues, executors] = await Promise.all([
+      findSemanticMatches(text, { kind: "issue", k: issueK }),
+      findSemanticMatches(text, { kind: "executor", k: executorK })
+    ]);
+    return { issues, executors };
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   fetchKb,
   forceRefreshKb,
@@ -892,5 +978,6 @@ module.exports = {
   findExecutorMatch,
   tryIssueMatch,
   searchKbIssues,
-  scoreIssueMatchConfidence
+  scoreIssueMatchConfidence,
+  getKbSemanticHints
 };

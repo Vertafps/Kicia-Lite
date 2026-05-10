@@ -577,7 +577,7 @@ function maybeAppendDownNote(route, runtimeStatus) {
   return route;
 }
 
-function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
+function classifyTranscript(transcript, kb, runtimeStatus = "UP", { semanticHints = null } = {}) {
   const normalized = normalizeText(transcript);
   if (!normalized) {
     return {
@@ -610,7 +610,8 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
 
   if (explicitIntent?.type === "executor") {
     const executor = findExecutorMatch(explicitIntent.candidate || explicitIntent.line, kb, {
-      fallbackText: explicitIntent.line
+      fallbackText: explicitIntent.line,
+      semanticHints
     });
     return maybeAppendDownNote(buildExecutorReply(executor, kb, explicitIntent), runtimeStatus);
   }
@@ -622,7 +623,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
         ? buildBanSearchText(explicitIntent.line)
         : String(transcript || "");
 
-  const issueMatch = tryIssueMatch(issueSearchText, kb);
+  const issueMatch = tryIssueMatch(issueSearchText, kb, { semanticHints });
 
   // IMPROVEMENT: if multi-line transcript didn't match, also try just the
   // latest line on its own — catches cases where older messages pollute the
@@ -631,7 +632,7 @@ function classifyTranscript(transcript, kb, runtimeStatus = "UP") {
   if (!safeIssueMatch && issueSearchText === normalized) {
     const lines = getTranscriptLines(transcript);
     if (lines.length > 1) {
-      const lastLineMatch = tryIssueMatch(lines[lines.length - 1], kb);
+      const lastLineMatch = tryIssueMatch(lines[lines.length - 1], kb, { semanticHints });
       if (lastLineMatch) safeIssueMatch = lastLineMatch;
     }
   }

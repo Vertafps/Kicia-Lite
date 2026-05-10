@@ -5,3 +5,5 @@ data/*.sqlite*
 data/viz-cache/
 data/preview-*.png
 data/test.png
+data/scam-embeddings-cache.json
+data/kb-embeddings-cache.json

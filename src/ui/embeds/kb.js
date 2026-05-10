@@ -19,7 +19,33 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 const { ACCENT, STATUS, BRAND } = require('../colors');
 const { ansi: A, line, block } = require('../ansi');
 const { renderKbEditorial } = require('../canvas/kbEditorial');
+const { renderKbEditorialAnimated } = require('../canvas/kbEditorialAnimated');
 const { renderConfidenceMeter } = require('../canvas/confidenceMeter');
+const { renderKbNoMatchAnimated } = require('../canvas/kbNoMatchAnimated');
+const { ANIMATED_HEROES } = require('../../config');
+const { recordRuntimeEvent } = require('../../runtime-health');
+
+function renderKbMatchHero(opts) {
+  if (ANIMATED_HEROES) {
+    try {
+      return renderKbEditorialAnimated(opts);
+    } catch (err) {
+      recordRuntimeEvent('warn', 'animated-hero-kb-match', err?.message || err);
+    }
+  }
+  return renderKbEditorial(opts);
+}
+
+function renderKbNoMatchHero(opts) {
+  if (ANIMATED_HEROES) {
+    try {
+      return renderKbNoMatchAnimated(opts);
+    } catch (err) {
+      recordRuntimeEvent('warn', 'animated-hero-kb-nomatch', err?.message || err);
+    }
+  }
+  return renderConfidenceMeter(opts);
+}
 
 // ── Strong match ────────────────────────────────────────────────────────────
 
@@ -35,7 +61,7 @@ function buildKbMatchEmbed({
 
   const total = Math.max(steps.length, 1);
   const previewLine = pickPreviewLine(steps, body);
-  const buf = renderKbEditorial({ title, tag, step, total, match, preview: previewLine });
+  const buf = renderKbMatchHero({ title, tag, step, total, match, preview: previewLine });
   const img = new AttachmentBuilder(buf, { name: 'kb-card.png' });
 
   const headerStrip = block([
@@ -91,7 +117,7 @@ function buildKbNoMatchEmbed({
   closestArticles = [],    // [{title, match}]
 } = {}) {
 
-  const buf = renderConfidenceMeter({ score, label: 'no-match' });
+  const buf = renderKbNoMatchHero({ score, label: 'no-match' });
   const img = new AttachmentBuilder(buf, { name: 'kb-meter.png' });
 
   const intro =

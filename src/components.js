@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
 
 const MODLOG_VIEW_PREFIX = "modlog:messages:";
 const MODLOG_REVERT_PREFIX = "modlog:revert:";
@@ -9,6 +9,15 @@ const OUTAGE_CONFIRM_PREFIX = "outage:confirm:";
 const OUTAGE_DISMISS_PREFIX = "outage:dismiss:";
 const SCAM_REVIEW_TRUE_PREFIX = "scam_review_true:";
 const SCAM_REVIEW_FALSE_PREFIX = "scam_review_false:";
+const SCAM_FEEDBACK_PREFIX = "scam_review_feedback:";
+
+const SCAM_FEEDBACK_CATEGORIES = [
+  { value: "casual_mention", label: "Casual mention",   description: "User mentioned something in passing, not selling." },
+  { value: "asking",         label: "Asking, not selling", description: "User was asking about a thing, not offering it." },
+  { value: "buying",         label: "Buying, not selling", description: "User was the buyer side, not the scammer." },
+  { value: "joke_or_quote",  label: "Joke or quote",    description: "Sarcasm, meme, or quoting someone else." },
+  { value: "other",          label: "Other",            description: "Something else — just flag it as a miss." }
+];
 
 function isValidHttpUrl(url) {
   try {
@@ -122,6 +131,62 @@ function buildNicknameModerationButtonRows(userId, { disabled = false } = {}) {
   ];
 }
 
+function buildScamFeedbackSelectRows(auditId, { disabled = false } = {}) {
+  const id = String(auditId || "").trim();
+  if (!id) return [];
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${SCAM_FEEDBACK_PREFIX}${id}`)
+    .setPlaceholder("Tell the bot why this was wrong (helps the model)")
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(Boolean(disabled));
+
+  for (const opt of SCAM_FEEDBACK_CATEGORIES) {
+    select.addOptions({
+      label: opt.label,
+      value: opt.value,
+      description: opt.description
+    });
+  }
+
+  return [new ActionRowBuilder().addComponents(select)];
+}
+
+/**
+ * Generic paginated button row — Prev / Page indicator / Next.
+ * Custom ID format: `${prefix}page:${pageNumber}` (zero-indexed).
+ * Caller wires the matching handler.
+ */
+function buildPaginationButtonRows(prefix, { currentPage = 0, totalPages = 1, disabled = false } = {}) {
+  const safePrefix = String(prefix || "").trim();
+  if (!safePrefix) return [];
+  const total = Math.max(1, totalPages);
+  const page = Math.max(0, Math.min(total - 1, currentPage));
+
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${safePrefix}page:${page - 1}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("◀️")
+        .setLabel("Prev")
+        .setDisabled(Boolean(disabled) || page <= 0),
+      new ButtonBuilder()
+        .setCustomId(`${safePrefix}page:indicator`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel(`${page + 1} / ${total}`)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`${safePrefix}page:${page + 1}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("▶️")
+        .setLabel("Next")
+        .setDisabled(Boolean(disabled) || page >= total - 1)
+    )
+  ];
+}
+
 module.exports = {
   MODLOG_REVERT_PREFIX,
   MODLOG_VIEW_PREFIX,
@@ -132,9 +197,13 @@ module.exports = {
   OUTAGE_DISMISS_PREFIX,
   SCAM_REVIEW_TRUE_PREFIX,
   SCAM_REVIEW_FALSE_PREFIX,
+  SCAM_FEEDBACK_PREFIX,
+  SCAM_FEEDBACK_CATEGORIES,
   buildNicknameModerationButtonRows,
   buildModerationLogButtonRows,
   buildOutageReviewButtonRows,
   buildScamReviewButtonRows,
+  buildScamFeedbackSelectRows,
+  buildPaginationButtonRows,
   buildLinkButtonRows
 };

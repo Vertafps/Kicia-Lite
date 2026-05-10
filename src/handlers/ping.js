@@ -3,7 +3,7 @@ const ui = require("../ui");
 const { buildLinkButtonRows } = require("../components");
 const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
 const { getTicketJumpUrl } = require("../channel-config");
-const { fetchKb } = require("../kb");
+const { fetchKb, getKbSemanticHints } = require("../kb");
 const { classifyTranscript } = require("../router");
 const { getRuntimeStatus } = require("../runtime-status");
 const { cleanText } = require("../text");
@@ -65,7 +65,8 @@ async function handleGuildPing(message) {
 
   const transcript = await buildTranscript(message);
   const kb = await fetchKb();
-  const route = classifyTranscript(transcript, kb, getRuntimeStatus());
+  const semanticHints = await getKbSemanticHints(transcript).catch(() => null);
+  const route = classifyTranscript(transcript, kb, getRuntimeStatus(), { semanticHints });
 
   if (route.kind === "docs" && route.kb) {
     const built = ui.buildKbMatchEmbed({

@@ -564,15 +564,26 @@ function getSellingConfidenceTimeoutMs(confidence) {
   return Number(getSellingConfidenceTimeoutTier(confidence)?.timeoutMs || 0);
 }
 
-function getConfirmedSignalConfidence(signal, verdictResult, fallback = 0) {
+const { applyProfileMultiplier } = require("../scam-profile-signals");
+
+function getConfirmedSignalConfidence(signal, verdictResult, fallback = 0, member = null) {
   const signalConfidence = Number(signal?.confidence || 0);
   const verdictConfidence = Number(verdictResult?.confidence || 0);
 
+  let base;
   if (Number.isFinite(verdictConfidence) && verdictConfidence > 0) {
-    return clampConfidence(Math.max(signalConfidence, verdictConfidence, fallback));
+    base = clampConfidence(Math.max(signalConfidence, verdictConfidence, fallback));
+  } else {
+    base = clampConfidence(Math.max(signalConfidence, fallback));
   }
 
-  return clampConfidence(Math.max(signalConfidence, fallback));
+  // Profile multiplier: amplify confidence for fresh accounts / recent joiners,
+  // capped so it can't fabricate a hit on its own. Mature accounts → 1.0×.
+  if (member) {
+    const { confidence } = applyProfileMultiplier(base, member);
+    return clampConfidence(confidence);
+  }
+  return base;
 }
 
 async function recordScamAudit(message, {
@@ -2755,7 +2766,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     const policyVerdict = buildClassifierVerdictResult(policyResult);
     const confirmedSignals = policyConfirmedSignals.map((signal) => ({
       ...signal,
-      confidence: getConfirmedSignalConfidence(signal, policyVerdict),
+      confidence: getConfirmedSignalConfidence(signal, policyVerdict, 0, message.member),
       reason: `policy-confirmed unsafe commerce: ${signal.reason}`,
       ai: policyVerdict
     }));
@@ -2812,7 +2823,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     const decomposedVerdict = buildClassifierVerdictResult(decomposedClassifier);
     const confirmedSignals = signals.map((signal) => ({
       ...signal,
-      confidence: getConfirmedSignalConfidence(signal, decomposedVerdict),
+      confidence: getConfirmedSignalConfidence(signal, decomposedVerdict, 0, message.member),
       reason: `decomposed-confirmed scam/trade intent: ${signal.reason}`,
       ai: decomposedVerdict
     }));
@@ -2836,7 +2847,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   if (localResult?.verdict === true && (localResult.confidence || 0) > SELLING_CONFIDENCE_TIMEOUT_THRESHOLD) {
     const confirmedSignals = signals.map((signal) => ({
       ...signal,
-      confidence: getConfirmedSignalConfidence(signal, localVerdict),
+      confidence: getConfirmedSignalConfidence(signal, localVerdict, 0, message.member),
       reason: `classifier-confirmed scam/trade intent: ${signal.reason}`,
       ai: localVerdict
     }));
@@ -2891,7 +2902,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
     const deterministicVerdict = buildClassifierVerdictResult(deterministicResult);
     const confirmedSignals = deterministicSignals.map((signal) => ({
       ...signal,
-      confidence: getConfirmedSignalConfidence(signal, deterministicVerdict),
+      confidence: getConfirmedSignalConfidence(signal, deterministicVerdict, 0, message.member),
       reason: `local-confirmed scam/trade intent: ${signal.reason}`,
       ai: deterministicVerdict
     }));
@@ -2911,7 +2922,7 @@ async function confirmScamTradeSignals(message, signals, scamContext, {
   if (aiResult?.verdict === true) {
     const confirmedSignals = signals.map((signal) => ({
       ...signal,
-      confidence: getConfirmedSignalConfidence(signal, aiResult),
+      confidence: getConfirmedSignalConfidence(signal, aiResult, 0, message.member),
       reason: `AI-confirmed scam/trade intent: ${signal.reason}`,
       ai: aiResult
     }));

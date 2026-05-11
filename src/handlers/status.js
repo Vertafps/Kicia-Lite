@@ -29,6 +29,7 @@ const { recordRuntimeEvent } = require("../runtime-health");
 const { buildStatusReplyBody } = require("../router");
 const { detectLongStatusPrompt, detectShortStatusPrompt } = require("../status-prompts");
 const { getRuntimeStatus, setRuntimeStatus } = require("../runtime-status");
+const { buildStatusMetrics } = require("../status-metrics");
 const { safeEdit, safeReact, safeReply } = require("../utils/respond");
 const { getCooldownReaction, markGuildReply } = require("./cooldown");
 const ui = require("../ui");
@@ -106,31 +107,45 @@ function shouldAutoReplyStatus(content) {
   return isPublicStatusQueryMessage(content) || detectLongStatusPrompt(content) || isShortStatusPrompt(content);
 }
 
-function buildStatusReplyPayload(status = getRuntimeStatus()) {
-  const ribbon = status === "UP"
-    ? Array.from({ length: 96 }, () => "up")
-    : status === "UNAWARE"
-      ? Array.from({ length: 96 }, (_, i) => (i >= 88 ? "unaware" : "up"))
-      : Array.from({ length: 96 }, (_, i) => (i >= 90 ? "down" : i >= 86 ? "unaware" : "up"));
-  const incidents7d = status === "UP" ? 0 : 1;
-  const uptime = incidents7d === 0
-    ? 100
-    : status === "UNAWARE" ? 99.50 : 98.20;
+function buildSyntheticRibbon(status) {
+  if (status === "UP") return Array.from({ length: 96 }, () => "up");
+  if (status === "UNAWARE") return Array.from({ length: 96 }, (_, i) => (i >= 88 ? "unaware" : "up"));
+  return Array.from({ length: 96 }, (_, i) => (i >= 90 ? "down" : i >= 86 ? "unaware" : "up"));
+}
+
+async function buildStatusReplyPayload(status = getRuntimeStatus()) {
+  let metrics = null;
+  try {
+    metrics = await buildStatusMetrics({ currentStatus: status });
+  } catch (err) {
+    recordRuntimeEvent("warn", "status-metrics", err?.message || err);
+  }
+
+  const ribbon = metrics?.ribbon?.length === 96
+    ? metrics.ribbon
+    : buildSyntheticRibbon(status);
+  const uptime = metrics
+    ? Number(metrics.uptimePct.toFixed(2))
+    : status === "UP" ? 100 : status === "UNAWARE" ? 99.50 : 98.20;
+  const incidents = metrics?.incidents ?? (status === "UP" ? 0 : 1);
+  const lastDown = metrics?.lastDownLabel
+    ? metrics.lastDownLabel
+    : status === "UP" ? "—" : "earlier today";
 
   const result = ui.buildStatusEmbed({
     status,
     uptime,
     latencyMs: 0,
     ribbon,
-    lastDown: status === "UP" ? "—" : "earlier today",
-    incidents7d: String(incidents7d)
+    lastDown,
+    incidents7d: String(incidents)
   });
 
   return { embed: result.embeds[0], files: result.files };
 }
 
-function buildStatusEmbed(status = getRuntimeStatus()) {
-  return buildStatusReplyPayload(status).embed;
+async function buildStatusEmbed(status = getRuntimeStatus()) {
+  return (await buildStatusReplyPayload(status)).embed;
 }
 
 async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) {
@@ -142,7 +157,7 @@ async function maybeReplyWithPublicStatus(message, { useCooldown = true } = {}) 
     }
   }
 
-  const built = buildStatusReplyPayload(getRuntimeStatus());
+  const built = await buildStatusReplyPayload(getRuntimeStatus());
   await safeReply(message, {
     embeds: [built.embed],
     files: built.files,
@@ -381,7 +396,13 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   }
 
   if (nextStatus) {
-    setRuntimeStatus(nextStatus);
+    setRuntimeStatus(nextStatus, {
+      actor: {
+        id: message.author?.id || null,
+        label: message.member?.displayName || message.author?.username || "owner"
+      },
+      reason: "owner override via $status command"
+    });
     await safeReply(message, {
       embeds: [
         buildPanel({

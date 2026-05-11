@@ -298,6 +298,40 @@ function createSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS nickname_patterns_pattern_flags_idx
       ON nickname_patterns (pattern, flags);
 
+    CREATE TABLE IF NOT EXISTS status_transitions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      occurred_at INTEGER NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      actor_id TEXT,
+      actor_label TEXT,
+      reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS status_transitions_occurred_idx
+      ON status_transitions (occurred_at DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS outage_reviews (
+      review_id TEXT PRIMARY KEY,
+      guild_id TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      distinct_users INTEGER NOT NULL DEFAULT 0,
+      samples_json TEXT,
+      lock_result_json TEXT,
+      resolved_at INTEGER,
+      resolved_by_id TEXT,
+      resolved_by_label TEXT,
+      resolution TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS outage_reviews_status_idx
+      ON outage_reviews (status);
+
+    CREATE INDEX IF NOT EXISTS outage_reviews_expires_idx
+      ON outage_reviews (expires_at);
+
   `);
 
   try {
@@ -1620,6 +1654,265 @@ async function cleanupExpiredModerationActions({ now = Date.now() } = {}) {
   return true;
 }
 
+function normalizeOutageSamplesForPersistence(samples) {
+  if (!Array.isArray(samples)) return [];
+  return samples
+    .slice(0, 32)
+    .map((entry) => ({
+      at: Math.max(0, Math.round(Number(entry?.at) || 0)),
+      userId: entry?.userId ? String(entry.userId) : null,
+      userTag: entry?.userTag ? String(entry.userTag) : null,
+      channelId: entry?.channelId ? String(entry.channelId) : null,
+      messageId: entry?.messageId ? String(entry.messageId) : null,
+      url: entry?.url ? String(entry.url).slice(0, 400) : null,
+      content: entry?.content ? String(entry.content).slice(0, 500) : "",
+      normalized: entry?.normalized ? String(entry.normalized).slice(0, 500) : "",
+      confidence:
+        entry?.confidence === undefined || entry?.confidence === null
+          ? null
+          : Number(entry.confidence)
+    }));
+}
+
+function normalizeOutageLockResultForPersistence(lockResult) {
+  if (!lockResult) return null;
+  const changed = Array.isArray(lockResult?.result?.changed)
+    ? lockResult.result.changed
+        .slice(0, 32)
+        .map((entry) => ({
+          channelId: entry?.channel?.id ? String(entry.channel.id) : null
+        }))
+    : [];
+  const skipped = Array.isArray(lockResult?.result?.skipped)
+    ? lockResult.result.skipped
+        .slice(0, 32)
+        .map((entry) => ({
+          channelId: entry?.channel?.id ? String(entry.channel.id) : null
+        }))
+    : [];
+  return {
+    ok: Boolean(lockResult.ok),
+    error: lockResult.error ? String(lockResult.error).slice(0, 300) : null,
+    result: { changed, skipped }
+  };
+}
+
+function mapOutageReviewRow(row) {
+  let samples = [];
+  let lockResult = null;
+  try {
+    const parsedSamples = JSON.parse(row.samples_json || "[]");
+    if (Array.isArray(parsedSamples)) samples = parsedSamples;
+  } catch {}
+  try {
+    const parsedLock = JSON.parse(row.lock_result_json || "null");
+    if (parsedLock && typeof parsedLock === "object") lockResult = parsedLock;
+  } catch {}
+
+  return {
+    reviewId: String(row.review_id || ""),
+    guildId: row.guild_id ? String(row.guild_id) : null,
+    createdAt: Number(row.created_at || 0),
+    expiresAt: Number(row.expires_at || 0),
+    status: String(row.status || "pending"),
+    distinctUsers: Number(row.distinct_users || 0),
+    samples,
+    lockResult,
+    resolvedAt: row.resolved_at ? Number(row.resolved_at) : null,
+    resolvedBy:
+      row.resolved_by_id || row.resolved_by_label
+        ? {
+            id: row.resolved_by_id ? String(row.resolved_by_id) : null,
+            label: row.resolved_by_label ? String(row.resolved_by_label) : null
+          }
+        : null,
+    resolution: row.resolution ? String(row.resolution) : null
+  };
+}
+
+async function recordOutageReview(record = {}) {
+  const reviewId = String(record.reviewId || "").trim();
+  if (!reviewId) throw new Error("Missing outage review id");
+  const db = await getDatabase();
+  const createdAt = Math.max(1, Math.round(Number(record.createdAt) || Date.now()));
+  const expiresAt = Math.max(createdAt + 60_000, Math.round(Number(record.expiresAt) || createdAt + (24 * 60 * 60 * 1000)));
+
+  db.run(
+    `INSERT OR REPLACE INTO outage_reviews
+      (review_id, guild_id, created_at, expires_at, status, distinct_users, samples_json, lock_result_json,
+       resolved_at, resolved_by_id, resolved_by_label, resolution)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      reviewId,
+      record.guildId ? String(record.guildId) : null,
+      createdAt,
+      expiresAt,
+      String(record.status || "pending"),
+      Math.max(0, Math.round(Number(record.distinctUsers) || 0)),
+      JSON.stringify(normalizeOutageSamplesForPersistence(record.samples)),
+      JSON.stringify(normalizeOutageLockResultForPersistence(record.lockResult)),
+      record.resolvedAt ? Math.round(Number(record.resolvedAt)) : null,
+      record.resolvedBy?.id ? String(record.resolvedBy.id) : null,
+      record.resolvedBy?.label ? String(record.resolvedBy.label) : null,
+      record.resolution ? String(record.resolution) : null
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+  return reviewId;
+}
+
+async function updateOutageReviewStatus({
+  reviewId,
+  status,
+  resolvedAt = Date.now(),
+  resolvedBy = null,
+  resolution = null
+} = {}) {
+  const id = String(reviewId || "").trim();
+  if (!id) return false;
+  const db = await getDatabase();
+  db.run(
+    `UPDATE outage_reviews
+       SET status = ?, resolved_at = ?, resolved_by_id = ?, resolved_by_label = ?, resolution = ?
+     WHERE review_id = ?`,
+    [
+      String(status || "pending"),
+      Math.round(Number(resolvedAt) || Date.now()),
+      resolvedBy?.id ? String(resolvedBy.id) : null,
+      resolvedBy?.label ? String(resolvedBy.label) : null,
+      resolution ? String(resolution) : null,
+      id
+    ]
+  );
+  schedulePersist(db, { immediate: true });
+  return true;
+}
+
+async function listPendingOutageReviews({ now = Date.now() } = {}) {
+  const db = await getDatabase();
+  const cutoff = Math.max(1, Math.round(Number(now) || Date.now()));
+  const rows = getRows(
+    db,
+    `SELECT * FROM outage_reviews WHERE status = 'pending' AND expires_at > ? ORDER BY created_at ASC`,
+    [cutoff]
+  );
+  return rows.map(mapOutageReviewRow);
+}
+
+async function deleteOutageReview(reviewId) {
+  const id = String(reviewId || "").trim();
+  if (!id) return false;
+  const db = await getDatabase();
+  db.run("DELETE FROM outage_reviews WHERE review_id = ?", [id]);
+  schedulePersist(db);
+  return true;
+}
+
+async function deleteOutageReviewsForGuild(guildId) {
+  const id = String(guildId || "").trim();
+  if (!id) return false;
+  const db = await getDatabase();
+  db.run("DELETE FROM outage_reviews WHERE guild_id = ? AND status = 'pending'", [id]);
+  schedulePersist(db);
+  return true;
+}
+
+async function cleanupExpiredOutageReviews({ now = Date.now() } = {}) {
+  const db = await getDatabase();
+  db.run("DELETE FROM outage_reviews WHERE expires_at <= ?", [
+    Math.max(1, Math.round(Number(now) || Date.now()))
+  ]);
+  schedulePersist(db);
+  return true;
+}
+
+const RUNTIME_STATUS_CURRENT_KEY = "runtime_status_current";
+const RUNTIME_STATUS_SINCE_AT_KEY = "runtime_status_since_at";
+
+function mapStatusTransitionRow(row) {
+  return {
+    id: Number(row.id || 0),
+    occurredAt: Number(row.occurred_at || 0),
+    fromStatus: row.from_status ? String(row.from_status) : null,
+    toStatus: String(row.to_status || ""),
+    actorId: row.actor_id ? String(row.actor_id) : null,
+    actorLabel: row.actor_label ? String(row.actor_label) : null,
+    reason: row.reason ? String(row.reason) : null
+  };
+}
+
+async function recordStatusTransition({
+  occurredAt = Date.now(),
+  fromStatus = null,
+  toStatus,
+  actor = null,
+  reason = null
+} = {}) {
+  if (!toStatus) throw new Error("toStatus is required");
+  const db = await getDatabase();
+  const at = Math.max(1, Math.round(Number(occurredAt) || Date.now()));
+  db.run(
+    `INSERT INTO status_transitions (occurred_at, from_status, to_status, actor_id, actor_label, reason)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      at,
+      fromStatus ? String(fromStatus) : null,
+      String(toStatus),
+      actor?.id ? String(actor.id) : null,
+      actor?.label ? String(actor.label).slice(0, 120) : null,
+      reason ? String(reason).slice(0, 240) : null
+    ]
+  );
+  setAppConfigValue(db, RUNTIME_STATUS_CURRENT_KEY, String(toStatus));
+  setAppConfigValue(db, RUNTIME_STATUS_SINCE_AT_KEY, String(at), { immediate: true });
+  return true;
+}
+
+async function getPersistedRuntimeStatus() {
+  const db = await getDatabase();
+  const current = getAppConfigValue(db, RUNTIME_STATUS_CURRENT_KEY);
+  const sinceAt = Number(getAppConfigValue(db, RUNTIME_STATUS_SINCE_AT_KEY) || 0);
+  return {
+    status: current ? String(current) : null,
+    sinceAt: Number.isFinite(sinceAt) && sinceAt > 0 ? sinceAt : null
+  };
+}
+
+async function listStatusTransitionsSince({ sinceAt, limit = 500 } = {}) {
+  const db = await getDatabase();
+  const cutoff = Math.max(0, Math.round(Number(sinceAt) || 0));
+  const cap = Math.max(1, Math.min(5000, Math.round(Number(limit) || 500)));
+  const rows = getRows(
+    db,
+    `SELECT * FROM status_transitions WHERE occurred_at >= ? ORDER BY occurred_at ASC, id ASC LIMIT ?`,
+    [cutoff, cap]
+  );
+  return rows.map(mapStatusTransitionRow);
+}
+
+async function getMostRecentStatusTransition({ toStatus = null } = {}) {
+  const db = await getDatabase();
+  const rows = toStatus
+    ? getRows(
+        db,
+        `SELECT * FROM status_transitions WHERE to_status = ? ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+        [String(toStatus)]
+      )
+    : getRows(
+        db,
+        `SELECT * FROM status_transitions ORDER BY occurred_at DESC, id DESC LIMIT 1`
+      );
+  return rows.length ? mapStatusTransitionRow(rows[0]) : null;
+}
+
+async function clearStatusHistoryForTests() {
+  const db = await getDatabase();
+  db.exec("DELETE FROM status_transitions;");
+  deleteAppConfigValue(db, RUNTIME_STATUS_CURRENT_KEY);
+  deleteAppConfigValue(db, RUNTIME_STATUS_SINCE_AT_KEY, { immediate: true });
+  return true;
+}
+
 async function recordDailyTrackedMessage({
   userId,
   username,
@@ -1940,6 +2233,17 @@ module.exports = {
   deleteModerationAction,
   getModerationAction,
   recordModerationAction,
+  recordOutageReview,
+  updateOutageReviewStatus,
+  listPendingOutageReviews,
+  deleteOutageReview,
+  deleteOutageReviewsForGuild,
+  cleanupExpiredOutageReviews,
+  recordStatusTransition,
+  getPersistedRuntimeStatus,
+  listStatusTransitionsSince,
+  getMostRecentStatusTransition,
+  clearStatusHistoryForTests,
   recordDailyTrackedMessage,
   recordDailyModerationEvent,
   getDailyStatsSnapshot,

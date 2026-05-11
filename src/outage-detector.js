@@ -22,6 +22,13 @@ const {
   applyAutomaticUnlockdown
 } = require("./handlers/lockdown");
 const { sendLogPanel } = require("./log-channel");
+const {
+  recordOutageReview,
+  updateOutageReviewStatus,
+  listPendingOutageReviews,
+  deleteOutageReviewsForGuild,
+  cleanupExpiredOutageReviews
+} = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { setRuntimeStatus } = require("./runtime-status");
 const { foldConfusableText } = require("./text");
@@ -32,7 +39,10 @@ const { safeSend } = require("./utils/respond");
 const OUTAGE_DETECTION_WINDOW_MS = 10 * 60 * 1000;
 const OUTAGE_DETECTION_THRESHOLD = 4;
 const OUTAGE_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
-const OUTAGE_REVIEW_TTL_MS = 2 * 60 * 60 * 1000;
+// Reviews stay pending until staff explicitly resolves them. The 30-day cap is
+// a janitorial floor, not a UX cutoff — outages older than this are stale enough
+// that staff should re-investigate fresh.
+const OUTAGE_REVIEW_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OUTAGE_SAMPLE_LIMIT = 5;
 const OUTAGE_SIGNAL_MIN_CONFIDENCE = 70;
 
@@ -217,6 +227,9 @@ function pruneExpiredReviews(now = Date.now()) {
   for (const [reviewId, review] of pendingReviews.entries()) {
     if (review.expiresAt <= now) pendingReviews.delete(reviewId);
   }
+  cleanupExpiredOutageReviews({ now }).catch((err) => {
+    recordRuntimeEvent("warn", "outage-review-cleanup", err?.message || err);
+  });
 }
 
 function getPendingReviewForGuild(guildId) {
@@ -234,6 +247,42 @@ function clearPendingReviewsForGuild(guildId) {
   for (const [reviewId, review] of pendingReviews.entries()) {
     if (review.guildId === guildId) pendingReviews.delete(reviewId);
   }
+  deleteOutageReviewsForGuild(guildId).catch((err) => {
+    recordRuntimeEvent("warn", "outage-review-clear-guild", err?.message || err);
+  });
+}
+
+async function hydratePendingOutageReviews({ now = Date.now() } = {}) {
+  let restored = 0;
+  try {
+    const rows = await listPendingOutageReviews({ now });
+    for (const row of rows) {
+      if (!row?.reviewId) continue;
+      // Don't clobber a review already live in memory (would lose unlockChannels/sendLog refs).
+      if (pendingReviews.has(row.reviewId)) continue;
+      pendingReviews.set(row.reviewId, {
+        reviewId: row.reviewId,
+        guildId: row.guildId,
+        createdAt: row.createdAt,
+        expiresAt: row.expiresAt,
+        distinctUsers: row.distinctUsers,
+        samples: row.samples || [],
+        status: row.status || "pending",
+        lockResult: row.lockResult || null,
+        // Restored from disk — bind to default helpers on resolution.
+        unlockChannels: null,
+        sendLog: null,
+        generalMessageRef: null,
+        staffMessageRef: null,
+        logMessageRef: null,
+        restoredFromDisk: true
+      });
+      restored += 1;
+    }
+  } catch (err) {
+    recordRuntimeEvent("warn", "outage-review-hydrate", err?.message || err);
+  }
+  return restored;
 }
 
 // Panels ----------------------------------------------------------------------
@@ -406,7 +455,11 @@ async function maybeHandleOutageDetection(message, {
   const result = observeOutageMessage(message, { now });
   if (!result?.triggered) return false;
 
-  setRuntimeStatus("UNAWARE");
+  setRuntimeStatus("UNAWARE", {
+    actor: { id: "auto-detection", label: "Auto Detection" },
+    reason: `${result.count}/${result.threshold} distinct users reported Kicia not working`,
+    now
+  });
   const lockResult = await lockChannels(message.guild, {
     actorId: "auto-detection",
     actor: "Auto Detection",
@@ -438,6 +491,19 @@ async function maybeHandleOutageDetection(message, {
     logMessageRef: null
   };
   pendingReviews.set(reviewId, review);
+
+  recordOutageReview({
+    reviewId,
+    guildId: review.guildId,
+    createdAt: review.createdAt,
+    expiresAt: review.expiresAt,
+    status: review.status,
+    distinctUsers: review.distinctUsers,
+    samples: review.samples,
+    lockResult: review.lockResult
+  }).catch((err) => {
+    recordRuntimeEvent("warn", "outage-review-persist", err?.message || err);
+  });
 
   const generalMessage = await sendConfiguredChannel(
     message.guild,
@@ -490,10 +556,24 @@ async function resolveOutageReview(reviewId, {
   if (!guild) return { ok: false, reason: "missing_guild" };
 
   if (resolution === "confirmed") {
-    setRuntimeStatus("DOWN");
+    setRuntimeStatus("DOWN", {
+      actor: actor || null,
+      reason: "outage confirmed by staff review",
+      now
+    });
     review.status = "confirmed";
     review.resolvedAt = now;
     review.resolvedBy = actor || null;
+
+    updateOutageReviewStatus({
+      reviewId,
+      status: "confirmed",
+      resolvedAt: now,
+      resolvedBy: actor || null,
+      resolution: "confirmed"
+    }).catch((err) => {
+      recordRuntimeEvent("warn", "outage-review-update", err?.message || err);
+    });
 
     const generalPayload = buildOutageResolvedGeneralPayload({ resolution: "confirmed", actor });
     const generalChannelId = getConfiguredChannelId("general");
@@ -504,13 +584,19 @@ async function resolveOutageReview(reviewId, {
       resolution: "confirmed",
       review,
       actor
-    })).catch(() => null);
+    })).catch((err) => {
+      recordRuntimeEvent("warn", "outage-review-log-confirmed", err?.message || err);
+    });
 
     return { ok: true, review };
   }
 
   if (resolution === "false_alarm") {
-    setRuntimeStatus("UP");
+    setRuntimeStatus("UP", {
+      actor: actor || null,
+      reason: "outage dismissed as false alarm by staff review",
+      now
+    });
     const unlockResult = await (unlockChannels || review.unlockChannels || applyAutomaticUnlockdown)(guild, {
       actorId: actor?.id || "outage-review",
       actor: actor?.label || "Outage Review",
@@ -526,6 +612,16 @@ async function resolveOutageReview(reviewId, {
     review.resolvedBy = actor || null;
     review.unlockResult = unlockResult;
 
+    updateOutageReviewStatus({
+      reviewId,
+      status: "false_alarm",
+      resolvedAt: now,
+      resolvedBy: actor || null,
+      resolution: "false_alarm"
+    }).catch((err) => {
+      recordRuntimeEvent("warn", "outage-review-update", err?.message || err);
+    });
+
     const generalChannelId = getConfiguredChannelId("general");
     if (generalChannelId) {
       await sendConfiguredChannel(guild, generalChannelId, buildOutageResolvedGeneralPayload({
@@ -539,7 +635,9 @@ async function resolveOutageReview(reviewId, {
       review,
       actor: actor?.label || actor,
       unlockResult
-    })).catch(() => null);
+    })).catch((err) => {
+      recordRuntimeEvent("warn", "outage-review-log-false-alarm", err?.message || err);
+    });
 
     return { ok: true, review, unlockResult };
   }
@@ -569,6 +667,7 @@ module.exports = {
   detectOutageStatusComplaint,
   getPendingReviewForGuild,
   getReview,
+  hydratePendingOutageReviews,
   maybeHandleOutageDetection,
   observeOutageMessage,
   resetOutageDetectionState,

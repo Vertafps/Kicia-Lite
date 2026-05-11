@@ -98,7 +98,7 @@ async function maybeHandleOutageReviewInteraction(interaction, deps = {}) {
       body: "this outage review is no longer pending — it expired or was already resolved.",
       color: INFO
     });
-    await disableSourceButtons(interaction, interaction.message).catch(() => null);
+    await disableSourceButtons(interaction, interaction.message);
     return true;
   }
 
@@ -108,11 +108,15 @@ async function maybeHandleOutageReviewInteraction(interaction, deps = {}) {
       body: `this outage review was already resolved as **${review.status === "confirmed" ? "confirmed outage" : "false alarm"}**.`,
       color: INFO
     });
-    await disableSourceButtons(interaction, interaction.message).catch(() => null);
+    await disableSourceButtons(interaction, interaction.message);
     return true;
   }
 
-  await interaction.deferReply?.({ flags: 1 << 6 }).catch(() => null);
+  try {
+    await interaction.deferReply?.({ flags: 1 << 6 });
+  } catch (err) {
+    recordRuntimeEvent("warn", "outage-review-defer", err?.message || err);
+  }
 
   const actor = {
     id: interaction.user?.id || null,
@@ -131,29 +135,37 @@ async function maybeHandleOutageReviewInteraction(interaction, deps = {}) {
   });
 
   if (!result?.ok) {
-    await interaction.editReply?.({
-      embeds: [buildPanel({
-        header: "Review Failed",
-        body: `couldn't apply review: ${result?.reason || "unknown error"}`,
-        color: DANGER
-      })],
-      allowedMentions: { parse: [] }
-    }).catch(() => null);
+    try {
+      await interaction.editReply?.({
+        embeds: [buildPanel({
+          header: "Review Failed",
+          body: `couldn't apply review: ${result?.reason || "unknown error"}`,
+          color: DANGER
+        })],
+        allowedMentions: { parse: [] }
+      });
+    } catch (err) {
+      recordRuntimeEvent("warn", "outage-review-fail-reply", err?.message || err);
+    }
     return true;
   }
 
-  await interaction.editReply?.({
-    embeds: [buildPanel({
-      header: parsed.resolution === "confirmed" ? "Outage Confirmed" : "Marked As False Alarm",
-      body: parsed.resolution === "confirmed"
-        ? "Status set to **Down** — channels stay locked. Posted update in general."
-        : `Status set to **Up**, channels unlocked. Posted all-clear in general.`,
-      color: parsed.resolution === "confirmed" ? DANGER : SUCCESS
-    })],
-    allowedMentions: { parse: [] }
-  }).catch(() => null);
+  try {
+    await interaction.editReply?.({
+      embeds: [buildPanel({
+        header: parsed.resolution === "confirmed" ? "Outage Confirmed" : "Marked As False Alarm",
+        body: parsed.resolution === "confirmed"
+          ? "Status set to **Down** — channels stay locked. Posted update in general."
+          : `Status set to **Up**, channels unlocked. Posted all-clear in general.`,
+        color: parsed.resolution === "confirmed" ? DANGER : SUCCESS
+      })],
+      allowedMentions: { parse: [] }
+    });
+  } catch (err) {
+    recordRuntimeEvent("warn", "outage-review-success-reply", err?.message || err);
+  }
 
-  await disableSourceButtons(interaction, interaction.message).catch(() => null);
+  await disableSourceButtons(interaction, interaction.message);
 
   return true;
 }

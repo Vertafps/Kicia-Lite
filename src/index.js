@@ -29,7 +29,10 @@ const { maybeHandleStatusCommand } = require("./handlers/status");
 const { maybeHandleOutageReviewInteraction } = require("./handlers/outage-review");
 const { maybeHandleScamReviewInteraction } = require("./handlers/scam-review");
 const { maybeHandleSweepReviewInteraction } = require("./handlers/sweep-review");
-const { maybeHandleOutageDetection } = require("./outage-detector");
+const {
+  hydratePendingOutageReviews,
+  maybeHandleOutageDetection
+} = require("./outage-detector");
 const {
   cleanupExpiredModerationActions,
   flushRestrictedEmojiDatabaseNow,
@@ -37,9 +40,23 @@ const {
   hydrateChannelSettings
 } = require("./restricted-emoji-db");
 const { recordRuntimeEvent } = require("./runtime-health");
+const {
+  enableStatusPersistence,
+  hydrateRuntimeStatus
+} = require("./runtime-status");
+const {
+  recordStatusTransition,
+  getPersistedRuntimeStatus
+} = require("./restricted-emoji-db");
 const { loadOrBuildCache: loadScamEmbedCache } = require("./scam-embeddings-classifier");
 const { loadOrBuildKbCache } = require("./kb-embeddings");
 const { safeReply } = require("./utils/respond");
+
+enableStatusPersistence({
+  recordStatusTransition,
+  getPersistedRuntimeStatus,
+  onPersistError: (err) => recordRuntimeEvent("warn", "status-transition-persist", err?.message || err)
+});
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
 
@@ -195,6 +212,26 @@ client.once(Events.ClientReady, async (readyClient) => {
   } catch (err) {
     console.warn("Channel config hydrate failed:", err.message);
     recordRuntimeEvent("warn", "channel-config", err?.message || err);
+  }
+  try {
+    const restored = await hydratePendingOutageReviews();
+    if (restored > 0) {
+      console.log(`Outage reviews restored from disk: ${restored}`);
+      recordRuntimeEvent("info", "outage-review-hydrate", `restored ${restored} pending review${restored === 1 ? "" : "s"}`);
+    }
+  } catch (err) {
+    console.warn("Outage review hydrate failed:", err.message);
+    recordRuntimeEvent("warn", "outage-review-hydrate", err?.message || err);
+  }
+  try {
+    const restored = await hydrateRuntimeStatus();
+    if (restored?.status) {
+      console.log(`Runtime status restored: ${restored.status}`);
+      recordRuntimeEvent("info", "runtime-status-hydrate", `${restored.status} since ${new Date(restored.sinceAt).toISOString()}`);
+    }
+  } catch (err) {
+    console.warn("Runtime status hydrate failed:", err.message);
+    recordRuntimeEvent("warn", "runtime-status-hydrate", err?.message || err);
   }
   await applyReadyPresence(readyClient);
   try {

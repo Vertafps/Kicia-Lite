@@ -1,6 +1,8 @@
 process.env.DISCORD_TOKEN = process.env.DISCORD_TOKEN || "test-token";
 process.env.KB_URL = process.env.KB_URL || "https://example.com/kb.json";
 
+const os = require("os");
+const path = require("path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
@@ -11,6 +13,8 @@ const {
 const {
   detectOutageStatusComplaint,
   getPendingReviewForGuild,
+  getReview,
+  hydratePendingOutageReviews,
   maybeHandleOutageDetection,
   observeOutageMessage,
   resetOutageDetectionState,
@@ -21,6 +25,23 @@ const {
   resetRuntimeStatus,
   setRuntimeStatus
 } = require("../src/runtime-status");
+const {
+  cleanupExpiredOutageReviews,
+  resetRestrictedEmojiDatabaseForTests
+} = require("../src/restricted-emoji-db");
+
+const testDbPath = path.join(os.tmpdir(), `kicialite-outage-test-${process.pid}.sqlite`);
+
+test.beforeEach(async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+  // Force the DB to fully load (which would otherwise clear the channel cache mid-test
+  // when the outage detector lazily writes a row).
+  await cleanupExpiredOutageReviews({ now: 1 }).catch(() => null);
+});
+
+test.after(async () => {
+  await resetRestrictedEmojiDatabaseForTests(testDbPath);
+});
 
 function buildOutageMessage(content, userId, guild, channelId = "1498745066339045406") {
   return {
@@ -239,4 +260,80 @@ test("dismissing as false alarm restores status UP and unlocks", async () => {
   assert.equal(unlockCalls.length, 1);
   assert.equal(getRuntimeStatus(), "UP");
   assert.match(sends.general[1].embeds[0].data.title, /All clear/i);
+});
+
+test("pending outage reviews survive bot restart via sqlite hydration", async () => {
+  const { guild } = buildGuildFixture();
+  setCachedChannelSlot("general", "222222222222222222");
+  setCachedChannelSlot("staff", "333333333333333333");
+
+  const messages = [
+    buildOutageMessage("kicia doesnt work", "u1", guild),
+    buildOutageMessage("kiciahook is down", "u2", guild),
+    buildOutageMessage("kicia just crashed for me", "u3", guild),
+    buildOutageMessage("kh is broken", "u4", guild)
+  ];
+
+  for (const [index, message] of messages.entries()) {
+    await maybeHandleOutageDetection(message, {
+      now: 10_000 + index * 1_000,
+      sendLog: async () => true,
+      lockChannels: async () => ({ ok: true, result: { changed: [], skipped: [] } })
+    });
+  }
+
+  const live = getPendingReviewForGuild(guild.id);
+  assert.ok(live, "review created in-memory");
+  const reviewId = live.reviewId;
+
+  // Simulate bot restart: wipe in-memory state but keep the sqlite row.
+  resetOutageDetectionState();
+  assert.equal(getReview(reviewId), null, "in-memory state cleared");
+
+  // Hydrate as the bot does on ClientReady.
+  const restored = await hydratePendingOutageReviews({ now: 20_000 });
+  assert.equal(restored, 1, "one pending review restored from disk");
+
+  const hydrated = getReview(reviewId);
+  assert.ok(hydrated, "hydrated review available by id");
+  assert.equal(hydrated.status, "pending");
+  assert.equal(hydrated.guildId, guild.id);
+  assert.equal(hydrated.distinctUsers, 4);
+  assert.ok(hydrated.restoredFromDisk, "marker set so resolver knows to fall back to default helpers");
+});
+
+test("resolved outage reviews don't reappear after restart", async () => {
+  const { guild } = buildGuildFixture();
+  setCachedChannelSlot("general", "222222222222222222");
+  setCachedChannelSlot("staff", "333333333333333333");
+
+  const messages = [
+    buildOutageMessage("kicia doesnt work", "u1", guild),
+    buildOutageMessage("kiciahook is down", "u2", guild),
+    buildOutageMessage("kicia just crashed for me", "u3", guild),
+    buildOutageMessage("kh is broken", "u4", guild)
+  ];
+
+  for (const [index, message] of messages.entries()) {
+    await maybeHandleOutageDetection(message, {
+      now: 10_000 + index * 1_000,
+      sendLog: async () => true,
+      lockChannels: async () => ({ ok: true, result: { changed: [], skipped: [] } })
+    });
+  }
+
+  const live = getPendingReviewForGuild(guild.id);
+  assert.ok(live);
+
+  await resolveOutageReview(live.reviewId, {
+    resolution: "false_alarm",
+    actor: { id: "staff-1", label: "Mod" },
+    guild,
+    unlockChannels: async () => ({ ok: true, result: { changed: [], skipped: [] } }),
+    sendLog: async () => true
+  });
+
+  resetOutageDetectionState();
+  const restored = await hydratePendingOutageReviews({ now: 30_000 });
+  assert.equal(restored, 0, "resolved review is not re-hydrated as pending");
 });

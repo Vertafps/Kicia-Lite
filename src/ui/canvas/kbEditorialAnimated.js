@@ -8,7 +8,7 @@
  */
 
 const { ACCENT, SURFACE, TYPE } = require('../colors');
-const { renderGif, easeInOutSine } = require('./_animation');
+const { renderGif, easeInOutSine, easeOutQuint } = require('./_animation');
 
 function renderKbEditorialAnimated({
   title = 'Untitled', tag = 'KB', step = 1, total = 1, match = 0.9, preview,
@@ -22,7 +22,72 @@ function renderKbEditorialAnimated({
     drawBackground(ctx);
     drawAccentPanel(ctx, t);
     drawRightColumn(ctx, t);
+    drawTitleReticle(ctx, t);
     drawShimmerBand(ctx, t);
+  }
+
+  // Title reticle — corner brackets that snap from a wide search box to a
+  // tight hug around the title between t=0..0.55, then sit settled. Gives the
+  // card a "scope locked on this answer" feel.
+  function drawTitleReticle(ctx, t) {
+    const panelW = 150;
+    const rx = panelW + 24;
+    const rRight = W - 16;
+    const rW = rRight - rx;
+
+    // Measure title for tight bounds.
+    ctx.save();
+    ctx.font = 'bold 16px ' + TYPE.sans;
+    const titleText = fitText(ctx, title, rW);
+    const titleW = Math.min(ctx.measureText(titleText).width, rW);
+    ctx.restore();
+
+    const tightX = rx - 4;
+    const tightY = 50;
+    const tightW = titleW + 8;
+    const tightH = 22;
+
+    const wideX = rx - 12;
+    const wideY = 44;
+    const wideW = rW + 8;
+    const wideH = 34;
+
+    // Lock-on progress 0..1 over t=[0, 0.55], settled afterwards.
+    const lockT = Math.min(1, Math.max(0, t / 0.55));
+    const eased = easeOutQuint(lockT);
+    const x = wideX + (tightX - wideX) * eased;
+    const y = wideY + (tightY - wideY) * eased;
+    const w = wideW + (tightW - wideW) * eased;
+    const h = wideH + (tightH - wideH) * eased;
+
+    // Bracket arm length grows slightly as it locks.
+    const arm = 6 + 4 * eased;
+    const alpha = 0.35 + 0.45 * eased;
+
+    ctx.save();
+    ctx.strokeStyle = ACCENT.hex;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 1.2;
+    ctx.lineCap = 'round';
+
+    // Top-left
+    ctx.beginPath();
+    ctx.moveTo(x, y + arm); ctx.lineTo(x, y); ctx.lineTo(x + arm, y);
+    ctx.stroke();
+    // Top-right
+    ctx.beginPath();
+    ctx.moveTo(x + w - arm, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + arm);
+    ctx.stroke();
+    // Bottom-left
+    ctx.beginPath();
+    ctx.moveTo(x, y + h - arm); ctx.lineTo(x, y + h); ctx.lineTo(x + arm, y + h);
+    ctx.stroke();
+    // Bottom-right
+    ctx.beginPath();
+    ctx.moveTo(x + w - arm, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - arm);
+    ctx.stroke();
+
+    ctx.restore();
   }
 
   function drawBackground(ctx) {

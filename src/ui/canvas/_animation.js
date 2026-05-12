@@ -22,12 +22,14 @@ const { GIFEncoder, quantize, applyPalette } = require('gifenc');
 
 // Tuned for Discord render path:
 //   24 fps × 1.5 s = 36 frames keeps motion smooth without ballooning size.
-//   2× retina scale — at native (1×) small fonts (8-13px) on tinted cells lose
-//   their antialiasing into the 256-color palette and look blurry. 2× upsamples
-//   text edges into the palette cleanly. Trades ~3× file size for crisp text.
+//   Native scale (1×) — Discord embeds clamp images to ~488px wide. If we
+//   render at 2× (960px) Discord downscales in the embed, which softens text
+//   even though the opened GIF looks crisp at full size. 1× renders at the
+//   embed display size directly so Discord shows it 1:1. We accept some GIF
+//   palette antialiasing softness in exchange for sharper embed display.
 const DEFAULT_FPS = 24;
 const DEFAULT_DURATION_S = 1.5;
-const RENDER_SCALE = 2;
+const RENDER_SCALE = 1;
 
 function makeFrameCanvas(width, height, scale = RENDER_SCALE) {
   const canvas = createCanvas(width * scale, height * scale);

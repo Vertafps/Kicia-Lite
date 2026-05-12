@@ -30,7 +30,12 @@ function renderExecutorListAnimated({ executors = [] } = {}) {
   const freeCount = list.filter((e) => (e.type || '').toLowerCase() === 'free').length;
   const paidCount = list.length - freeCount;
 
-  return renderGif((ctx, t) => drawFrame(ctx, t), { width: W, height: H });
+  // Longer loop (3.0s × 18fps = 54 frames) so the reticle dwells on each card
+  // long enough to read the name + badge — the default 1.5s felt frantic.
+  // Lower fps offsets the longer loop so the file size doesn't blow up.
+  return renderGif((ctx, t) => drawFrame(ctx, t), {
+    width: W, height: H, fps: 18, durationSec: 3.0,
+  });
 
   function drawFrame(ctx, t) {
     drawGrid(ctx);

@@ -35,9 +35,10 @@ const canvas = {
   renderConfidenceMeter:  require('./canvas/confidenceMeter').renderConfidenceMeter,
   renderLockdownGrid:     require('./canvas/lockdownGrid').renderLockdownGrid,
   renderKbEditorial:      require('./canvas/kbEditorial').renderKbEditorial,
-  renderExecutorList:         require('./canvas/executorList').renderExecutorList,
-  renderExecutorListAnimated: require('./canvas/executorListAnimated').renderExecutorListAnimated,
-  renderExecutorDetail:   require('./canvas/executorDetail').renderExecutorDetail,
+  renderExecutorList:           require('./canvas/executorList').renderExecutorList,
+  renderExecutorListAnimated:   require('./canvas/executorListAnimated').renderExecutorListAnimated,
+  renderExecutorDetail:         require('./canvas/executorDetail').renderExecutorDetail,
+  renderExecutorDetailAnimated: require('./canvas/executorDetailAnimated').renderExecutorDetailAnimated,
 };
 
 module.exports = {

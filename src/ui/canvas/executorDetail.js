@@ -175,7 +175,10 @@ function renderExecutorDetail({
   });
 
   // ── Footer hint ─────────────────────────────────────────────────────────
-  const footL = link ? `→ ${shorten(link)}` : '→ open executor list for the full lineup';
+  // The actual link is rendered as a button below the embed (handled in
+  // ping.js / buildLinkButtonRows). Showing a shortened URL here just
+  // produced bare "discord.gg" / "github.io" strings — useless context.
+  const footL = link ? `→ open the link below` : '→ open executor list for the full lineup';
   text(ctx, footL, 28, ibY + ibH + 14, {
     font: 'bold 10px ' + TYPE.mono, color: typeTone.hex, letterSpacing: 0.5,
   });

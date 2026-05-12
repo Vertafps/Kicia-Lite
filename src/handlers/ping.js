@@ -147,8 +147,21 @@ async function handleGuildPing(message) {
 
   if (route.kind === "executor" && route.executor && route.executor.name) {
     const { AttachmentBuilder } = require("discord.js");
-    const buf = ui.canvas.renderExecutorDetail(route.executor);
-    const img = new AttachmentBuilder(buf, { name: "executor-detail.png" });
+    const { ANIMATED_HEROES } = require("../config");
+    let detailBuf, detailExt;
+    if (ANIMATED_HEROES) {
+      try {
+        detailBuf = ui.canvas.renderExecutorDetailAnimated(route.executor);
+        detailExt = "gif";
+      } catch (err) {
+        recordRuntimeEvent("warn", "executor-detail-animated", err?.message || err);
+      }
+    }
+    if (!detailBuf) {
+      detailBuf = ui.canvas.renderExecutorDetail(route.executor);
+      detailExt = "png";
+    }
+    const img = new AttachmentBuilder(detailBuf, { name: `executor-detail.${detailExt}` });
     const embed = buildPanel({
       header: route.header,
       body: route.body,
@@ -159,7 +172,7 @@ async function handleGuildPing(message) {
       color: COLOR_BY_NAME[route.color] || INFO,
       author: brandAuthor("KB · EXECUTOR")
     });
-    embed.setImage("attachment://executor-detail.png");
+    embed.setImage(`attachment://executor-detail.${detailExt}`);
     await safeReply(message, {
       embeds: [embed],
       components: buildLinkButtonRows(route.buttons),

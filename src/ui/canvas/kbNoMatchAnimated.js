@@ -1,24 +1,26 @@
 /**
  * Animated KB no-match — looping GIF for the "let's get a human" embed.
  *
- * v2 — cleaner composition per design screenshot:
- *   - Header strip: "MATCH CONFIDENCE" left, "NO MATCH" red right (no score).
- *   - Small clean reticle on the left (2 rings + tiny crosshair ticks +
- *     center pip). No sweeping wedge, no leading edge line — those were
- *     loud and pulled attention away from the actual message.
- *   - Title + 3-line body text on the right.
- *   - Bottom: split labels "OPEN A TICKET BELOW" / "USE THE BUTTON ↓" with
- *     3 pulsing chevron arrows centred between them, pointing down at the
- *     real ticket button below the embed.
+ * v3 — minimal composition. Every duplicate CTA was clutter; the real
+ * ticket button sits below the embed already, so the canvas just needs
+ * to say "we looked, no match, talk to staff" and get out of the way.
  *
- * Every frame is fully readable — no entrance, no fade-up.
+ * Layout:
+ *   - Top-right: small red "NO MATCH" tag (no "MATCH CONFIDENCE"
+ *     header — the reticle + tag carry the signal).
+ *   - Left: small quiet reticle (two rings, 4 compass ticks, pulsing
+ *     red center pip with halo).
+ *   - Right: title + a single body line that points at the button.
+ *
+ * No footer labels, no chevron stack — the embed's actual ticket button
+ * lives right under the image.
  */
 
 const { SURFACE, STATUS, TYPE } = require('../colors');
 const { renderGif } = require('./_animation');
 
 const W = 480;
-const H = 160;
+const H = 132;
 
 function renderKbNoMatchAnimated() {
   return renderGif((ctx, t) => drawFrame(ctx, t), { width: W, height: H });
@@ -29,7 +31,6 @@ function drawFrame(ctx, t) {
   drawHeader(ctx);
   drawReticle(ctx, t);
   drawCopy(ctx);
-  drawFooter(ctx, t);
 }
 
 function drawGrid(ctx) {
@@ -45,12 +46,6 @@ function drawGrid(ctx) {
 
 function drawHeader(ctx) {
   ctx.save();
-  ctx.font = '600 9px ' + TYPE.mono;
-  ctx.fillStyle = SURFACE.textDim;
-  ctx.textAlign = 'left';
-  if ('letterSpacing' in ctx) ctx.letterSpacing = '1.5px';
-  ctx.fillText('MATCH CONFIDENCE', 16, 22);
-
   ctx.font = 'bold 9px ' + TYPE.mono;
   ctx.fillStyle = STATUS.down.hex;
   ctx.textAlign = 'right';
@@ -60,9 +55,7 @@ function drawHeader(ctx) {
 }
 
 function drawReticle(ctx, t) {
-  // Small reticle: two concentric rings + 4 tiny crosshair ticks + center pip.
-  // No wedge, no leading edge line — keep it quiet so the copy reads first.
-  const cx = 80, cy = 82;
+  const cx = 70, cy = 72;
   const rOuter = 26;
   const rInner = 14;
 
@@ -72,9 +65,9 @@ function drawReticle(ctx, t) {
   ctx.beginPath(); ctx.arc(cx, cy, rOuter, 0, Math.PI * 2); ctx.stroke();
   ctx.beginPath(); ctx.arc(cx, cy, rInner, 0, Math.PI * 2); ctx.stroke();
 
-  // Tiny crosshair tick marks — short, only at compass points.
+  // Tiny crosshair ticks at the 4 compass points — short, dim.
   ctx.strokeStyle = SURFACE.textDim;
-  ctx.globalAlpha = 0.6;
+  ctx.globalAlpha = 0.55;
   ctx.lineWidth = 1;
   const tickLen = 4;
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -86,13 +79,12 @@ function drawReticle(ctx, t) {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  // Center pip — gently pulsing, dim red to signal the no-match state.
+  // Pulsing red center pip + soft halo so the reticle reads as "no signal".
   const pulse = (Math.sin(t * Math.PI * 2) + 1) / 2;
   ctx.save();
   ctx.fillStyle = STATUS.down.hex;
-  ctx.globalAlpha = 0.55 + pulse * 0.35;
+  ctx.globalAlpha = 0.6 + pulse * 0.3;
   ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
-  // Soft halo on the pip so it reads even at low alpha.
   const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, 12);
   halo.addColorStop(0, STATUS.down.hex + Math.floor(40 + pulse * 60).toString(16).padStart(2, '0'));
   halo.addColorStop(1, STATUS.down.hex + '00');
@@ -103,63 +95,21 @@ function drawReticle(ctx, t) {
 }
 
 function drawCopy(ctx) {
-  const tx = 160;
+  const tx = 144;
 
   ctx.save();
-  ctx.font = 'bold 17px ' + TYPE.sans;
+  ctx.font = 'bold 18px ' + TYPE.sans;
   ctx.fillStyle = SURFACE.text;
   ctx.textAlign = 'left';
-  ctx.fillText('No clear KB match', tx, 64);
+  ctx.fillText('No clear KB match', tx, 62);
   ctx.restore();
 
   ctx.save();
-  ctx.font = '11px ' + TYPE.sans;
+  ctx.font = '12px ' + TYPE.sans;
   ctx.fillStyle = SURFACE.textMuted;
   ctx.textAlign = 'left';
-  ctx.fillText('A moderator needs to look at',  tx, 86);
-  ctx.fillText('this one — open a ticket',      tx, 102);
-  ctx.fillText('using the button below.',       tx, 118);
-  ctx.restore();
-}
-
-function drawFooter(ctx, t) {
-  // Bottom row: labels yellow on left+right, chevrons pulsing in the centre
-  // gutter pointing down at the actual ticket button below the embed.
-  const baseY = H - 18;
-  const bob = Math.sin(t * Math.PI * 2) * 0.6;
-
-  ctx.save();
-  ctx.font = 'bold 9.5px ' + TYPE.mono;
-  ctx.fillStyle = STATUS.warn.hex;
-  ctx.textBaseline = 'alphabetic';
-  if ('letterSpacing' in ctx) ctx.letterSpacing = '1.4px';
-
-  ctx.textAlign = 'left';
-  ctx.fillText('OPEN A TICKET BELOW', 16, baseY + bob);
-
-  ctx.textAlign = 'right';
-  ctx.fillText('USE THE BUTTON ↓', W - 16, baseY + bob);
-  ctx.restore();
-
-  // Three pulsing chevron arrows pointing down, centred between the labels.
-  const cxFooter = W / 2;
-  const chevronTopY = baseY - 18;
-  ctx.save();
-  ctx.strokeStyle = STATUS.warn.hex;
-  ctx.lineWidth = 1.8;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  for (let i = 0; i < 3; i++) {
-    const phase = (t * Math.PI * 2) - i * 0.6;
-    const alpha = 0.45 + (Math.sin(phase) + 1) / 2 * 0.45;
-    ctx.globalAlpha = alpha;
-    const yTop = chevronTopY + i * 5;
-    ctx.beginPath();
-    ctx.moveTo(cxFooter - 8, yTop);
-    ctx.lineTo(cxFooter,     yTop + 5);
-    ctx.lineTo(cxFooter + 8, yTop);
-    ctx.stroke();
-  }
+  ctx.fillText('Open a ticket below — staff will', tx, 86);
+  ctx.fillText('pick this one up.',                 tx, 104);
   ctx.restore();
 }
 

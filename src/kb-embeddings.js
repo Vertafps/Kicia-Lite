@@ -18,11 +18,11 @@ const fs = require("fs");
 const path = require("path");
 
 const {
-  ENABLE_SCAM_EMBED_CLASSIFIER,
-  SCAM_EMBED_MODEL_ID,
+  ENABLE_KB_EMBED_INDEX,
+  KB_EMBED_MODEL_ID,
   KB_EMBED_CACHE_PATH
 } = require("./config");
-const { embedText, loadEmbedder } = require("./scam-embeddings-classifier");
+const { embedText, loadEmbedder } = require("./embeddings");
 const { recordRuntimeEvent } = require("./runtime-health");
 
 let _index = null;
@@ -51,7 +51,7 @@ function computeKbHash(kb) {
       execs.push(`e:${status}:${e.name}|${(e.aliases || []).join(",")}`);
     }
   }
-  return sha256(SCAM_EMBED_MODEL_ID + "|" + issues.join("\n") + "|" + execs.join("\n"));
+  return sha256(KB_EMBED_MODEL_ID + "|" + issues.join("\n") + "|" + execs.join("\n"));
 }
 
 function resolveCachePath() {
@@ -82,7 +82,7 @@ function persistToDisk(index) {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     fs.writeFileSync(cachePath, JSON.stringify({
       hash: index.hash,
-      modelId: SCAM_EMBED_MODEL_ID,
+      modelId: KB_EMBED_MODEL_ID,
       entries: index.entries.map((e) => ({
         kind: e.kind,
         key: e.key,
@@ -131,7 +131,7 @@ async function buildIndex(kb) {
 }
 
 async function loadOrBuildKbCache(kb) {
-  if (!ENABLE_SCAM_EMBED_CLASSIFIER) return null;
+  if (!ENABLE_KB_EMBED_INDEX) return null;
   if (!kb || !Array.isArray(kb.issues)) return null;
 
   const hash = computeKbHash(kb);

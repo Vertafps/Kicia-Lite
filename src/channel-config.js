@@ -117,6 +117,21 @@ const CHANNEL_CONFIG_SLOTS = [
     defaultId: extractChannelIdFromJumpUrl(BRAND.STATUS_JUMP_URL),
     required: true,
     uses: ["status replies", "status buttons"]
+  },
+  {
+    key: "statuswidget",
+    aliases: [
+      "widget",
+      "status-widget",
+      "statuspanel",
+      "status-panel",
+      "livewidget",
+      "live-widget"
+    ],
+    label: "Status Widget Channel",
+    defaultId: "",
+    required: false,
+    uses: ["pinned live status widget (auto-updates every 60s)"]
   }
 ];
 
@@ -255,6 +270,10 @@ function getStaffChannelId() {
   return getConfiguredChannelId("staff");
 }
 
+function getStatusWidgetChannelId() {
+  return getConfiguredChannelId("statuswidget");
+}
+
 function getDailyStatsChannelId() {
   return getConfiguredChannelId("daily") || DAILY_STATS_CHANNEL_ID;
 }
@@ -317,6 +336,7 @@ module.exports = {
   getNoResponseChannelIds,
   getStaffChannelId,
   getStatusJumpUrl,
+  getStatusWidgetChannelId,
   getStoredChannelConfigKey,
   getTicketJumpUrl,
   hydrateChannelConfigCache,

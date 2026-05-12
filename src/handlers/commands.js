@@ -10,6 +10,9 @@ const {
   listRestrictedEmojis,
   addRestrictedEmoji,
   removeRestrictedEmojiByKey,
+  listRestrictedEmojiTopOffenders,
+  listRestrictedEmojiTopUsage,
+  getRestrictedEmojiCountSince,
   listTrustedLinks,
   addTrustedLink,
   removeTrustedLinkByKey,
@@ -23,9 +26,6 @@ const {
   listChannelSettings,
   setChannelSetting,
   resetChannelSetting,
-  listScamDecisionAudit,
-  labelScamDecisionAudit,
-  normalizeScamAuditLabel,
   getBotPresenceState,
   setBotPresenceState,
   resetBotPresenceState
@@ -63,24 +63,6 @@ function isCommandsListMessage(content) {
 function isDatabaseMessage(content) {
   const normalized = String(content || "").trim().toLowerCase();
   return normalized === "$db" || normalized === "$database";
-}
-
-function parseScamAuditMessage(content) {
-  const trimmed = String(content || "").trim();
-  const labelMatch = trimmed.match(/^\$(?:scamaudit|audit)\s+label\s+(\d+)\s+(\S+)(?:\s+([\s\S]+))?$/i);
-  if (labelMatch) {
-    return {
-      action: "label",
-      id: Number(labelMatch[1]),
-      label: labelMatch[2],
-      note: String(labelMatch[3] || "").trim()
-    };
-  }
-
-  const match = trimmed.match(/^\$(?:scamaudit|audit)(?:\s+(\d{1,2}))?$/i);
-  if (!match) return null;
-  const limit = Math.min(25, Math.max(1, Math.round(Number(match[1]) || 10)));
-  return { action: "list", limit };
 }
 
 function parseStateMessage(content) {
@@ -158,6 +140,14 @@ function parseEmojiMessage(content) {
   const trimmed = String(content || "").trim();
   if (!/^\$emoji(?:\s|$)/i.test(trimmed)) return null;
 
+  if (/^\$emoji\s+top(?:\s+(\d{1,2}))?$/i.test(trimmed)) {
+    const match = trimmed.match(/^\$emoji\s+top(?:\s+(\d{1,2}))?$/i);
+    return {
+      action: "top",
+      limit: Math.min(25, Math.max(3, Math.round(Number(match[1]) || 10)))
+    };
+  }
+
   const removeMatch = trimmed.match(/^\$emoji\s+remove\s+(.+)$/i);
   if (removeMatch) {
     return {
@@ -216,9 +206,13 @@ function parseNickMessage(content) {
     const literal = (arrowIndex >= 0 ? raw.slice(0, arrowIndex) : raw).trim();
     const renameTo = (arrowIndex >= 0 ? raw.slice(arrowIndex + 2) : DEFAULT_NICKNAME_RENAME).trim();
     if (!literal) return { action: "help" };
+    // Simple add anchors the literal with word boundaries by default so adding
+    // `$nick add bob` matches "bob" / "bob smith" / "hello bob" but NOT
+    // "notbob" or "bobsled". Users who need substring or prefix matching can
+    // pass the explicit regex form: `$nick add /pattern/i -> name`.
     return {
       action: "add",
-      pattern: escapeRegexLiteral(literal),
+      pattern: `\\b${escapeRegexLiteral(literal)}\\b`,
       flags: "i",
       renameTo: renameTo || DEFAULT_NICKNAME_RENAME,
       literal
@@ -338,36 +332,6 @@ function trimCommandExcerpt(text, max = 120) {
   return `${cleaned.slice(0, Math.max(0, max - 3))}...`;
 }
 
-function formatAuditVerdict(label, result) {
-  if (!result?.model && !result?.answer && typeof result?.verdict === "undefined") return null;
-  const answer = result.answer || (result.verdict === true ? "TRUE" : result.verdict === false ? "FALSE" : "BORDERLINE");
-  const model = result.model ? ` ${result.model}` : "";
-  const suffix = result.skipped ? ` (${result.skipped})` : "";
-  return `${label}${model}: ${answer}${suffix}`;
-}
-
-function formatScamAuditList(records) {
-  if (!Array.isArray(records) || !records.length) return "none yet";
-  return records
-    .slice(0, 25)
-    .map((entry) => {
-      const when = entry.createdAt ? `<t:${Math.floor(entry.createdAt / 1000)}:R>` : "unknown time";
-      const user = entry.userId ? `<@${entry.userId}>` : "unknown user";
-      const channel = entry.channelId ? ` <#${entry.channelId}>` : "";
-      const local = formatAuditVerdict("local", entry.local);
-      const ai = formatAuditVerdict("ai", entry.ai);
-      const verdicts = [local, ai].filter(Boolean).join(" | ") || "no classifier verdict";
-      const result = entry.handled ? "acted" : "cleared";
-      const reviewLabel = entry.review?.label ? ` | label: \`${entry.review.label}\`` : "";
-      return [
-        `- ${when} **${result}** \`${entry.action}\` #${entry.id}${reviewLabel} ${user}${channel}`,
-        `  ${verdicts}`,
-        `  ${trimCommandExcerpt(entry.messageContent)}`
-      ].join("\n");
-    })
-    .join("\n");
-}
-
 function buildCommandsBody() {
   return [
     "## Everyone",
@@ -386,13 +350,13 @@ function buildCommandsBody() {
     "`$set channel <slot> <#channel|channelid>` update a bot channel slot",
     "`$set channel <slot> reset` restore a channel slot default",
     "`$fetch` refresh the KB cache",
-    "`$jarvis` run runtime, KB, link, scam AI, whitelist, lockdown, and security diagnostics",
+    "`$jarvis` run runtime, KB, link, whitelist, lockdown, and security diagnostics",
     "`$testpromax` run the extended diagnostics sweep",
     "`$role all <roleid>` assign a safe role to every human member missing it",
     "`$role <@user|userid> <roleid>` assign a role to one member",
     "`$db` / `$database` inspect the SQLite moderation database",
-    "`$scamaudit` inspect recent scam/trade classifier decisions",
-    "`$scamaudit label <id> <tp|fp|missed|safe|unsure> [note]` label detector outcomes",
+    "`$policy [enable|disable|status]` toggle broad link policy + prohibited commerce (FishFish always on)",
+    "`$emoji top` show top restricted-emoji offenders (7d)",
     "`$whitelist` list manual moderation whitelist users",
     "`$whitelist <user>` exempt a user from message moderation tracking",
     "`$whitelist remove <user>` remove a manual moderation whitelist user",
@@ -449,74 +413,12 @@ async function handleDatabaseCommand(message, {
       `**Daily Channel Rows:** ${snapshot.tableCounts.dailyChannels}`,
       `**Daily Staff Rows:** ${snapshot.tableCounts.dailyStaff}`,
       `**Daily Moderation Rows:** ${snapshot.tableCounts.dailyModeration || 0}`,
-      `**Scam Audit Rows:** ${snapshot.tableCounts.scamDecisionAudit || 0}`,
       `**Open Action Reviews:** ${snapshot.tableCounts.moderationActions || 0}`,
       "**Restricted Reaction Action:** remove reaction + DM warning",
       `**Window Start:** ${snapshot.dailyStats.windowStartedAt ? `<t:${Math.floor(snapshot.dailyStats.windowStartedAt / 1000)}:f>` : "unset"}`,
       `**Restricted Emojis:** ${formatEmojiList(snapshot.emojis)}`,
       `**Manual Whitelist:** ${snapshot.moderationWhitelist?.length || 0}`
     ].join("\n"),
-    color: INFO
-  });
-  return true;
-}
-
-async function handleScamAuditCommand(message, command, {
-  listAudit = listScamDecisionAudit,
-  labelAudit = labelScamDecisionAudit
-} = {}) {
-  if (command.action === "label") {
-    const normalizedLabel = normalizeScamAuditLabel(command.label);
-    if (!normalizedLabel) {
-      await replyWithCommandPanel(message, {
-        header: "Scam Audit Label",
-        body: [
-          "unknown label",
-          "**Usage:** `$scamaudit label <id> <tp|fp|missed|safe|unsure> [note]`"
-        ].join("\n"),
-        color: WARN
-      });
-      return true;
-    }
-
-    const result = await labelAudit({
-      id: command.id,
-      label: normalizedLabel,
-      note: command.note,
-      reviewedBy: message.author?.id || null
-    });
-    if (!result.updated) {
-      await replyWithCommandPanel(message, {
-        header: "Scam Audit Label",
-        body: result.reason === "not_found"
-          ? `no audit row found for id \`${command.id}\``
-          : "could not label that audit row",
-        color: WARN
-      });
-      return true;
-    }
-
-    await replyWithCommandPanel(message, {
-      header: "Scam Audit Labeled",
-      body: [
-        `**Audit ID:** #${result.record.id}`,
-        `**Label:** \`${result.record.review.label}\``,
-        result.record.review.note ? `**Note:** ${trimCommandExcerpt(result.record.review.note, 180)}` : null,
-        `**Action:** \`${result.record.action}\``,
-        `**Message:** ${trimCommandExcerpt(result.record.messageContent, 180)}`
-      ].filter(Boolean).join("\n"),
-      color: SUCCESS
-    });
-    return true;
-  }
-
-  const records = await listAudit({ limit: command.limit });
-  await replyWithCommandPanel(message, {
-    header: "Scam Audit",
-    body: [
-      `**Showing:** ${records.length}/${command.limit}`,
-      formatScamAuditList(records)
-    ].join("\n\n"),
     color: INFO
   });
   return true;
@@ -801,16 +703,49 @@ async function handleSetChannelCommand(message, command, {
 async function handleEmojiCommand(message, command, {
   listEmojis = listRestrictedEmojis,
   addEmoji = addRestrictedEmoji,
-  removeEmoji = removeRestrictedEmojiByKey
+  removeEmoji = removeRestrictedEmojiByKey,
+  topOffenders = listRestrictedEmojiTopOffenders,
+  topUsage = listRestrictedEmojiTopUsage,
+  countSince = getRestrictedEmojiCountSince
 } = {}) {
   if (command.action === "list") {
     const emojis = await listEmojis();
     await replyWithCommandPanel(message, {
       header: "Restricted Emojis",
       body: [
-        "**Action:** remove reaction + DM warning",
+        "**Action:** remove reaction + DM warning · tiered timeouts on repeat",
         `**Count:** ${emojis.length}`,
         `**List:** ${formatEmojiList(emojis)}`
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (command.action === "top") {
+    const limit = command.limit || 10;
+    const sinceMs = 7 * 24 * 60 * 60 * 1000;
+    const [offenders, usage, weekTotal] = await Promise.all([
+      topOffenders({ sinceMs, limit }),
+      topUsage({ sinceMs, limit }),
+      countSince({ sinceMs })
+    ]);
+    const offendersList = offenders.length
+      ? offenders.map((entry, i) => `${i + 1}. <@${entry.userId}> · ${entry.total} hits`).join("\n")
+      : "no offenders in the last 7 days";
+    const usageList = usage.length
+      ? usage.map((entry, i) => `${i + 1}. \`${entry.emojiKey}\` · ${entry.total} hits`).join("\n")
+      : "no restricted emoji usage in the last 7 days";
+    await replyWithCommandPanel(message, {
+      header: "Restricted Emoji Telemetry (7d)",
+      body: [
+        `**Total Strikes (7d):** ${weekTotal}`,
+        "",
+        "**Top Offenders**",
+        offendersList,
+        "",
+        "**Top Restricted Emojis**",
+        usageList
       ].join("\n"),
       color: INFO
     });
@@ -1019,7 +954,7 @@ async function handleWhitelistCommand(message, command, {
       result.added
         ? `added <@${userId}> to the manual moderation whitelist`
         : `<@${userId}> is already on the manual moderation whitelist`,
-      "They will be skipped for links, suspicious-message checks, scam/trade checks, fake-info checks, and raid tracking.",
+      "They will be skipped for link policy + prohibited commerce checks.",
       "Channel lockdown permissions are unchanged.",
       `**Count:** ${users.length}`
     ].join("\n"),
@@ -1111,12 +1046,6 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleWhitelistCommand(message, whitelistCommand, deps);
   }
 
-  const scamAuditCommand = parseScamAuditMessage(message.content);
-  if (scamAuditCommand) {
-    if (!canUseOwnerCommands(message)) return true;
-    return handleScamAuditCommand(message, scamAuditCommand, deps);
-  }
-
   const trustedLinkCommand = parseTrustedLinkMessage(message.content);
   if (trustedLinkCommand) {
     if (!canUseTrustedLinkCommands(message)) return true;
@@ -1151,7 +1080,6 @@ async function maybeHandleControlCommand(message, deps = {}) {
 module.exports = {
   isCommandsListMessage,
   isDatabaseMessage,
-  parseScamAuditMessage,
   parseStateMessage,
   parseSetChannelMessage,
   parseEmojiMessage,

@@ -4,6 +4,10 @@
  * Design rule: every cell is fully visible from frame 0. Animation = a soft
  * scan beam that travels across the grid (highlighting each cell as it passes)
  * and a gentle red bloom pulse on locked cells.
+ *
+ * v2 fix: matches the static lockdownGrid v2 layout — per-cell clip, vertical
+ * stack (name on top, caption below, state tag in top-right corner). No more
+ * horizontal text collision in dense layouts.
  */
 
 const { SURFACE, STATUS, TYPE } = require('../colors');
@@ -24,7 +28,8 @@ function renderLockdownGridAnimated({ channels } = {}) {
   const W = 480;
   const cols = ch.length <= 2 ? 2 : ch.length <= 4 ? 2 : ch.length <= 6 ? 3 : 4;
   const cellW = (W - 32 - 12 * (cols - 1)) / cols;
-  const cellH = 62;
+  // Match static v2: 76px cell height for proper vertical stack breathing room.
+  const cellH = 76;
   const rows = Math.ceil(ch.length / cols);
   const headerH = 36;
   const H = headerH + rows * (cellH + 12) + 8;
@@ -78,39 +83,71 @@ function renderLockdownGridAnimated({ channels } = {}) {
       c.status === 'locked'   ? STATUS.down.hex :
       c.status === 'unlocked' ? STATUS.up.hex   :
                                 SURFACE.textMuted;
+    const caption =
+      c.status === 'locked'   ? 'access closed' :
+      c.status === 'unlocked' ? 'access open'   :
+                                'no change';
+    const stateTag =
+      c.status === 'locked'   ? 'LOCKED'   :
+      c.status === 'unlocked' ? 'UNLOCKED' :
+                                'UNTOUCHED';
 
-    // Card base — always rendered fully.
+    // Per-cell clip so name + tag + bloom can never escape the cell.
     ctx.save();
+    roundRect(ctx, x, y, cellW, cellH, 6);
+    ctx.clip();
+
+    // Card base
     ctx.fillStyle = SURFACE.panelBg;
-    ctx.strokeStyle = c.status === 'untouched' ? SURFACE.panelBorder : tone + '88';
-    ctx.lineWidth = 1;
-    roundRect(ctx, x, y, cellW, cellH, 6); ctx.fill(); ctx.stroke();
+    ctx.fillRect(x, y, cellW, cellH);
     if (c.status !== 'untouched') {
       ctx.fillStyle = tone + '14';
-      roundRect(ctx, x, y, cellW, cellH, 6); ctx.fill();
+      ctx.fillRect(x, y, cellW, cellH);
     }
-    ctx.restore();
 
     // Locked cells get a continuous breathing bloom.
     if (c.status === 'locked') {
-      // Phase per-cell so the row doesn't pulse in lockstep.
       const phase = t * Math.PI * 2 + i * 0.6;
       const pulse = (Math.sin(phase) + 1) / 2;
-      const bloomR = 26 + pulse * 6;
+      const bloomR = 28 + pulse * 8;
       const bcx = x + cellW / 2;
       const bcy = y + cellH / 2;
-      ctx.save();
       const halo = ctx.createRadialGradient(bcx, bcy, 0, bcx, bcy, bloomR);
-      halo.addColorStop(0, tone + Math.floor(40 + pulse * 40).toString(16).padStart(2, '0'));
+      const alphaHex = Math.floor(36 + pulse * 36).toString(16).padStart(2, '0');
+      halo.addColorStop(0, tone + alphaHex);
       halo.addColorStop(1, tone + '00');
+      ctx.save();
       ctx.globalCompositeOperation = 'screen';
       ctx.fillStyle = halo;
       ctx.beginPath(); ctx.arc(bcx, bcy, bloomR, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
 
-    // Lock glyph.
-    const glyphX = x + 12, glyphY = y + 14;
+    // Top-right state tag (mini pill, separate row from the name).
+    {
+      const tagFont = 'bold 8px ' + TYPE.mono;
+      ctx.save();
+      ctx.font = tagFont;
+      ctx.textAlign = 'left';
+      const tagW = ctx.measureText(stateTag).width + 12;
+      const tagH = 14;
+      const tagX = x + cellW - tagW - 10;
+      const tagY = y + 10;
+      ctx.fillStyle = tone + '26';
+      ctx.strokeStyle = tone + 'aa';
+      ctx.lineWidth = 1;
+      roundRect(ctx, tagX, tagY, tagW, tagH, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = tone;
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '1.0px';
+      ctx.fillText(stateTag, tagX + 6, tagY + 10);
+      ctx.restore();
+    }
+
+    // Lock glyph (vertically aligned with the name row, not the tag row).
+    const glyphX = x + 14;
+    const glyphY = y + 32;
     ctx.save();
     ctx.translate(glyphX, glyphY);
     ctx.fillStyle = tone;
@@ -135,32 +172,35 @@ function renderLockdownGridAnimated({ channels } = {}) {
     }
     ctx.restore();
 
-    // Channel name.
+    // Row 1: channel name.
     ctx.save();
-    ctx.font = 'bold 12px ' + TYPE.mono;
-    ctx.fillStyle = SURFACE.text;
-    const textBudget = cellW - 36 - 12;
-    const nameStr = fitText(ctx, '#' + c.name, textBudget);
-    ctx.fillText(nameStr, x + 36, y + 24);
+    ctx.font = 'bold 13px ' + TYPE.mono;
+    ctx.fillStyle = c.status === 'untouched' ? SURFACE.text : tone;
+    ctx.textAlign = 'left';
+    const nameBudget = cellW - 32 - 12;
+    const nameStr = fitText(ctx, '#' + c.name, nameBudget);
+    ctx.fillText(nameStr, x + 34, y + 42);
+    ctx.restore();
 
-    // State pill.
-    const pillText =
-      c.status === 'locked'   ? 'LOCKED'   :
-      c.status === 'unlocked' ? 'UNLOCKED' :
-                                'UNTOUCHED';
-    ctx.font = 'bold 8.5px ' + TYPE.mono;
-    const pillW = ctx.measureText(pillText).width + 12;
-    const pillH = 14;
-    const pillX = x + 36;
-    const pillY = y + 32;
-    ctx.fillStyle = tone + '22';
-    ctx.strokeStyle = tone;
+    // Row 2: caption (dim, full clearance below the name).
+    ctx.save();
+    ctx.font = '500 10px ' + TYPE.mono;
+    ctx.fillStyle = SURFACE.textDim;
+    ctx.textAlign = 'left';
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0.4px';
+    const captionBudget = cellW - 34 - 12;
+    const captionStr = fitText(ctx, caption, captionBudget);
+    ctx.fillText(captionStr, x + 34, y + 60);
+    ctx.restore();
+
+    ctx.restore(); // unclip
+
+    // Border on top of clip boundary.
+    ctx.save();
+    ctx.strokeStyle = c.status === 'untouched' ? SURFACE.panelBorder : tone + '88';
     ctx.lineWidth = 1;
-    roundRect(ctx, pillX, pillY, pillW, pillH, 3); ctx.fill();
-
-    ctx.fillStyle = tone;
-    if ('letterSpacing' in ctx) ctx.letterSpacing = '1.2px';
-    ctx.fillText(pillText, pillX + 6, pillY + 10);
+    roundRect(ctx, x, y, cellW, cellH, 6);
+    ctx.stroke();
     ctx.restore();
   }
 

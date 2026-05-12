@@ -1,30 +1,11 @@
 const { PermissionFlagsBits } = require("discord.js");
 const {
   LINK_MODERATION_TIMEOUT_MS,
-  SUSPICIOUS_ALERT_WINDOW_MS,
-  SUSPICIOUS_TIMEOUT_THRESHOLD,
-  SUSPICIOUS_TIMEOUT_MS,
-  SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD,
-  SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS,
-  SELLING_CONFIDENCE_TIMEOUT_THRESHOLD,
-  SELLING_CONFIDENCE_TIMEOUT_TIERS,
-  SELLING_LOW_CONFIDENCE_THRESHOLD,
-  SELLING_REPEAT_WINDOW_MS,
-  SELLING_REPEAT_TIMEOUT_THRESHOLD,
-  SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD,
-  SELLING_TIMEOUT_MS,
   ENABLE_GUILD_MEMBER_EVENTS,
-  GEMINI_API_KEY,
-  GEMINI_SCAM_CACHE_MS,
-  GEMINI_SCAM_FAILURE_COOLDOWN_MS,
-  GEMINI_SCAM_MIN_INTERVAL_MS,
-  GEMINI_SCAM_MODEL,
-  GEMINI_SCAM_TIMEOUT_MS,
   FISHFISH_API_BASE_URL,
   GOOGLE_SAFE_BROWSING_API_KEY,
   GOOGLE_WEB_RISK_API_KEY,
   PHISHTANK_API_KEY,
-  SCAM_PULSE_TIMEOUT_MS,
   VIRUSTOTAL_API_KEY
 } = require("./config");
 const {
@@ -231,9 +212,6 @@ function buildRuntimeSection(message) {
 }
 
 function buildModerationGuardLines() {
-  const sellingTierText = (SELLING_CONFIDENCE_TIMEOUT_TIERS || [])
-    .map((tier) => `>${tier.threshold}% ${formatDuration(tier.timeoutMs)}`)
-    .join(", ");
   return [
     [
       "**Link Guard:**",
@@ -242,31 +220,8 @@ function buildModerationGuardLines() {
       "shorteners/invites warn;",
       `file hosts, homoglyphs, masked links, and malware files timeout ${formatDuration(LINK_MODERATION_TIMEOUT_MS)}`
     ].join(" "),
-    "**Fake Info Alerts:** retired from public/log moderation; status questions still use runtime status replies",
-    [
-      "**Suspicious Alerts:**",
-      `timeout at ${SUSPICIOUS_TIMEOUT_THRESHOLD} in ${formatDuration(SUSPICIOUS_ALERT_WINDOW_MS)}`,
-      `timeout ${formatDuration(SUSPICIOUS_TIMEOUT_MS)}`,
-      `or confidence > ${SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_THRESHOLD}% timeout ${formatDuration(SUSPICIOUS_HIGH_CONFIDENCE_TIMEOUT_MS)}`
-    ].join(" "),
-    "**Suspicious Rules:** private DM steering, credential/2FA asks, cracked/leaked/free premium, accidental-report scams, QR/OAuth steering, paste/run/download prompts",
-    [
-      "**Scam/Trade Guard:**",
-      "context-first prefilter checks the target user's last 5 messages plus per-message reply context;",
-      "message edits are re-scanned through the same moderation watcher;",
-      "local Kicia policy + Naive Bayes classifier handles confident cases before remote AI;",
-      GEMINI_API_KEY
-        ? `Gemini ${GEMINI_SCAM_MODEL} handles borderline cases;`
-        : "Gemini fallback optional/off, local detection remains active;",
-      `AI cache ${formatDuration(GEMINI_SCAM_CACHE_MS)};`,
-      `local AI gap ${formatDuration(GEMINI_SCAM_MIN_INTERVAL_MS)};`,
-      `remote AI failure cooldown ${formatDuration(GEMINI_SCAM_FAILURE_COOLDOWN_MS)};`,
-      `API timeout ${formatDuration(GEMINI_SCAM_TIMEOUT_MS)};`,
-      `confirmed confidence ladder ${sellingTierText || `>${SELLING_CONFIDENCE_TIMEOUT_THRESHOLD}%`};`,
-      `repeat fallback ${SELLING_REPEAT_TIMEOUT_THRESHOLD} hits in ${formatDuration(SELLING_REPEAT_WINDOW_MS)}`,
-      `(${SELLING_LOW_CONFIDENCE_REPEAT_TIMEOUT_THRESHOLD} hits if confidence < ${SELLING_LOW_CONFIDENCE_THRESHOLD}%)`,
-      `repeat timeout ${formatDuration(SELLING_TIMEOUT_MS)}`
-    ].join(" ")
+    "**Prohibited Commerce:** drug/weapon/illegal-service sales are timed out and logged. Toggle with `$policy enable|disable`.",
+    "**Restricted Reactions:** restricted emoji reactions on staff messages are removed and the user is DM'd. Tiered timeouts on repeat (3 in 30s → 5min, 5 in 60s → 30min, 8 in 5min → staff flag)."
   ];
 }
 
@@ -276,8 +231,7 @@ function buildIntelligenceGuardLines() {
     ? `${pulse.domains} domains / ${pulse.urls} URLs cached`
     : "cache pending";
   return [
-    `**Scam Pulse:** FishFish URL/domain checks enabled (${FISHFISH_API_BASE_URL}); ${pulseCache}; verified pulse hits timeout ${formatDuration(SCAM_PULSE_TIMEOUT_MS)}; PhishTank ${PHISHTANK_API_KEY ? "enabled" : "optional/off"}`,
-    `**Gemini Scam AI:** ${GEMINI_API_KEY ? `enabled (${GEMINI_SCAM_MODEL})` : "optional/off, local-only fallback active"}`,
+    `**Threat Feed:** FishFish URL/domain checks enabled (${FISHFISH_API_BASE_URL}); ${pulseCache}; PhishTank ${PHISHTANK_API_KEY ? "enabled" : "optional/off"}`,
     `**Safe Browsing:** ${GOOGLE_SAFE_BROWSING_API_KEY ? "enabled" : "optional/off"}`,
     `**Google Web Risk:** ${GOOGLE_WEB_RISK_API_KEY ? "enabled" : "optional/off"}`,
     `**VirusTotal:** ${VIRUSTOTAL_API_KEY ? "enabled" : "optional/off"}`
@@ -506,7 +460,7 @@ async function runJarvisDiagnostics(message, {
   const kbSection = await buildKbSection(refreshKb);
   await pace(3);
 
-  await progress(3, "cross-checking false-info, suspicious, scam/trade, and link guard policy");
+  await progress(3, "cross-checking link guard, threat feeds, and commerce policy");
   await pace(4);
 
   await progress(4, "checking log channels, emoji db, daily tracking, no-response channels, and lockdown targets");

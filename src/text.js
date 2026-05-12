@@ -393,8 +393,20 @@ function escapeRegExp(value) {
 
 function containsPhrase(normalizedText, normalizedPhrase) {
   if (!normalizedText || !normalizedPhrase) return false;
+  // Strict word-boundary match first.
   const re = new RegExp(`(?:^| )${escapeRegExp(normalizedPhrase)}(?:$| )`, "i");
-  return re.test(normalizedText);
+  if (re.test(normalizedText)) return true;
+
+  // Fallback: compact-form substring match — handles concatenated typos like
+  // "yub x" → "yubx" in "yubxinject", or "fails to inject" → "failstoinject"
+  // in "myfailstoinjectplease". Only kicks in for multi-character phrases to
+  // avoid false matches on common letters.
+  const compactPhrase = normalizedPhrase.replace(/\s+/g, "");
+  if (compactPhrase.length >= 4) {
+    const compactText = normalizedText.replace(/\s+/g, "");
+    if (compactText.includes(compactPhrase)) return true;
+  }
+  return false;
 }
 
 function isEditDistanceAtMost(a, b, maxEdits = 1) {

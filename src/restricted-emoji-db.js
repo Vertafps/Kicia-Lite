@@ -229,40 +229,6 @@ function createSchema(db) {
       created_by TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS scam_decision_audit (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at INTEGER NOT NULL,
-      guild_id TEXT,
-      channel_id TEXT,
-      message_id TEXT,
-      user_id TEXT,
-      action TEXT NOT NULL,
-      handled INTEGER NOT NULL DEFAULT 0,
-      candidate_reason TEXT,
-      candidate_confidence INTEGER,
-      local_verdict TEXT,
-      local_answer TEXT,
-      local_model TEXT,
-      local_reason TEXT,
-      local_confidence INTEGER,
-      local_score REAL,
-      ai_verdict TEXT,
-      ai_answer TEXT,
-      ai_model TEXT,
-      ai_skipped TEXT,
-      ai_error TEXT,
-      message_content TEXT,
-      reply_content TEXT,
-      recent_messages_json TEXT,
-      review_label TEXT,
-      review_note TEXT,
-      reviewed_by TEXT,
-      reviewed_at INTEGER
-    );
-
-    CREATE INDEX IF NOT EXISTS scam_decision_audit_created_idx
-      ON scam_decision_audit (created_at DESC, id DESC);
-
     CREATE TABLE IF NOT EXISTS moderation_actions (
       id TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL,
@@ -337,18 +303,37 @@ function createSchema(db) {
   try {
     db.exec("ALTER TABLE moderation_actions ADD COLUMN recent_messages_json TEXT;");
   } catch {}
+
+  // Migration: drop the old scam_decision_audit table from pre-v2 databases.
+  // Scam detection has been removed entirely; the table is no longer used.
   try {
-    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN review_label TEXT;");
+    db.exec("DROP TABLE IF EXISTS scam_decision_audit;");
   } catch {}
-  try {
-    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN review_note TEXT;");
-  } catch {}
-  try {
-    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN reviewed_by TEXT;");
-  } catch {}
-  try {
-    db.exec("ALTER TABLE scam_decision_audit ADD COLUMN reviewed_at INTEGER;");
-  } catch {}
+
+  // Migration: ensure new feature tables exist.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS restricted_emoji_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      emoji_key TEXT NOT NULL,
+      channel_id TEXT,
+      occurred_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS restricted_emoji_usage_user_idx
+      ON restricted_emoji_usage (user_id, occurred_at DESC);
+
+    CREATE INDEX IF NOT EXISTS restricted_emoji_usage_occurred_idx
+      ON restricted_emoji_usage (occurred_at DESC);
+
+    CREATE TABLE IF NOT EXISTS emoji_spam_state (
+      user_id TEXT PRIMARY KEY,
+      window_start INTEGER NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      last_action_tier INTEGER NOT NULL DEFAULT 0,
+      last_action_at INTEGER NOT NULL DEFAULT 0
+    );
+  `);
 }
 
 function getScalarValue(db, sql, params = []) {
@@ -512,83 +497,8 @@ function mapAuditVerdict(value) {
   return undefined;
 }
 
-const SCAM_AUDIT_LABELS = new Map([
-  ["tp", "true_positive"],
-  ["true", "true_positive"],
-  ["true_positive", "true_positive"],
-  ["hit", "true_positive"],
-  ["correct", "true_positive"],
-  ["fp", "false_positive"],
-  ["false", "false_positive"],
-  ["false_positive", "false_positive"],
-  ["wrong", "false_positive"],
-  ["miss", "missed"],
-  ["missed", "missed"],
-  ["fn", "missed"],
-  ["false_negative", "missed"],
-  ["safe", "safe"],
-  ["clean", "safe"],
-  ["ok", "safe"],
-  ["unsure", "unsure"],
-  ["unknown", "unsure"],
-  ["context", "unsure"]
-]);
-
-function normalizeScamAuditLabel(value) {
-  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return SCAM_AUDIT_LABELS.get(normalized) || null;
-}
-
-function mapScamDecisionAuditRow(row) {
-  let recentMessages = [];
-  try {
-    const parsed = JSON.parse(row.recent_messages_json || "[]");
-    recentMessages = Array.isArray(parsed) ? parsed.map((entry) => String(entry || "")) : [];
-  } catch {}
-
-  return {
-    id: Number(row.id || 0),
-    createdAt: Number(row.created_at || 0),
-    guildId: row.guild_id ? String(row.guild_id) : null,
-    channelId: row.channel_id ? String(row.channel_id) : null,
-    messageId: row.message_id ? String(row.message_id) : null,
-    userId: row.user_id ? String(row.user_id) : null,
-    action: String(row.action || "unknown"),
-    handled: Boolean(row.handled),
-    candidate: {
-      reason: row.candidate_reason ? String(row.candidate_reason) : null,
-      confidence: row.candidate_confidence === null || row.candidate_confidence === undefined
-        ? null
-        : Number(row.candidate_confidence)
-    },
-    local: {
-      verdict: mapAuditVerdict(row.local_verdict),
-      answer: row.local_answer ? String(row.local_answer) : null,
-      model: row.local_model ? String(row.local_model) : null,
-      reason: row.local_reason ? String(row.local_reason) : null,
-      confidence: row.local_confidence === null || row.local_confidence === undefined
-        ? null
-        : Number(row.local_confidence),
-      score: row.local_score === null || row.local_score === undefined ? null : Number(row.local_score)
-    },
-    ai: {
-      verdict: mapAuditVerdict(row.ai_verdict),
-      answer: row.ai_answer ? String(row.ai_answer) : null,
-      model: row.ai_model ? String(row.ai_model) : null,
-      skipped: row.ai_skipped ? String(row.ai_skipped) : null,
-      error: row.ai_error ? String(row.ai_error) : null
-    },
-    messageContent: row.message_content ? String(row.message_content) : "",
-    replyContent: row.reply_content ? String(row.reply_content) : "",
-    recentMessages,
-    review: {
-      label: row.review_label ? String(row.review_label) : null,
-      note: row.review_note ? String(row.review_note) : "",
-      reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
-      reviewedAt: row.reviewed_at ? Number(row.reviewed_at) : null
-    }
-  };
-}
+// Scam audit table + helpers removed — see scam_decision_audit DROP migration
+// in createSchema().
 
 function mapModerationActionRow(row) {
   let reasons = [];
@@ -728,7 +638,6 @@ async function setEmojiTimeoutMs(durationMs) {
   return normalized;
 }
 
-const SCAM_DETECTION_ENABLED_KEY = "scam_detection_enabled";
 const POLICY_ENFORCEMENT_ENABLED_KEY = "policy_enforcement_enabled";
 
 function readBooleanAppConfig(db, key, defaultValue) {
@@ -736,17 +645,6 @@ function readBooleanAppConfig(db, key, defaultValue) {
   if (stored == null || stored === "") return defaultValue;
   const value = String(stored).toLowerCase();
   return value === "1" || value === "true" || value === "on" || value === "yes";
-}
-
-async function getScamDetectionEnabled() {
-  const db = await getDatabase();
-  return readBooleanAppConfig(db, SCAM_DETECTION_ENABLED_KEY, true);
-}
-
-async function setScamDetectionEnabled(enabled) {
-  const db = await getDatabase();
-  setAppConfigValue(db, SCAM_DETECTION_ENABLED_KEY, enabled ? "1" : "0", { immediate: true });
-  return Boolean(enabled);
 }
 
 async function getPolicyEnforcementEnabled() {
@@ -853,6 +751,161 @@ async function listRestrictedEmojis() {
       ORDER BY created_at ASC, key ASC
     `
   ).map(mapEmojiRow);
+}
+
+// ── Restricted emoji telemetry + spam escalation ─────────────────────────────
+
+async function recordRestrictedEmojiUsage({ userId, emojiKey, channelId = null, occurredAt = Date.now() } = {}) {
+  if (!userId || !emojiKey) return false;
+  const db = await getDatabase();
+  db.run(
+    `
+      INSERT INTO restricted_emoji_usage (user_id, emoji_key, channel_id, occurred_at)
+      VALUES (?, ?, ?, ?)
+    `,
+    [
+      String(userId),
+      String(emojiKey),
+      channelId ? String(channelId) : null,
+      Math.max(1, Math.round(Number(occurredAt) || Date.now()))
+    ]
+  );
+  schedulePersist(db);
+  return true;
+}
+
+async function listRestrictedEmojiTopOffenders({ sinceMs = 7 * 24 * 60 * 60 * 1000, limit = 10, now = Date.now() } = {}) {
+  const db = await getDatabase();
+  const since = Math.max(1, Math.round(now - sinceMs));
+  return getRows(
+    db,
+    `
+      SELECT user_id, COUNT(*) AS total
+      FROM restricted_emoji_usage
+      WHERE occurred_at >= ?
+      GROUP BY user_id
+      ORDER BY total DESC
+      LIMIT ?
+    `,
+    [since, Math.max(1, Math.min(50, Math.round(Number(limit) || 10)))]
+  ).map((row) => ({ userId: String(row.user_id), total: Number(row.total || 0) }));
+}
+
+async function listRestrictedEmojiTopUsage({ sinceMs = 7 * 24 * 60 * 60 * 1000, limit = 10, now = Date.now() } = {}) {
+  const db = await getDatabase();
+  const since = Math.max(1, Math.round(now - sinceMs));
+  return getRows(
+    db,
+    `
+      SELECT emoji_key, COUNT(*) AS total
+      FROM restricted_emoji_usage
+      WHERE occurred_at >= ?
+      GROUP BY emoji_key
+      ORDER BY total DESC
+      LIMIT ?
+    `,
+    [since, Math.max(1, Math.min(50, Math.round(Number(limit) || 10)))]
+  ).map((row) => ({ emojiKey: String(row.emoji_key), total: Number(row.total || 0) }));
+}
+
+async function getRestrictedEmojiCountSince({ sinceMs = 7 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+  const db = await getDatabase();
+  const since = Math.max(1, Math.round(now - sinceMs));
+  return Number(
+    getScalarValue(
+      db,
+      "SELECT COUNT(*) FROM restricted_emoji_usage WHERE occurred_at >= ?",
+      [since]
+    ) || 0
+  );
+}
+
+/**
+ * Bump per-user emoji-spam state and return any escalation tier triggered.
+ *
+ * Tiers (configurable via EMOJI_SPAM_TIER*_* env):
+ *   tier 1 — 3 in 30s   → 5-minute timeout
+ *   tier 2 — 5 in 60s   → 30-minute timeout
+ *   tier 3 — 8 in 5min  → staff manual-review flag (no auto-timeout)
+ *
+ * State columns:
+ *   window_start    — start of the rolling tier-3 window
+ *   count           — events since window_start
+ *   last_action_tier— max tier triggered in this window (so we don't double-fire)
+ *   last_action_at  — when the last action was taken
+ *
+ * Returns: { tier: 1|2|3|0, count, windowMs }
+ */
+async function bumpEmojiSpamState({
+  userId,
+  now = Date.now(),
+  tier1Window,
+  tier1Count,
+  tier2Window,
+  tier2Count,
+  tier3Window,
+  tier3Count
+} = {}) {
+  if (!userId) return { tier: 0, count: 0 };
+
+  const t1Win = Math.max(5_000, Number(tier1Window) || 30_000);
+  const t1Cnt = Math.max(2, Number(tier1Count) || 3);
+  const t2Win = Math.max(t1Win, Number(tier2Window) || 60_000);
+  const t2Cnt = Math.max(t1Cnt + 1, Number(tier2Count) || 5);
+  const t3Win = Math.max(t2Win, Number(tier3Window) || 5 * 60 * 1000);
+  const t3Cnt = Math.max(t2Cnt + 1, Number(tier3Count) || 8);
+
+  const db = await getDatabase();
+  const existing = getRows(
+    db,
+    "SELECT user_id, window_start, count, last_action_tier, last_action_at FROM emoji_spam_state WHERE user_id = ? LIMIT 1",
+    [String(userId)]
+  )[0];
+
+  const windowStart = existing && (now - Number(existing.window_start || 0)) < t3Win
+    ? Number(existing.window_start)
+    : now;
+  const previousTier = existing && windowStart === Number(existing.window_start)
+    ? Number(existing.last_action_tier || 0)
+    : 0;
+  const previousCount = existing && windowStart === Number(existing.window_start)
+    ? Number(existing.count || 0)
+    : 0;
+  const count = previousCount + 1;
+
+  // Determine the highest tier triggered in this bump (only fire each tier once
+  // per rolling window).
+  let tier = 0;
+  if (previousTier < 3 && count >= t3Cnt && (now - windowStart) < t3Win) tier = 3;
+  else if (previousTier < 2 && count >= t2Cnt && (now - windowStart) < t2Win) tier = 2;
+  else if (previousTier < 1 && count >= t1Cnt && (now - windowStart) < t1Win) tier = 1;
+
+  const lastActionTier = Math.max(previousTier, tier);
+  const lastActionAt = tier > previousTier ? now : Number(existing?.last_action_at || 0);
+
+  db.run(
+    `
+      INSERT INTO emoji_spam_state (user_id, window_start, count, last_action_tier, last_action_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        window_start = excluded.window_start,
+        count = excluded.count,
+        last_action_tier = excluded.last_action_tier,
+        last_action_at = excluded.last_action_at
+    `,
+    [String(userId), windowStart, count, lastActionTier, lastActionAt]
+  );
+  schedulePersist(db);
+
+  return { tier, count, windowStart };
+}
+
+async function cleanupExpiredEmojiSpamState({ olderThanMs = 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+  const db = await getDatabase();
+  const cutoff = Math.max(1, Math.round(now - olderThanMs));
+  db.run("DELETE FROM emoji_spam_state WHERE window_start < ?", [cutoff]);
+  schedulePersist(db);
+  return true;
 }
 
 async function addRestrictedEmoji(emojiRecord) {
@@ -1278,263 +1331,6 @@ function normalizeAuditAnswer(result) {
 function normalizeAuditNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-async function recordScamDecisionAudit(record = {}) {
-  const db = await getDatabase();
-  const local = record.local || null;
-  const ai = record.ai || null;
-  const recentMessages = Array.isArray(record.recentMessages)
-    ? record.recentMessages.slice(-3).map((entry) => trimAuditText(entry, 240)).filter(Boolean)
-    : [];
-
-  db.run(
-    `
-      INSERT INTO scam_decision_audit (
-        created_at,
-        guild_id,
-        channel_id,
-        message_id,
-        user_id,
-        action,
-        handled,
-        candidate_reason,
-        candidate_confidence,
-        local_verdict,
-        local_answer,
-        local_model,
-        local_reason,
-        local_confidence,
-        local_score,
-        ai_verdict,
-        ai_answer,
-        ai_model,
-        ai_skipped,
-        ai_error,
-        message_content,
-        reply_content,
-        recent_messages_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      Math.max(1, Math.round(Number(record.createdAt) || Date.now())),
-      record.guildId ? String(record.guildId) : null,
-      record.channelId ? String(record.channelId) : null,
-      record.messageId ? String(record.messageId) : null,
-      record.userId ? String(record.userId) : null,
-      trimAuditText(record.action || "unknown", 80) || "unknown",
-      record.handled ? 1 : 0,
-      trimAuditText(record.candidateReason, 300) || null,
-      normalizeAuditNumber(record.candidateConfidence),
-      normalizeAuditVerdict(local),
-      normalizeAuditAnswer(local),
-      local?.model ? trimAuditText(local.model, 120) : null,
-      local?.reason ? trimAuditText(local.reason, 300) : null,
-      normalizeAuditNumber(local?.confidence),
-      normalizeAuditNumber(local?.score),
-      normalizeAuditVerdict(ai),
-      normalizeAuditAnswer(ai),
-      ai?.model ? trimAuditText(ai.model, 120) : null,
-      ai?.skipped ? trimAuditText(ai.skipped, 120) : null,
-      ai?.error ? trimAuditText(ai.error, 300) : null,
-      trimAuditText(record.messageContent, 900) || null,
-      trimAuditText(record.replyContent, 900) || null,
-      JSON.stringify(recentMessages)
-    ]
-  );
-  schedulePersist(db);
-  const insertedId = getScalarValue(db, "SELECT last_insert_rowid()");
-  return { id: Number(insertedId || 0) };
-}
-
-async function listScamDecisionAudit({ limit = 10, labeledOnly = false } = {}) {
-  const maxLimit = labeledOnly ? 1000 : 25;
-  const safeLimit = Math.min(maxLimit, Math.max(1, Math.round(Number(limit) || 10)));
-  const db = await getDatabase();
-  return getRows(
-    db,
-    `
-      SELECT
-        id,
-        created_at,
-        guild_id,
-        channel_id,
-        message_id,
-        user_id,
-        action,
-        handled,
-        candidate_reason,
-        candidate_confidence,
-        local_verdict,
-        local_answer,
-        local_model,
-        local_reason,
-        local_confidence,
-        local_score,
-        ai_verdict,
-        ai_answer,
-        ai_model,
-        ai_skipped,
-        ai_error,
-        message_content,
-        reply_content,
-        recent_messages_json,
-        review_label,
-        review_note,
-        reviewed_by,
-        reviewed_at
-      FROM scam_decision_audit
-      ${labeledOnly ? "WHERE review_label IS NOT NULL AND review_label != ''" : ""}
-      ORDER BY created_at DESC, id DESC
-      LIMIT ?
-    `,
-    [safeLimit]
-  ).map(mapScamDecisionAuditRow);
-}
-
-async function labelScamDecisionAudit({
-  id,
-  label,
-  reviewedBy = null,
-  note = "",
-  reviewedAt = Date.now()
-} = {}) {
-  const normalizedId = Math.max(1, Math.round(Number(id) || 0));
-  const normalizedLabel = normalizeScamAuditLabel(label);
-  if (!normalizedId || !normalizedLabel) {
-    return {
-      updated: false,
-      reason: "invalid_label",
-      record: null,
-      label: normalizedLabel
-    };
-  }
-
-  const db = await getDatabase();
-  const existing = getRows(
-    db,
-    `
-      SELECT
-        id,
-        created_at,
-        guild_id,
-        channel_id,
-        message_id,
-        user_id,
-        action,
-        handled,
-        candidate_reason,
-        candidate_confidence,
-        local_verdict,
-        local_answer,
-        local_model,
-        local_reason,
-        local_confidence,
-        local_score,
-        ai_verdict,
-        ai_answer,
-        ai_model,
-        ai_skipped,
-        ai_error,
-        message_content,
-        reply_content,
-        recent_messages_json,
-        review_label,
-        review_note,
-        reviewed_by,
-        reviewed_at
-      FROM scam_decision_audit
-      WHERE id = ?
-      LIMIT 1
-    `,
-    [normalizedId]
-  )[0];
-
-  if (!existing) {
-    return {
-      updated: false,
-      reason: "not_found",
-      record: null,
-      label: normalizedLabel
-    };
-  }
-
-  db.run(
-    `
-      UPDATE scam_decision_audit
-      SET review_label = ?,
-          review_note = ?,
-          reviewed_by = ?,
-          reviewed_at = ?
-      WHERE id = ?
-    `,
-    [
-      normalizedLabel,
-      trimAuditText(note, 300) || null,
-      reviewedBy ? String(reviewedBy) : null,
-      Math.max(1, Math.round(Number(reviewedAt) || Date.now())),
-      normalizedId
-    ]
-  );
-  schedulePersist(db, { immediate: true });
-
-  const record = getRows(
-    db,
-    `
-      SELECT
-        id,
-        created_at,
-        guild_id,
-        channel_id,
-        message_id,
-        user_id,
-        action,
-        handled,
-        candidate_reason,
-        candidate_confidence,
-        local_verdict,
-        local_answer,
-        local_model,
-        local_reason,
-        local_confidence,
-        local_score,
-        ai_verdict,
-        ai_answer,
-        ai_model,
-        ai_skipped,
-        ai_error,
-        message_content,
-        reply_content,
-        recent_messages_json,
-        review_label,
-        review_note,
-        reviewed_by,
-        reviewed_at
-      FROM scam_decision_audit
-      WHERE id = ?
-      LIMIT 1
-    `,
-    [normalizedId]
-  )[0];
-
-  return {
-    updated: true,
-    reason: "updated",
-    record: mapScamDecisionAuditRow(record),
-    label: normalizedLabel,
-    previousLabel: existing.review_label ? String(existing.review_label) : null
-  };
-}
-
-async function clearScamDecisionAudit() {
-  const db = await getDatabase();
-  db.run("DELETE FROM scam_decision_audit");
-  schedulePersist(db, { immediate: true });
-  return true;
-}
-
-async function clearScamDecisionAuditForTests() {
-  return clearScamDecisionAudit();
 }
 
 function buildModerationActionId() {
@@ -2161,7 +1957,7 @@ async function getRestrictedEmojiDatabaseSnapshot() {
       dailyHours: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_hour_message_stats") || 0),
       dailyStaff: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_staff_message_stats") || 0),
       dailyModeration: Number(getScalarValue(db, "SELECT COUNT(*) FROM daily_moderation_stats") || 0),
-      scamDecisionAudit: Number(getScalarValue(db, "SELECT COUNT(*) FROM scam_decision_audit") || 0),
+      restrictedEmojiUsage: Number(getScalarValue(db, "SELECT COUNT(*) FROM restricted_emoji_usage") || 0),
       moderationActions: Number(getScalarValue(db, "SELECT COUNT(*) FROM moderation_actions") || 0)
     }
   };
@@ -2199,8 +1995,6 @@ module.exports = {
   getBotPresenceState,
   setBotPresenceState,
   resetBotPresenceState,
-  getScamDetectionEnabled,
-  setScamDetectionEnabled,
   getPolicyEnforcementEnabled,
   setPolicyEnforcementEnabled,
   hydrateChannelSettings,
@@ -2213,6 +2007,12 @@ module.exports = {
   listRestrictedEmojis,
   addRestrictedEmoji,
   removeRestrictedEmojiByKey,
+  recordRestrictedEmojiUsage,
+  listRestrictedEmojiTopOffenders,
+  listRestrictedEmojiTopUsage,
+  getRestrictedEmojiCountSince,
+  bumpEmojiSpamState,
+  cleanupExpiredEmojiSpamState,
   listTrustedLinks,
   addTrustedLink,
   removeTrustedLinkByKey,
@@ -2223,12 +2023,6 @@ module.exports = {
   listNicknamePatterns,
   addNicknamePattern,
   removeNicknamePatternById,
-  normalizeScamAuditLabel,
-  recordScamDecisionAudit,
-  listScamDecisionAudit,
-  labelScamDecisionAudit,
-  clearScamDecisionAudit,
-  clearScamDecisionAuditForTests,
   cleanupExpiredModerationActions,
   deleteModerationAction,
   getModerationAction,

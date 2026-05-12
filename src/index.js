@@ -27,8 +27,8 @@ const { maybeHandleRoleCommand } = require("./handlers/role-assignment");
 const { maybeHandleRestrictedReactionAdd } = require("./handlers/restricted-reactions");
 const { maybeHandleStatusCommand } = require("./handlers/status");
 const { maybeHandleOutageReviewInteraction } = require("./handlers/outage-review");
-const { maybeHandleScamReviewInteraction } = require("./handlers/scam-review");
 const { maybeHandleSweepReviewInteraction } = require("./handlers/sweep-review");
+const { maybeHandleGhostPing, recordGhostPingCandidate } = require("./handlers/ghost-ping");
 const {
   hydratePendingOutageReviews,
   maybeHandleOutageDetection
@@ -48,9 +48,10 @@ const {
   recordStatusTransition,
   getPersistedRuntimeStatus
 } = require("./restricted-emoji-db");
-const { loadOrBuildCache: loadScamEmbedCache } = require("./scam-embeddings-classifier");
+const { preloadEmbedder } = require("./embeddings");
 const { loadOrBuildKbCache } = require("./kb-embeddings");
 const { safeReply } = require("./utils/respond");
+const { startStatusWidgetScheduler, refreshStatusWidget } = require("./handlers/status-widget");
 
 enableStatusPersistence({
   recordStatusTransition,
@@ -143,10 +144,10 @@ async function sendClientLogPanel(readyClient, panel) {
   return sent;
 }
 
-function buildScamPulseRefreshPanel({ pulse, initial = false, error = null }) {
+function buildThreatFeedRefreshPanel({ pulse, initial = false, error = null }) {
   if (error) {
     return {
-      header: "Scam Pulse Refresh Failed",
+      header: "Threat Feed Refresh Failed",
       body: [
         "FishFish global URL/domain cache refresh failed; existing cached entries remain in memory until the next successful refresh.",
         `**Error:** ${error}`
@@ -156,7 +157,7 @@ function buildScamPulseRefreshPanel({ pulse, initial = false, error = null }) {
   }
 
   return {
-    header: initial ? "Scam Pulse Primed" : "Scam Pulse Refreshed",
+    header: initial ? "Threat Feed Primed" : "Threat Feed Refreshed",
     body: [
       "FishFish global phishing/malware feed refreshed.",
       `**Domains Cached:** ${pulse.domains}`,
@@ -168,17 +169,17 @@ function buildScamPulseRefreshPanel({ pulse, initial = false, error = null }) {
   };
 }
 
-async function refreshAndReportScamPulse(readyClient, { initial = false } = {}) {
+async function refreshAndReportThreatFeed(readyClient, { initial = false } = {}) {
   try {
     const pulse = await refreshScamPulseFeeds();
-    console.log(`Scam Pulse ${initial ? "primed" : "refreshed"}: ${pulse.domains} domains, ${pulse.urls} URLs`);
-    await sendClientLogPanel(readyClient, buildScamPulseRefreshPanel({ pulse, initial }));
+    console.log(`Threat feed ${initial ? "primed" : "refreshed"}: ${pulse.domains} domains, ${pulse.urls} URLs`);
+    await sendClientLogPanel(readyClient, buildThreatFeedRefreshPanel({ pulse, initial }));
     return pulse;
   } catch (err) {
     const message = err?.message || String(err);
-    console.warn(`${initial ? "Initial" : "Scheduled"} Scam Pulse refresh failed:`, message);
-    recordRuntimeEvent("warn", "scam-pulse-refresh", message);
-    await sendClientLogPanel(readyClient, buildScamPulseRefreshPanel({ error: message })).catch(() => false);
+    console.warn(`${initial ? "Initial" : "Scheduled"} threat feed refresh failed:`, message);
+    recordRuntimeEvent("warn", "threat-feed-refresh", message);
+    await sendClientLogPanel(readyClient, buildThreatFeedRefreshPanel({ error: message })).catch(() => false);
     return null;
   }
 }
@@ -251,18 +252,21 @@ client.once(Events.ClientReady, async (readyClient) => {
   }, 10 * 60 * 1000);
   timer.unref?.();
 
-  loadScamEmbedCache().then(() => {
-    recordRuntimeEvent("info", "scam-embed-cache", "prototype index ready");
-  }).catch((err) => {
-    recordRuntimeEvent("warn", "scam-embed-cache", err?.message || err);
-  });
+  preloadEmbedder().catch(() => null);
 
-  await refreshAndReportScamPulse(readyClient, { initial: true });
+  await refreshAndReportThreatFeed(readyClient, { initial: true });
 
   const pulseTimer = setInterval(() => {
-    refreshAndReportScamPulse(readyClient).catch(() => null);
+    refreshAndReportThreatFeed(readyClient).catch(() => null);
   }, 60 * 60 * 1000);
   pulseTimer.unref?.();
+
+  try {
+    startStatusWidgetScheduler(readyClient);
+    await refreshStatusWidget(readyClient).catch(() => null);
+  } catch (err) {
+    recordRuntimeEvent("warn", "status-widget-start", err?.message || err);
+  }
 
   await cleanupModerationActionReviews();
   const moderationActionCleanupTimer = setInterval(() => {
@@ -358,6 +362,7 @@ client.on(Events.MessageCreate, async (message) => {
       recordRuntimeEvent("warn", "daily-stats-track", err?.message || err);
     }
     await maybeEnforceNicknameOnMessage(message).catch(() => null);
+    recordGhostPingCandidate(message);
 
     if (await maybeHandleLockCommand(message)) return;
     if (await maybeHandleControlCommand(message)) return;
@@ -432,11 +437,16 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   });
 });
 
+client.on(Events.MessageDelete, async (message) => {
+  await runGuarded("message-delete-handler", async () => {
+    await maybeHandleGhostPing(message);
+  });
+});
+
 client.on(Events.InteractionCreate, async (interaction) => {
   await runGuarded("interaction-handler", async () => {
     if (await maybeHandleNicknameModerationInteraction(interaction)) return;
     if (await maybeHandleOutageReviewInteraction(interaction)) return;
-    if (await maybeHandleScamReviewInteraction(interaction)) return;
     if (await maybeHandleModerationLogInteraction(interaction)) return;
     if (await maybeHandleSweepReviewInteraction(interaction)) return;
 

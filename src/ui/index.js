@@ -18,7 +18,6 @@ const { ACCENT, ACCENT_VARIANTS, STATUS, SURFACE, TYPE, BRAND } = require('./col
 const ansiHelpers = require('./ansi');
 
 // Embed builders
-const scam     = require('./embeds/scam');
 const sweep    = require('./embeds/sweep');
 const outage   = require('./embeds/outage');
 const status   = require('./embeds/status');
@@ -52,7 +51,7 @@ module.exports = {
   ansiProgress: ansiHelpers.progressBar,
 
   // Embed builders — every one returns { embeds, components, files }
-  ...scam, ...sweep, ...outage, ...status, ...daily, ...kb, ...lockdown,
+  ...sweep, ...outage, ...status, ...daily, ...kb, ...lockdown,
 
   // Canvas (advanced)
   canvas,

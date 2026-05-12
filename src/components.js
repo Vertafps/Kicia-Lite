@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
 const MODLOG_VIEW_PREFIX = "modlog:messages:";
 const MODLOG_REVERT_PREFIX = "modlog:revert:";
@@ -7,17 +7,6 @@ const NICKMOD_MODAL_PREFIX = "nickmod:rename-submit:";
 const NICKMOD_NICKNAME_INPUT_ID = "nickmod:nickname";
 const OUTAGE_CONFIRM_PREFIX = "outage:confirm:";
 const OUTAGE_DISMISS_PREFIX = "outage:dismiss:";
-const SCAM_REVIEW_TRUE_PREFIX = "scam_review_true:";
-const SCAM_REVIEW_FALSE_PREFIX = "scam_review_false:";
-const SCAM_FEEDBACK_PREFIX = "scam_review_feedback:";
-
-const SCAM_FEEDBACK_CATEGORIES = [
-  { value: "casual_mention", label: "Casual mention",   description: "User mentioned something in passing, not selling." },
-  { value: "asking",         label: "Asking, not selling", description: "User was asking about a thing, not offering it." },
-  { value: "buying",         label: "Buying, not selling", description: "User was the buyer side, not the scammer." },
-  { value: "joke_or_quote",  label: "Joke or quote",    description: "Sarcasm, meme, or quoting someone else." },
-  { value: "other",          label: "Other",            description: "Something else — just flag it as a miss." }
-];
 
 function isValidHttpUrl(url) {
   try {
@@ -65,7 +54,7 @@ function buildModerationLogButtonRows(actionId, {
       new ButtonBuilder()
         .setCustomId(`${MODLOG_REVERT_PREFIX}${id}`)
         .setStyle(ButtonStyle.Danger)
-        .setEmoji("\u21A9\uFE0F")
+        .setEmoji("↩️")
         .setLabel("Undo Timeout")
         .setDisabled(Boolean(disabled) || !canRevert)
     )
@@ -94,28 +83,6 @@ function buildOutageReviewButtonRows(reviewId, { disabled = false } = {}) {
   ];
 }
 
-function buildScamReviewButtonRows(auditId, { disabled = false } = {}) {
-  const id = String(auditId || "").trim();
-  if (!id) return [];
-
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`${SCAM_REVIEW_TRUE_PREFIX}${id}`)
-        .setStyle(ButtonStyle.Success)
-        .setEmoji("✅")
-        .setLabel("Correct")
-        .setDisabled(Boolean(disabled)),
-      new ButtonBuilder()
-        .setCustomId(`${SCAM_REVIEW_FALSE_PREFIX}${id}`)
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji("❌")
-        .setLabel("False Positive")
-        .setDisabled(Boolean(disabled))
-    )
-  ];
-}
-
 function buildNicknameModerationButtonRows(userId, { disabled = false } = {}) {
   const id = String(userId || "").trim();
   if (!id) return [];
@@ -129,28 +96,6 @@ function buildNicknameModerationButtonRows(userId, { disabled = false } = {}) {
         .setDisabled(Boolean(disabled))
     )
   ];
-}
-
-function buildScamFeedbackSelectRows(auditId, { disabled = false } = {}) {
-  const id = String(auditId || "").trim();
-  if (!id) return [];
-
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`${SCAM_FEEDBACK_PREFIX}${id}`)
-    .setPlaceholder("Tell the bot why this was wrong (helps the model)")
-    .setMinValues(1)
-    .setMaxValues(1)
-    .setDisabled(Boolean(disabled));
-
-  for (const opt of SCAM_FEEDBACK_CATEGORIES) {
-    select.addOptions({
-      label: opt.label,
-      value: opt.value,
-      description: opt.description
-    });
-  }
-
-  return [new ActionRowBuilder().addComponents(select)];
 }
 
 /**
@@ -195,15 +140,9 @@ module.exports = {
   NICKMOD_RENAME_PREFIX,
   OUTAGE_CONFIRM_PREFIX,
   OUTAGE_DISMISS_PREFIX,
-  SCAM_REVIEW_TRUE_PREFIX,
-  SCAM_REVIEW_FALSE_PREFIX,
-  SCAM_FEEDBACK_PREFIX,
-  SCAM_FEEDBACK_CATEGORIES,
   buildNicknameModerationButtonRows,
   buildModerationLogButtonRows,
   buildOutageReviewButtonRows,
-  buildScamReviewButtonRows,
-  buildScamFeedbackSelectRows,
   buildPaginationButtonRows,
   buildLinkButtonRows
 };

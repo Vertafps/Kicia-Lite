@@ -13,7 +13,6 @@ const { isStaffOnlyTrackedMember } = require("./permissions");
 const {
   cleanupRestrictedEmojiDatabaseTempFiles,
   cleanupExpiredModerationActions,
-  clearScamDecisionAudit,
   clearDailyStatsTracking,
   ensureDailyStatsWindowStartedAt,
   getDailyStatsWindowStartedAt,
@@ -109,13 +108,11 @@ function getModerationCounts(snapshot) {
     blockedLinkWarnings: getModerationCount(snapshot, "blocked_link_warning"),
     blockedLinkAlerts: getModerationCount(snapshot, "blocked_link_alert"),
     blockedLinkTimeouts: getModerationCount(snapshot, "blocked_link_timeout"),
-    sellingAlerts: getModerationCount(snapshot, "selling_alert"),
-    sellingTimeouts: getModerationCount(snapshot, "selling_timeout"),
-    fakeInfoAlerts: getModerationCount(snapshot, "fake_info_alert"),
-    suspiciousAlerts: getModerationCount(snapshot, "suspicious_alert"),
-    suspiciousWarnings: getModerationCount(snapshot, "suspicious_warning"),
-    suspiciousTimeouts: getModerationCount(snapshot, "suspicious_timeout"),
-    raidAlerts: getModerationCount(snapshot, "raid_alert"),
+    commerceAlerts: getModerationCount(snapshot, "commerce_alert"),
+    commerceTimeouts: getModerationCount(snapshot, "commerce_timeout"),
+    ghostPings: getModerationCount(snapshot, "ghost_ping_detected"),
+    emojiSpamTimeouts: getModerationCount(snapshot, "emoji_spam_timeout"),
+    emojiSpamFlags: getModerationCount(snapshot, "emoji_spam_flag"),
     restrictedReactionAlerts: getModerationCount(snapshot, "restricted_reaction_alert"),
     restrictedReactionTimeouts: getModerationCount(snapshot, "restricted_reaction_timeout")
   };
@@ -302,8 +299,9 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
     counts.blockedLinkWarnings +
     counts.blockedLinkAlerts +
     counts.blockedLinkTimeouts;
-  const suspiciousTotal = counts.suspiciousAlerts + counts.suspiciousWarnings + counts.suspiciousTimeouts;
+  const commerceTotal = counts.commerceAlerts + counts.commerceTimeouts;
   const restrictedReactionTotal = counts.restrictedReactionAlerts + counts.restrictedReactionTimeouts;
+  const emojiSpamTotal = counts.emojiSpamTimeouts + counts.emojiSpamFlags;
   const totalEvents = sumModerationCounts(snapshot.moderation);
   const latestEvent = [...(snapshot.moderation || [])]
     .filter((entry) => entry.lastEventAt > 0)
@@ -313,11 +311,10 @@ function buildDailyModerationStatsBody(snapshot, windowStartedAt, now) {
     `**Window:** ${formatDiscordTimestamp(windowStartedAt, "t")} -> ${formatDiscordTimestamp(now, "t")}`,
     `**Total Moderation Events:** ${totalEvents}`,
     `**Link Guard:** ${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkWarnings} warnings | ${counts.blockedLinkReviews + counts.blockedLinkAlerts} reviews`,
-    `**Suspicious Alerts:** ${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`,
-    `**Retired Fake Info Alerts:** ${counts.fakeInfoAlerts}`,
-    `**Scam/Trade Guard:** ${counts.sellingAlerts + counts.sellingTimeouts} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`,
-    `**Raid Alerts:** ${counts.raidAlerts}`,
-    `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} legacy timeouts`,
+    `**Prohibited Commerce:** ${commerceTotal} total | ${counts.commerceTimeouts} timeouts | ${counts.commerceAlerts} alerts`,
+    `**Restricted Reactions:** ${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} timeouts`,
+    `**Emoji Spam Escalation:** ${emojiSpamTotal} total | ${counts.emojiSpamTimeouts} auto-timeouts | ${counts.emojiSpamFlags} staff flags`,
+    `**Ghost Pings:** ${counts.ghostPings}`,
     latestEvent
       ? `**Last Moderation Event:** ${latestEvent.eventKey.replace(/_/g, " ")} ${formatDuration(Math.max(0, now - latestEvent.lastEventAt))} ago`
       : "**Last Moderation Event:** none",
@@ -416,9 +413,9 @@ function buildStaffStatsFields(snapshot, staffRoster, windowStartedAt, now) {
 function buildModerationStatsFields(snapshot, windowStartedAt, now) {
   const counts = getModerationCounts(snapshot);
   const linkGuardTotal = counts.blockedLinkReviews + counts.blockedLinkWarnings + counts.blockedLinkAlerts + counts.blockedLinkTimeouts;
-  const suspiciousTotal = counts.suspiciousAlerts + counts.suspiciousWarnings + counts.suspiciousTimeouts;
   const restrictedReactionTotal = counts.restrictedReactionAlerts + counts.restrictedReactionTimeouts;
-  const scamTradeTotal = counts.sellingAlerts + counts.sellingTimeouts;
+  const commerceTotal = counts.commerceAlerts + counts.commerceTimeouts;
+  const emojiSpamTotal = counts.emojiSpamTimeouts + counts.emojiSpamFlags;
   const totalEvents = sumModerationCounts(snapshot.moderation);
   const latestEvent = [...(snapshot.moderation || [])]
     .filter((e) => e.lastEventAt > 0)
@@ -426,12 +423,11 @@ function buildModerationStatsFields(snapshot, windowStartedAt, now) {
 
   return [
     { name: "Total Events", value: String(totalEvents), inline: true },
-    { name: "Scam/Trade Guard", value: `${scamTradeTotal} total | ${counts.sellingTimeouts} timeouts | ${counts.sellingAlerts} alerts`, inline: true },
-    { name: "Suspicious Alerts", value: `${suspiciousTotal} total | ${counts.suspiciousWarnings} warnings | ${counts.suspiciousTimeouts} timeouts`, inline: true },
     { name: "Link Guard", value: `${linkGuardTotal} total | ${counts.blockedLinkTimeouts} timeouts | ${counts.blockedLinkWarnings} warnings | ${counts.blockedLinkReviews + counts.blockedLinkAlerts} reviews`, inline: true },
-    { name: "Raid Alerts", value: String(counts.raidAlerts), inline: true },
-    { name: "Restricted Reactions", value: `${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} legacy timeouts`, inline: true },
-    { name: "Retired Fake Info Alerts", value: String(counts.fakeInfoAlerts), inline: true },
+    { name: "Prohibited Commerce", value: `${commerceTotal} total | ${counts.commerceTimeouts} timeouts | ${counts.commerceAlerts} alerts`, inline: true },
+    { name: "Restricted Reactions", value: `${restrictedReactionTotal} total | ${counts.restrictedReactionAlerts} warnings | ${counts.restrictedReactionTimeouts} timeouts`, inline: true },
+    { name: "Emoji Spam Escalation", value: `${emojiSpamTotal} total | ${counts.emojiSpamTimeouts} auto-timeouts | ${counts.emojiSpamFlags} flags`, inline: true },
+    { name: "Ghost Pings", value: String(counts.ghostPings), inline: true },
     latestEvent
       ? { name: "Last Event", value: `${latestEvent.eventKey.replace(/_/g, " ")} — ${formatDuration(Math.max(0, now - latestEvent.lastEventAt))} ago`, inline: true }
       : { name: "Last Event", value: "none", inline: true },
@@ -455,8 +451,8 @@ async function buildDailyStatsEmbeds(guild, { now = Date.now() } = {}) {
   const counts = getModerationCounts(snapshot);
   const recapSlices = [
     { label: "Help Replied", value: counts.helpReplied || Math.round(totalMessages * 0.05), color: viz.VIZ_UP },
-    { label: "Scam Cleared", value: counts.sellingAlerts || 0, color: viz.VIZ_WARN },
-    { label: "Scam Confirmed", value: counts.sellingTimeouts || 0, color: viz.VIZ_DOWN },
+    { label: "Link Blocks", value: counts.blockedLinkTimeouts + counts.blockedLinkAlerts, color: viz.VIZ_DOWN },
+    { label: "Commerce Blocks", value: counts.commerceTimeouts + counts.commerceAlerts, color: viz.VIZ_WARN },
     { label: "Status Pings", value: counts.statusPings || Math.round(totalMessages * 0.02), color: viz.VIZ_INFO }
   ].filter((s) => s.value > 0);
   const hourBuckets = Array.from({ length: 24 }, () => 0);
@@ -534,17 +530,9 @@ async function trackDailyStatsMessage(message, { now = Date.now() } = {}) {
 
 async function runPostDailyReportCleanup() {
   const result = {
-    scamAuditCleared: false,
     moderationActionsCleaned: false,
     tempFiles: null
   };
-
-  try {
-    await clearScamDecisionAudit();
-    result.scamAuditCleared = true;
-  } catch (err) {
-    recordRuntimeEvent("warn", "daily-scam-audit-clear", err?.message || err);
-  }
 
   try {
     await cleanupExpiredModerationActions();

@@ -1,13 +1,16 @@
 /**
  * Lockdown channel grid — visual "X of N channels locked" map.
  *
- * Each card shows a lock glyph, the channel mention, and a state pill:
- *   - LOCKED    (red)
- *   - UNLOCKED  (green)
- *   - UNTOUCHED (slate)
+ * Each card shows a lock glyph and the channel mention, with state conveyed
+ * through:
+ *  - Cell border color (red = locked, green = unlocked, slate = untouched)
+ *  - Glyph color
+ *  - Channel name color
+ *  - A small caption line ("access closed" / "access open" / "no change")
  *
- * The grid is adaptive — fewer channels means wider cards so longer custom
- * labels (e.g. "community support chat") fit without truncating.
+ * v2 fix: per-cell clip mask + strict vertical stack — channel name and
+ * caption never share an x-coordinate. The previous design overprinted a
+ * state pill onto the channel name in dense 4-column layouts.
  *
  * @param {Object} data
  * @param {Array<{name:string,status:'locked'|'unlocked'|'untouched'}>} data.channels
@@ -32,7 +35,9 @@ function renderLockdownGrid({ channels } = {}) {
   // Wider cards when there are fewer entries so labels read clearly.
   const cols = ch.length <= 2 ? 2 : ch.length <= 4 ? 2 : ch.length <= 6 ? 3 : 4;
   const cellW = (W - 32 - 12 * (cols - 1)) / cols;
-  const cellH = 62;
+  // Cell height grew from 62 → 76 to give the vertical stack proper breathing
+  // room. Name row + caption row + padding without compression.
+  const cellH = 76;
   const rows = Math.ceil(ch.length / cols);
   const headerH = 36;
   const H = headerH + rows * (cellH + 12) + 8;
@@ -50,7 +55,10 @@ function renderLockdownGrid({ channels } = {}) {
   });
   const headerRight = `${lockedCount}/${ch.length} LOCKED · ${unlockedCount} UNLOCKED · ${untouchedCount} UNTOUCHED`;
   text(ctx, headerRight, W - 16, 18, {
-    font: 'bold 9.5px ' + TYPE.mono, color: lockedCount === ch.length ? STATUS.down.hex : lockedCount > 0 ? STATUS.warn.hex : STATUS.up.hex,
+    font: 'bold 9.5px ' + TYPE.mono,
+    color: lockedCount === ch.length ? STATUS.down.hex
+         : lockedCount > 0           ? STATUS.warn.hex
+         :                             STATUS.up.hex,
     align: 'right', letterSpacing: 1.2,
   });
 
@@ -82,24 +90,51 @@ function renderLockdownGrid({ channels } = {}) {
       c.status === 'locked'   ? STATUS.down.hex :
       c.status === 'unlocked' ? STATUS.up.hex   :
                                 SURFACE.textMuted;
-    const pillText =
+    const caption =
+      c.status === 'locked'   ? 'access closed' :
+      c.status === 'unlocked' ? 'access open'   :
+                                'no change';
+    const stateTag =
       c.status === 'locked'   ? 'LOCKED'   :
       c.status === 'unlocked' ? 'UNLOCKED' :
                                 'UNTOUCHED';
 
-    // Card base
+    // ── Card base (clipped so nothing inside escapes the cell) ──────────
+    ctx.save();
+    roundRect(ctx, x, y, cellW, cellH, 6);
+    ctx.clip();
+
     ctx.fillStyle = SURFACE.panelBg;
-    ctx.strokeStyle = c.status === 'untouched' ? SURFACE.panelBorder : tone + '88';
-    ctx.lineWidth = 1;
-    roundRect(ctx, x, y, cellW, cellH, 6); ctx.fill(); ctx.stroke();
+    ctx.fillRect(x, y, cellW, cellH);
+
     if (c.status !== 'untouched') {
-      ctx.fillStyle = tone + '14'; // 8% wash
-      roundRect(ctx, x, y, cellW, cellH, 6); ctx.fill();
+      // soft wash so the cell reads as state-active without overpowering
+      ctx.fillStyle = tone + '14'; // ~8% alpha hex
+      ctx.fillRect(x, y, cellW, cellH);
     }
 
-    // Lock glyph
-    const glyphX = x + 12;
-    const glyphY = y + 14;
+    // ── Top-right state tag (mini pill, never collides with name) ───────
+    {
+      const tagFont = 'bold 8px ' + TYPE.mono;
+      ctx.font = tagFont;
+      const tagW = ctx.measureText(stateTag).width + 12;
+      const tagH = 14;
+      const tagX = x + cellW - tagW - 10;
+      const tagY = y + 10;
+      ctx.fillStyle = tone + '26';
+      ctx.strokeStyle = tone + 'aa';
+      ctx.lineWidth = 1;
+      roundRect(ctx, tagX, tagY, tagW, tagH, 3);
+      ctx.fill();
+      ctx.stroke();
+      text(ctx, stateTag, tagX + 6, tagY + 10, {
+        font: tagFont, color: tone, letterSpacing: 1.0,
+      });
+    }
+
+    // ── Lock glyph (left side, vertically centered with name) ───────────
+    const glyphX = x + 14;
+    const glyphY = y + 32;
     ctx.save();
     ctx.translate(glyphX, glyphY);
     ctx.fillStyle = tone;
@@ -124,32 +159,33 @@ function renderLockdownGrid({ channels } = {}) {
     }
     ctx.restore();
 
-    // Channel name
-    const nameFont = 'bold 12px ' + TYPE.mono;
-    const textBudget = cellW - 36 - 12;
-    const nameStr = fitText('#' + c.name, textBudget, nameFont);
-    text(ctx, nameStr, x + 36, y + 24, {
-      font: nameFont, color: SURFACE.text,
+    // ── Row 1: channel name (no horizontal collision with anything) ─────
+    const nameFont = 'bold 13px ' + TYPE.mono;
+    // Budget: cell width minus glyph (32px) minus right padding (12px)
+    const nameBudget = cellW - 32 - 12;
+    const nameStr = fitText('#' + c.name, nameBudget, nameFont);
+    text(ctx, nameStr, x + 34, y + 42, {
+      font: nameFont,
+      color: c.status === 'untouched' ? SURFACE.text : tone,
     });
 
-    // State pill (small, right of name)
-    const pillFont = 'bold 8.5px ' + TYPE.mono;
-    ctx.save();
-    ctx.font = pillFont;
-    const pillW = ctx.measureText(pillText).width + 12;
-    const pillH = 14;
-    const pillX = x + 36;
-    const pillY = y + 32;
-    ctx.fillStyle = tone + '22';
-    ctx.strokeStyle = tone;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.95;
-    roundRect(ctx, pillX, pillY, pillW, pillH, 3); ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.restore();
-    text(ctx, pillText, pillX + 6, pillY + 10, {
-      font: pillFont, color: tone, letterSpacing: 1.2,
+    // ── Row 2: caption (dim, below name with full clearance) ────────────
+    const captionFont = '500 10px ' + TYPE.mono;
+    const captionBudget = cellW - 34 - 12;
+    const captionStr = fitText(caption, captionBudget, captionFont);
+    text(ctx, captionStr, x + 34, y + 60, {
+      font: captionFont,
+      color: SURFACE.textDim,
+      letterSpacing: 0.4,
     });
+
+    ctx.restore();
+
+    // ── Card border (drawn AFTER clip restore so it sits on the edge) ───
+    ctx.strokeStyle = c.status === 'untouched' ? SURFACE.panelBorder : tone + '88';
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, cellW, cellH, 6);
+    ctx.stroke();
   });
 
   return toBuffer(canvas);

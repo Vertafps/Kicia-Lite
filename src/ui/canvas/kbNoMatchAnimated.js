@@ -115,27 +115,52 @@ function renderKbNoMatchAnimated({
     ctx.save();
     ctx.font = '11px ' + TYPE.sans;
     ctx.fillStyle = SURFACE.textMuted;
-    ctx.fillText('Routing this one to staff —', tx, 86);
-    ctx.fillText('open a ticket and a moderator will pick it up.', tx, 102);
+    ctx.fillText('A moderator needs to look', tx, 86);
+    ctx.fillText('at this one — open a ticket', tx, 100);
+    ctx.fillText('using the button below.', tx, 114);
     ctx.restore();
 
-    // CTA pill — gentle breathing border, label always readable.
-    const breathe = (Math.sin(t * Math.PI * 2) + 1) / 2;
-    const pillX = tx, pillY = 116, pillW = 130, pillH = 22;
+    // Footer: split labels with chevron arrows pointing down (per design spec).
+    // Three staggered chevrons in the gutter between the two label halves give
+    // a clear "look down at the ticket button" cue without an extra pill on
+    // the embed image.
+    const footerY = H - 18;
+    drawFooterChevrons(ctx, t, footerY - 18);
+    drawFooterLabels(ctx, t, footerY);
+  }
+
+  function drawFooterChevrons(ctx, t, baseY) {
+    const cxFooter = W / 2;
     ctx.save();
-    ctx.fillStyle = STATUS.warn.hex + '22';
-    ctx.fillRect(pillX, pillY, pillW, pillH);
     ctx.strokeStyle = STATUS.warn.hex;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.5 + breathe * 0.5;
-    ctx.strokeRect(pillX + 0.5, pillY + 0.5, pillW, pillH);
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const phase = (t * Math.PI * 2) - i * 0.6;
+      const alpha = 0.35 + (Math.sin(phase) + 1) / 2 * 0.55;
+      ctx.globalAlpha = alpha;
+      const yOff = baseY + i * 5;
+      ctx.beginPath();
+      ctx.moveTo(cxFooter - 7, yOff);
+      ctx.lineTo(cxFooter,     yOff + 5);
+      ctx.lineTo(cxFooter + 7, yOff);
+      ctx.stroke();
+    }
     ctx.restore();
+  }
+
+  function drawFooterLabels(ctx, t, baseY) {
+    const bob = Math.sin(t * Math.PI * 2) * 0.6;
 
     ctx.save();
     ctx.font = 'bold 9.5px ' + TYPE.mono;
     ctx.fillStyle = STATUS.warn.hex;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '1.4px';
-    ctx.fillText('OPEN A TICKET →', pillX + 10, pillY + 14);
+    ctx.textAlign = 'left';
+    ctx.fillText('OPEN A TICKET BELOW', 16, baseY + bob);
+
+    ctx.textAlign = 'right';
+    ctx.fillText('USE THE BUTTON ↓', W - 16, baseY + bob);
     ctx.restore();
   }
 }

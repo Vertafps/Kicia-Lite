@@ -22,10 +22,12 @@ const { GIFEncoder, quantize, applyPalette } = require('gifenc');
 
 // Tuned for Discord render path:
 //   24 fps × 1.5 s = 36 frames keeps motion smooth without ballooning size.
-//   Native scale (1×) — Discord serves animated images at native, not retina.
+//   2× retina scale — at native (1×) small fonts (8-13px) on tinted cells lose
+//   their antialiasing into the 256-color palette and look blurry. 2× upsamples
+//   text edges into the palette cleanly. Trades ~3× file size for crisp text.
 const DEFAULT_FPS = 24;
 const DEFAULT_DURATION_S = 1.5;
-const RENDER_SCALE = 1;
+const RENDER_SCALE = 2;
 
 function makeFrameCanvas(width, height, scale = RENDER_SCALE) {
   const canvas = createCanvas(width * scale, height * scale);

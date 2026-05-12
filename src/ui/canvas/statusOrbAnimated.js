@@ -140,7 +140,7 @@ function drawStateBlock(ctx, status, col) {
   ctx.restore();
 
   const subtitle = status === 'UP'      ? 'all systems nominal'
-                 : status === 'DOWN'    ? 'bot is offline'
+                 : status === 'DOWN'    ? 'service is offline'
                  :                         'state unconfirmed';
   ctx.save();
   ctx.font = '12px ' + TYPE.mono;

@@ -96,7 +96,7 @@ function renderStatusOrbRibbon({ status = 'UP' } = {}) {
     font: 'bold 44px ' + TYPE.sans, color: tone, letterSpacing: -0.5,
   });
   const subtitle = status === 'UP'      ? 'all systems nominal'
-                 : status === 'DOWN'    ? 'bot is offline'
+                 : status === 'DOWN'    ? 'service is offline'
                  :                         'state unconfirmed';
   text(ctx, subtitle, sx, 120, {
     font: '12px ' + TYPE.mono, color: SURFACE.textMuted, letterSpacing: 0.4,

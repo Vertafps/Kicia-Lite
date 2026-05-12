@@ -370,9 +370,12 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
     return true;
   }
 
-  if (!shouldAutoReplyStatus(message.content)) return false;
-  if (isNoResponseMessage(message)) return false;
-  return maybeReplyWithPublicStatus(message);
+  // Auto-reply to natural-language status questions ("is kicia down?",
+  // "anyone else getting up?", etc.) was retired — too noisy, kept firing
+  // on casual mentions of "up" / "down" / "kicia". Only the explicit
+  // \$status command (handled above) and a direct bot ping (handled in
+  // ping.js) trigger a status reply now.
+  return false;
 }
 
 module.exports = {

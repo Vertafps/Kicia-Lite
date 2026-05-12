@@ -1,11 +1,14 @@
 /**
- * $status command embed — orb + uptime ribbon + key metrics.
+ * $status command embed — orb + key metrics.
+ *
+ * Note: uptime metric was intentionally dropped from the user-visible
+ * surface — showing "uptime 99.4%" reads as a self-report of bad uptime
+ * even when KiciaHook is healthy. Internal status-metrics still tracks
+ * uptime for diagnostics, but it never lands in the embed.
  *
  * @typedef {Object} StatusData
  * @property {'UP'|'DOWN'|'UNAWARE'} status
- * @property {number} uptime               24h uptime % (e.g. 99.94)
  * @property {number} latencyMs            current gateway latency
- * @property {Array<'up'|'down'|'unaware'>} ribbon  length 96 (15-min slots)
  * @property {string} lastDown
  * @property {string} incidents7d
  */
@@ -30,11 +33,11 @@ function renderStatusHero(opts) {
 }
 
 function buildStatusEmbed({
-  status = 'UP', uptime = 100, latencyMs = 0,
-  ribbon, lastDown = '—', incidents7d = '0',
+  status = 'UP', latencyMs = 0,
+  lastDown = '—', incidents7d = '0',
 } = {}) {
 
-  const hero = renderStatusHero({ status, uptime, ribbon });
+  const hero = renderStatusHero({ status });
   const ext = hero.animated ? 'gif' : 'png';
   const filename = `status-orb.${ext}`;
   const img = new AttachmentBuilder(hero.buffer, { name: filename });
@@ -54,7 +57,7 @@ function buildStatusEmbed({
 
   const desc = block([
     line(A.dim('$'), A.cyan('status'), A.white('show')),
-    line(tag, lblFn(status), A.dim(`· uptime ${uptime.toFixed(2)}% (24h)`)),
+    line(tag, lblFn(status)),
     line(A.dim('latency'),    A.white(latencyMs + 'ms')),
     line(A.dim('last down'),  A.white(lastDown)),
     line(A.dim('incidents'),  A.white(incidents7d + ' (7d)')),
@@ -67,12 +70,11 @@ function buildStatusEmbed({
     .setDescription(desc)
     .setImage(`attachment://${filename}`)
     .addFields(
-      { name: 'Status',     value: tone.hex === STATUS.down.hex ? '🔴 Down' :
-                                   tone.hex === STATUS.warn.hex ? '🟡 Unaware' :
-                                                                  '🟢 Up',
+      { name: 'Status',  value: tone.hex === STATUS.down.hex ? '🔴 Down' :
+                                tone.hex === STATUS.warn.hex ? '🟡 Unaware' :
+                                                               '🟢 Up',
         inline: true },
-      { name: 'Latency',    value: '`' + latencyMs + 'ms`',  inline: true },
-      { name: 'Uptime 24h', value: '`' + uptime.toFixed(2) + '%`', inline: true },
+      { name: 'Latency', value: '`' + latencyMs + 'ms`', inline: true },
     )
     .setFooter({ text: BRAND.footerLine })
     .setTimestamp(new Date());

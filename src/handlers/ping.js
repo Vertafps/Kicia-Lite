@@ -17,10 +17,28 @@ const COLOR_BY_NAME = {
   info: INFO
 };
 
+function stripBotMentions(content, clientUserId) {
+  let text = String(content || "");
+  if (clientUserId) {
+    text = text.replace(new RegExp(`<@!?${clientUserId}>`, "g"), "");
+  }
+  return text;
+}
+
 async function buildTranscript(message) {
   const TEN_MINUTES_MS = 10 * 60 * 1000;
   const now = Date.now();
 
+  // If the ping itself has substance (anything beyond the bot mention),
+  // treat that as the authoritative question and skip the prior transcript.
+  // Otherwise an earlier message like "delta executor" leaks into the match
+  // — bot would reply about delta even when the actual ping says "how to ..."
+  const clientUserId = message.client?.user?.id || null;
+  const selfContent = cleanText(stripBotMentions(message.content, clientUserId));
+  if (selfContent) return selfContent;
+
+  // Fallback: ping was just `@bot` with no text — scoop the user's recent
+  // messages so "i can't get yub x to inject\n@bot help" still works.
   try {
     const recent = await message.channel.messages.fetch({ limit: RECENT_CHANNEL_MESSAGES_N });
     const transcriptMessages = recent
@@ -29,7 +47,7 @@ async function buildTranscript(message) {
       .last(TRANSCRIPT_N);
 
     const lines = transcriptMessages
-      .map((m) => cleanText(m.content))
+      .map((m) => cleanText(stripBotMentions(m.content, clientUserId)))
       .filter(Boolean);
 
     if (lines.length) return lines.join("\n");
@@ -37,7 +55,7 @@ async function buildTranscript(message) {
     console.warn("buildTranscript: channel fetch failed, falling back to message content:", err.message);
   }
 
-  return cleanText(message.content);
+  return cleanText(stripBotMentions(message.content, clientUserId));
 }
 
 async function handleDm(message) {

@@ -103,7 +103,13 @@ function unescapeRegexLiteral(pattern) {
     const char = source[index];
     if (char === "\\") {
       index += 1;
-      if (index < source.length) output += source[index];
+      if (index >= source.length) break;
+      const next = source[index];
+      // `\b` is a word-boundary anchor — used by simple `$nick add <word>` to
+      // anchor literal patterns. Treat it as a zero-width marker, not part of
+      // the literal being matched.
+      if (next === "b") continue;
+      output += next;
       continue;
     }
     if (/[\^$.*+?()[\]{}|]/.test(char)) return null;

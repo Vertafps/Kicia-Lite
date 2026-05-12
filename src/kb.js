@@ -517,6 +517,85 @@ function chooseLongestAlias(text, kb, { allowShort = false } = {}) {
   return best ? best.executor : null;
 }
 
+/**
+ * Full-alias Levenshtein match — catches typos that the token-level matcher
+ * misses, like "yib x" → "yub x", "yubbx" → "yub x", "isaaeva" → "isaeva".
+ *
+ * Walks the input text in sliding windows the size of each alias and finds the
+ * best (lowest edit-distance) hit. Cap of 2 edits for short aliases (4-7 chars)
+ * and 3 edits for longer ones — tight enough to avoid wild leaps.
+ */
+function chooseLevenshteinAlias(text, kb) {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+  const compact = normalized.replace(/\s+/g, "");
+  const aliases = Object.keys(kb.executorAliasIndex || {});
+  if (!aliases.length) return null;
+
+  let best = null;
+  for (const alias of aliases) {
+    if (alias.length < 4) continue; // too short for safe fuzzy match
+    const aliasCompact = alias.replace(/\s+/g, "");
+    const maxEdits = aliasCompact.length >= 8 ? 3 : 2;
+
+    // Sliding-window over the compact text — tries every contiguous chunk of
+    // length aliasCompact.length and adjacent ±1, ±2 sizes to cover insertions
+    // and deletions.
+    const lengths = [aliasCompact.length - 2, aliasCompact.length - 1, aliasCompact.length, aliasCompact.length + 1, aliasCompact.length + 2]
+      .filter((l) => l >= 3 && l <= compact.length);
+
+    for (const len of lengths) {
+      for (let i = 0; i + len <= compact.length; i++) {
+        const window = compact.slice(i, i + len);
+        if (window === aliasCompact) {
+          // exact compact match — bail with a strong score
+          best = best && best.score > 0 ? best : { score: maxEdits + 0.001, alias, executor: kb.executorAliasIndex[alias], edits: 0 };
+          continue;
+        }
+        if (isEditDistanceAtMost(window, aliasCompact, maxEdits)) {
+          // Score: prefer fewer edits, then longer aliases as tiebreak.
+          // Higher score wins.
+          const edits = countEdits(window, aliasCompact, maxEdits);
+          const score = (maxEdits - edits) + alias.length * 0.001;
+          if (!best || score > best.score) {
+            best = { score, alias, executor: kb.executorAliasIndex[alias], edits };
+          }
+        }
+      }
+    }
+  }
+
+  return best ? best.executor : null;
+}
+
+// Helper: count actual edit distance up to maxEdits (returns maxEdits + 1 if exceeded).
+function countEdits(a, b, maxEdits) {
+  if (a === b) return 0;
+  if (!a || !b) return Math.abs((a || "").length - (b || "").length);
+  if (Math.abs(a.length - b.length) > maxEdits) return maxEdits + 1;
+
+  let prev = new Array(b.length + 1);
+  let curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      );
+      if (curr[j] < rowMin) rowMin = curr[j];
+    }
+    if (rowMin > maxEdits) return maxEdits + 1;
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
 function chooseBestFuzzyAlias(text, kb) {
   const textTokens = tokenize(text).filter((token) => token.length > 1);
   if (!textTokens.length) return null;
@@ -580,11 +659,17 @@ function findExecutorMatch(candidate, kb, { fallbackText, semanticHints } = {}) 
   const candidateMatch = chooseLongestAlias(candidate, kb, { allowShort: true });
   if (candidateMatch) return candidateMatch;
 
+  // Full-alias Levenshtein — handles typos like "yib x" → "yub x".
+  const levMatch = chooseLevenshteinAlias(candidate, kb);
+  if (levMatch) return levMatch;
+
   const fuzzyCandidateMatch = chooseBestFuzzyAlias(candidate, kb);
   if (fuzzyCandidateMatch) return fuzzyCandidateMatch;
 
   if (fallbackText) {
-    const fb = chooseLongestAlias(fallbackText, kb) || chooseBestFuzzyAlias(fallbackText, kb);
+    const fb = chooseLongestAlias(fallbackText, kb)
+      || chooseLevenshteinAlias(fallbackText, kb)
+      || chooseBestFuzzyAlias(fallbackText, kb);
     if (fb) return fb;
   }
 

@@ -251,7 +251,10 @@ async function enqueueTrainingSample(message, classification) {
 
     // ---- Borderline gate (timeouts always pass through for staff visibility)
     const verdict = classification.verdict;
-    const confidence = Number(classification.confidence);
+    // BUG FIX: classifiers expose confidence at signals.confidence, not the
+    // top-level. Read from either shape.
+    const rawConfidence = classification.confidence ?? classification.signals?.confidence;
+    const confidence = Number(rawConfidence);
     const safeConfidence = Number.isFinite(confidence) ? confidence : 0;
 
     if (verdict !== "timeout") {

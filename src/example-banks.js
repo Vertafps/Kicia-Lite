@@ -1,23 +1,3 @@
-"use strict";
-
-/**
- * example banks for the scam-trade and kicia-disrespect classifiers.
- *
- * each bank is a fixed 30-string seed embedded once at boot via the shared
- * minilm pipeline. vectors are cached on disk keyed by sha256 of
- * (modelId + concatenated bank texts) — bump any bank string and the cache
- * rebuilds automatically.
- *
- * cache layout mirrors `src/kb-embeddings.js`: a single json file holding
- * `{hash, modelId, banks: {scamSell, scamBuy, respectDisrespect, respectNeutral}}`
- * where each list entry is `{text, vector: number[]}`. vectors rehydrate
- * back to float32array on load.
- *
- * banks are lazily exposed via `getBank(name)` — callers see null until
- * `preloadExampleBanks()` resolves. classifiers fall back to a pattern-only
- * path while banks are cold.
- */
-
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -27,13 +7,6 @@ const { embedText, loadEmbedder } = require("./embeddings");
 const { recordRuntimeEvent } = require("./runtime-health");
 
 const CACHE_PATH = path.resolve(__dirname, "..", "data", "example-banks-cache.json");
-
-// ---------------------------------------------------------------------------
-// bank text — verbatim from the user's spec / plan §phase-2 + §phase-3.
-// order is significant: it feeds the cache hash. don't reorder without
-// bumping the hash (which happens automatically because the joined text
-// changes too, but be aware that doing so invalidates the on-disk cache).
-// ---------------------------------------------------------------------------
 
 const SCAM_SELL_BANK = [
   "selling kicia dm me",
@@ -67,8 +40,6 @@ const SCAM_SELL_BANK = [
   "trade kicia for ue",
   "kicia trade pm me",
   "who wants to buy my kicia",
-  // ecosystem nouns — these capture the "selling configs / keys / lifetime"
-  // style messages where the user omits the kicia name itself.
   "im selling configs dm me",
   "selling configs dm",
   "wts configs cheap",
@@ -118,8 +89,6 @@ const SCAM_BUY_BANK = [
   "how good is kicia",
   "should i buy kicia",
   "is kicia good",
-  // ecosystem nouns — buyer-side phrasings so "where to get configs"
-  // doesn't get pulled toward the SELL bank.
   "where can i get configs",
   "where do i get configs",
   "where can i find configs",
@@ -197,10 +166,6 @@ const RESPECT_NEUTRAL_BANK = [
   "kicia down rn"
 ];
 
-// canonical (bank-name) -> internal/public-snapshot key mapping. the
-// internal store uses kebab-case names that match the `getBank(name)`
-// contract; the boot-summary snapshot uses camelCase for the counts shape
-// the caller asked for.
 const BANK_DEFINITIONS = [
   { name: "scam-sell",          camelKey: "scamSell",          texts: SCAM_SELL_BANK },
   { name: "scam-buy",           camelKey: "scamBuy",           texts: SCAM_BUY_BANK },
@@ -210,12 +175,8 @@ const BANK_DEFINITIONS = [
 
 const BANK_NAMES = new Set(BANK_DEFINITIONS.map((b) => b.name));
 
-// ---------------------------------------------------------------------------
-// in-memory state
-// ---------------------------------------------------------------------------
-
 const state = {
-  banks: null,        // { kebab-name -> [{text, vector: Float32Array}, ...] }
+  banks: null,
   hash: null,
   ready: false,
   loadPromise: null
@@ -226,15 +187,9 @@ function sha256(value) {
 }
 
 function computeBanksHash() {
-  // all bank texts in a single canonical blob, prefixed with the model id
-  // so swapping the embedder also invalidates the cache.
   const allTexts = BANK_DEFINITIONS.map((b) => b.texts);
   return sha256(KB_EMBED_MODEL_ID + "|" + JSON.stringify(allTexts));
 }
-
-// ---------------------------------------------------------------------------
-// disk cache
-// ---------------------------------------------------------------------------
 
 function loadFromDisk(expectedHash) {
   try {
@@ -277,13 +232,9 @@ function persistToDisk(hash, banks) {
     }
     fs.writeFileSync(CACHE_PATH, JSON.stringify(out), "utf8");
   } catch (err) {
-    recordRuntimeEvent("warn", "example-banks", `cache-write failed · ${err?.message || err}`);
+    recordRuntimeEvent("warn", "example-banks", `cache-write failed - ${err?.message || err}`);
   }
 }
-
-// ---------------------------------------------------------------------------
-// build path — runs once when the disk cache is missing or stale.
-// ---------------------------------------------------------------------------
 
 async function buildBanks() {
   await loadEmbedder();
@@ -298,7 +249,7 @@ async function buildBanks() {
         recordRuntimeEvent(
           "warn",
           "example-banks",
-          `embed failed · ${def.name} · "${text.slice(0, 32)}" · ${err?.message || err}`
+          `embed failed - ${def.name} - "${text.slice(0, 32)}" - ${err?.message || err}`
         );
       }
     }
@@ -324,10 +275,6 @@ function buildBootSummary() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// public api
-// ---------------------------------------------------------------------------
-
 async function preloadExampleBanks() {
   if (state.ready && state.banks) return buildBootSummary();
   if (state.loadPromise) return state.loadPromise;
@@ -340,13 +287,13 @@ async function preloadExampleBanks() {
       recordRuntimeEvent(
         "info",
         "example-banks",
-        `restored from disk · ${restored} entries`
+        `restored from disk - ${restored} entries`
       );
     } else {
       try {
         banks = await buildBanks();
       } catch (err) {
-        recordRuntimeEvent("warn", "example-banks", `build failed · ${err?.message || err}`);
+        recordRuntimeEvent("warn", "example-banks", `build failed - ${err?.message || err}`);
         state.loadPromise = null;
         throw err;
       }
@@ -356,14 +303,14 @@ async function preloadExampleBanks() {
         recordRuntimeEvent(
           "warn",
           "example-banks",
-          `partial build · ${built}/${expected} entries embedded`
+          `partial build - ${built}/${expected} entries embedded`
         );
       }
       persistToDisk(hash, banks);
       recordRuntimeEvent(
         "info",
         "example-banks",
-        `built fresh · ${built} entries`
+        `built fresh - ${built} entries`
       );
     }
 
@@ -409,7 +356,6 @@ module.exports = {
   isReady,
   getModelId,
   __resetForTests,
-  // exported for tests / inspection only — not part of the production contract.
   __internals: {
     BANK_DEFINITIONS,
     BANK_NAMES,

@@ -1,26 +1,5 @@
-"use strict";
-
-/**
- * training-db.js
- *
- * CRUD helpers for:
- *   - training_samples      — labeled classifier training data
- *   - training_embeddings   — 384-dim MiniLM vectors paired with samples
- *   - respect_tier_state    — per-user tier escalation for the disrespect classifier
- *
- * All three tables are created by restricted-emoji-db.js (Batch B migration).
- * This file only provides the query layer; it never runs DDL.
- *
- * Database handle is shared from restricted-emoji-db.js via getDatabase() +
- * schedulePersist() — both exported from that module after the Batch A export
- * addition.  If a build predates that export, a loud error is thrown at require
- * time so the issue is immediately visible.
- */
-
 const crypto = require("crypto");
 
-// Lazy-required so circular-require chains are avoided at module load.
-// restricted-emoji-db.js must export getDatabase and schedulePersist.
 let _getDatabase = null;
 let _schedulePersist = null;
 
@@ -28,16 +7,10 @@ function getDatabase() {
   if (!_getDatabase) {
     const mod = require("./restricted-emoji-db");
     if (typeof mod.getDatabase !== "function") {
-      throw new Error(
-        "training-db: restricted-emoji-db.js does not export getDatabase — " +
-          "ensure the Batch A export patch has been applied."
-      );
+      throw new Error("training-db: restricted-emoji-db.js does not export getDatabase");
     }
     if (typeof mod.schedulePersist !== "function") {
-      throw new Error(
-        "training-db: restricted-emoji-db.js does not export schedulePersist — " +
-          "ensure the Batch A export patch has been applied."
-      );
+      throw new Error("training-db: restricted-emoji-db.js does not export schedulePersist");
     }
     _getDatabase = mod.getDatabase;
     _schedulePersist = mod.schedulePersist;
@@ -46,7 +19,6 @@ function getDatabase() {
 }
 
 function schedulePersist(db) {
-  // Resolve lazily in case getDatabase() has not been called yet.
   if (!_schedulePersist) {
     const mod = require("./restricted-emoji-db");
     _schedulePersist = mod.schedulePersist;
@@ -54,8 +26,6 @@ function schedulePersist(db) {
   return _schedulePersist(db);
 }
 
-// getSetting is provided by settings.js (Phase 1 / Batch A).
-// We lazy-require it so this file can be loaded in any order.
 function getSetting(key) {
   try {
     return require("./settings").getSetting(key);
@@ -64,14 +34,6 @@ function getSetting(key) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Execute a SELECT and return all matching rows as plain objects.
- * Mirrors the private getRows() in restricted-emoji-db.js (lines 350-362).
- */
 function getRows(db, sql, params = []) {
   const stmt = db.prepare(sql);
   try {
@@ -86,10 +48,6 @@ function getRows(db, sql, params = []) {
   }
 }
 
-/**
- * Map a snake_case training_samples row from sql.js to a camelCase object.
- * Exported so test files can import it directly.
- */
 function mapSampleRow(row) {
   if (!row) return null;
   return {
@@ -121,40 +79,11 @@ function mapSampleRow(row) {
   };
 }
 
-/**
- * Read the affected-row count after a DML statement via sql.js's
- * SELECT changes() idiom.  db.getRowsModified() is NOT part of the sql.js
- * public API; we use the SELECT approach instead.
- */
+// sql.js has no getRowsModified(); use SELECT changes() to read DML count.
 function changesCount(db) {
   return db.exec("SELECT changes() AS c")[0]?.values?.[0]?.[0] ?? 0;
 }
 
-// ---------------------------------------------------------------------------
-// Sample CRUD
-// ---------------------------------------------------------------------------
-
-/**
- * Insert a new training sample, honouring the dedup window.
- *
- * @param {object} opts
- * @param {string} opts.classifier
- * @param {string} opts.guildId
- * @param {string} opts.channelId
- * @param {string} opts.messageId
- * @param {string} opts.messageUrl
- * @param {string} opts.authorId
- * @param {string} opts.authorLabel
- * @param {string} opts.rawText
- * @param {string} opts.normalizedText
- * @param {object|string} opts.signalsJson   — JS object or JSON string
- * @param {string} opts.decision             — 'action'|'review'|'no-action'
- * @param {string} [opts.actionActionId]
- * @param {string} opts.dedupKey
- * @param {Float32Array} [opts.vector]       — optional embedding to store alongside
- * @param {string} [opts.modelId]            — required when vector is supplied
- * @returns {Promise<{sampleId: number, deduped: boolean}>}
- */
 async function createTrainingSample({
   classifier,
   guildId,
@@ -175,7 +104,6 @@ async function createTrainingSample({
   const db = await getDatabase();
   const now = Date.now();
 
-  // Dedup window: default 6 hours, configurable via training.dedup.windowMs
   const windowMs = getSetting("training.dedup.windowMs") ?? 6 * 3_600_000;
   const cutoff = now - Number(windowMs);
 
@@ -215,11 +143,9 @@ async function createTrainingSample({
     ]
   );
 
-  // Retrieve the auto-incremented id
   const idRow = db.exec("SELECT last_insert_rowid() AS id")[0]?.values?.[0]?.[0];
   const sampleId = Number(idRow);
 
-  // Optionally store the embedding in the same transaction tick
   if (vector instanceof Float32Array && modelId) {
     const blob = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     db.run(
@@ -233,11 +159,6 @@ async function createTrainingSample({
   return { sampleId, deduped: false };
 }
 
-/**
- * Fetch a single sample by primary key.
- * @param {number} sampleId
- * @returns {Promise<object|null>}
- */
 async function getTrainingSampleById(sampleId) {
   const db = await getDatabase();
   const rows = getRows(
@@ -248,11 +169,6 @@ async function getTrainingSampleById(sampleId) {
   return rows.length ? mapSampleRow(rows[0]) : null;
 }
 
-/**
- * Look up a sample by the Discord message id of the training-channel feedback post.
- * @param {string} messageId
- * @returns {Promise<object|null>}
- */
 async function getTrainingSampleByFeedbackMessage(messageId) {
   const db = await getDatabase();
   const rows = getRows(
@@ -263,14 +179,6 @@ async function getTrainingSampleByFeedbackMessage(messageId) {
   return rows.length ? mapSampleRow(rows[0]) : null;
 }
 
-/**
- * List samples that have not been labeled yet.
- * @param {string} classifier
- * @param {object} [opts]
- * @param {number} [opts.limit=5]
- * @param {number|null} [opts.olderThanMs=null]  — only return samples older than this ms ago
- * @returns {Promise<object[]>}
- */
 async function listUnlabeledTrainingSamples(classifier, { limit = 5, olderThanMs = null } = {}) {
   const db = await getDatabase();
   const params = [classifier];
@@ -291,12 +199,6 @@ async function listUnlabeledTrainingSamples(classifier, { limit = 5, olderThanMs
   return rows.map(mapSampleRow);
 }
 
-/**
- * List all labeled samples for a classifier, joining the embedding vector.
- * Used by the $train retraining command.
- * @param {string} classifier
- * @returns {Promise<Array<object & {vector: Float32Array|null}>>}
- */
 async function listTrainingSamplesForRetrain(classifier) {
   const db = await getDatabase();
   const rows = getRows(
@@ -323,23 +225,6 @@ async function listTrainingSamplesForRetrain(classifier) {
   });
 }
 
-/**
- * Atomically label a sample.
- *
- * Returns {ok: true} on success.
- * Returns {ok: false, alreadyLabeled: true, oldLabel, oldLabeler} if the row was
- * already labeled and allowOverride is false.
- *
- * @param {number} sampleId
- * @param {object} opts
- * @param {string} opts.label              — 'positive'|'negative'
- * @param {string} opts.labelerId
- * @param {string} opts.labelerLabel
- * @param {string|null} [opts.severity]
- * @param {string|null} [opts.staffNote]
- * @param {boolean} [opts.allowOverride=false]
- * @returns {Promise<{ok: boolean, alreadyLabeled?: boolean, oldLabel?: string, oldLabeler?: string}>}
- */
 async function updateTrainingSampleLabel(
   sampleId,
   { label, labelerId, labelerLabel, severity = null, staffNote = null, allowOverride = false } = {}
@@ -380,15 +265,6 @@ async function updateTrainingSampleLabel(
   return { ok: true };
 }
 
-/**
- * Mark a sample as posted to the training channel.
- * @param {number} sampleId
- * @param {object} opts
- * @param {string} opts.feedbackMessageId
- * @param {string} opts.feedbackChannelId
- * @param {number} [opts.posted=1]
- * @returns {Promise<void>}
- */
 async function setTrainingSamplePosted(
   sampleId,
   { feedbackMessageId, feedbackChannelId, posted = 1 } = {}
@@ -403,13 +279,6 @@ async function setTrainingSamplePosted(
   schedulePersist(db);
 }
 
-/**
- * List samples that have not yet been posted to the training channel.
- * @param {object} [opts]
- * @param {number} [opts.limit=50]
- * @param {string|null} [opts.guildId=null]
- * @returns {Promise<object[]>}
- */
 async function listUnpostedTrainingSamples({ limit = 50, guildId = null } = {}) {
   const db = await getDatabase();
   const params = [];
@@ -430,13 +299,6 @@ async function listUnpostedTrainingSamples({ limit = 50, guildId = null } = {}) 
   return rows.map(mapSampleRow);
 }
 
-/**
- * Count samples matching optional classifier / label filters.
- * @param {object} [opts]
- * @param {string|null} [opts.classifier]
- * @param {string|null} [opts.label]
- * @returns {Promise<number>}
- */
 async function countTrainingSamples({ classifier = null, label = null } = {}) {
   const db = await getDatabase();
   const conditions = [];
@@ -460,10 +322,6 @@ async function countTrainingSamples({ classifier = null, label = null } = {}) {
   }
 }
 
-/**
- * Aggregate label counts per classifier.
- * @returns {Promise<{byClassifier: Record<string, {total: number, positive: number, negative: number, unlabeled: number}>}>}
- */
 async function getTrainingStats() {
   const db = await getDatabase();
   const rows = getRows(
@@ -489,14 +347,6 @@ async function getTrainingStats() {
   return { byClassifier };
 }
 
-/**
- * Retention sweep: delete old rows, anonymize PII at half-retention.
- * @param {object} opts
- * @param {number} opts.retentionMs       — hard delete cutoff from now
- * @param {number} opts.anonymizeAfterMs  — anonymize-PII cutoff (half-retention)
- * @param {number} [opts.now]
- * @returns {Promise<{deletedCount: number, anonymizedCount: number}>}
- */
 async function sweepExpiredTrainingSamples({
   retentionMs,
   anonymizeAfterMs,
@@ -523,12 +373,6 @@ async function sweepExpiredTrainingSamples({
   return { deletedCount, anonymizedCount };
 }
 
-/**
- * Remove all training samples authored by a specific user (GDPR / ban purge).
- * Embeddings cascade-delete automatically via the FK.
- * @param {string} authorId
- * @returns {Promise<{deletedCount: number}>}
- */
 async function purgeTrainingSamplesByAuthor(authorId) {
   const db = await getDatabase();
   db.run("DELETE FROM training_samples WHERE author_id = ?", [String(authorId)]);
@@ -537,18 +381,6 @@ async function purgeTrainingSamplesByAuthor(authorId) {
   return { deletedCount };
 }
 
-// ---------------------------------------------------------------------------
-// Embedding CRUD
-// ---------------------------------------------------------------------------
-
-/**
- * Insert or replace the embedding for a sample.
- * @param {number} sampleId
- * @param {object} opts
- * @param {string} opts.modelId
- * @param {Float32Array} opts.vector
- * @returns {Promise<void>}
- */
 async function upsertTrainingEmbedding(sampleId, { modelId, vector } = {}) {
   const db = await getDatabase();
   const blob = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
@@ -560,11 +392,6 @@ async function upsertTrainingEmbedding(sampleId, { modelId, vector } = {}) {
   schedulePersist(db);
 }
 
-/**
- * Retrieve the embedding for a sample.
- * @param {number} sampleId
- * @returns {Promise<{modelId: string, dims: number, vector: Float32Array}|null>}
- */
 async function getTrainingEmbedding(sampleId) {
   const db = await getDatabase();
   const rows = getRows(
@@ -583,15 +410,6 @@ async function getTrainingEmbedding(sampleId) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Respect tier state
-// ---------------------------------------------------------------------------
-
-/**
- * Retrieve the current tier state for a user.
- * @param {string} userId
- * @returns {Promise<{tier: number, lastOffenseAt: number}|null>}
- */
 async function getRespectTierState(userId) {
   const db = await getDatabase();
   const rows = getRows(
@@ -606,16 +424,7 @@ async function getRespectTierState(userId) {
   };
 }
 
-/**
- * Increment the tier for a user, or reset to 1 if the decay window has elapsed.
- * Tier is capped at 4.
- *
- * @param {string} userId
- * @param {object} opts
- * @param {number} [opts.now]
- * @param {number} opts.decayMs  — if lastOffenseAt < now - decayMs, reset to tier 1
- * @returns {Promise<{tier: number, lastOffenseAt: number}>}
- */
+// Tier caps at 4. If lastOffenseAt has aged past decayMs, reset to 1.
 async function bumpRespectTier(userId, { now = Date.now(), decayMs } = {}) {
   const db = await getDatabase();
   const existing = await getRespectTierState(userId);
@@ -639,36 +448,18 @@ async function bumpRespectTier(userId, { now = Date.now(), decayMs } = {}) {
   return { tier: newTier, lastOffenseAt: now };
 }
 
-/**
- * Reset a user's tier state entirely (e.g. after a successful appeal).
- * @param {string} userId
- * @returns {Promise<void>}
- */
 async function resetRespectTier(userId) {
   const db = await getDatabase();
   db.run("DELETE FROM respect_tier_state WHERE user_id = ?", [String(userId)]);
   schedulePersist(db);
 }
 
-// ---------------------------------------------------------------------------
-// Test utilities
-// ---------------------------------------------------------------------------
-
-/**
- * Reset module-level lazy-require cache.
- * Called by Batch C test setup after resetRestrictedEmojiDatabaseForTests().
- */
 function __resetForTests() {
   _getDatabase = null;
   _schedulePersist = null;
 }
 
-// ---------------------------------------------------------------------------
-// Exports
-// ---------------------------------------------------------------------------
-
 module.exports = {
-  // sample CRUD
   createTrainingSample,
   getTrainingSampleById,
   getTrainingSampleByFeedbackMessage,
@@ -681,17 +472,11 @@ module.exports = {
   getTrainingStats,
   sweepExpiredTrainingSamples,
   purgeTrainingSamplesByAuthor,
-
-  // embedding CRUD
   upsertTrainingEmbedding,
   getTrainingEmbedding,
-
-  // respect tier state
   getRespectTierState,
   bumpRespectTier,
   resetRespectTier,
-
-  // test utilities
   __resetForTests,
-  mapSampleRow  // exposed for test assertions
+  mapSampleRow
 };

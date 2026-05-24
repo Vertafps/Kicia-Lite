@@ -1,23 +1,4 @@
-"use strict";
-
-/**
- * Owner-tunable settings registry + read-through cache.
- *
- * Registers every runtime-adjustable setting (toggles, durations, thresholds)
- * with a typed descriptor and provides:
- *   - getSetting(key)              sync, hot-path safe, falls back to default
- *   - setSetting(key, raw, {db})   async, persists to app_config, audits
- *   - resetSetting(key, {db})      async, deletes the row, audits
- *   - hydrateSettingsCache(db)     async, single batched SELECT at boot
- *
- * Persistence shape: rows live in the existing `app_config` SQLite table
- * (key TEXT PRIMARY KEY, value TEXT NOT NULL). Empty databases inherit
- * defaults cleanly — rows only exist when an owner runs `$config set`.
- *
- * Cache shape: in-process Map<key, {value, loadedAt}> with a 60s TTL. The
- * hot path NEVER awaits — cache hit returns immediately, miss/expiry
- * returns the descriptor default.
- */
+// Owner-tunable settings registry + read-through cache backed by app_config.
 
 const {
   parseDurationInput,
@@ -28,9 +9,8 @@ const {
 const { buildPanel, WARN, INFO } = require("./embed");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-// inline two-row levenshtein. prohibited-commerce.js exposes a private
-// implementation; keep settings.js self-contained so circular imports stay
-// impossible regardless of future exports.
+// inline two-row levenshtein. kept local so circular imports stay impossible
+// regardless of what other modules choose to export.
 function levenshteinDistance(a, b) {
   const left = String(a || "");
   const right = String(b || "");
@@ -64,8 +44,7 @@ const SETTING_TYPES = Object.freeze({
   STRING: "string"
 });
 
-// lazy require of restricted-emoji-db to avoid circular import at module load.
-// the file is large and re-entrant — defer it until actually needed.
+// lazy require to avoid circular import at module load.
 let _emojiDb = null;
 function emojiDb() {
   if (!_emojiDb) {
@@ -89,8 +68,6 @@ function flushNow(db) {
   }
 }
 
-// raw db ops — keep settings.js self-contained so an evolving
-// restricted-emoji-db.js export surface doesn't break the hot path.
 function dbGetAppConfig(db, key) {
   const stmt = db.prepare("SELECT value FROM app_config WHERE key = ?");
   try {
@@ -127,7 +104,6 @@ function dbGetRows(db, sql, params = []) {
   }
 }
 
-// formatters per type — used by $config get / list to render current value.
 function formatBoolDisplay(value) {
   return value ? "enabled" : "disabled";
 }
@@ -156,7 +132,6 @@ function formatStringDisplay(value) {
   return `\`${String(value ?? "")}\``;
 }
 
-// coercers per type — raw user input → typed value or {ok:false, error}.
 function coerceBool(raw) {
   if (typeof raw === "boolean") return { ok: true, value: raw };
   const str = String(raw ?? "").trim().toLowerCase();
@@ -218,8 +193,6 @@ function coerceString(raw) {
   return { ok: true, value: str.slice(0, STRING_MAX_LEN) };
 }
 
-// deserializer per type — converts the stringified app_config row to a
-// typed value at hydrate time.
 function deserializeValue(descriptor, raw) {
   if (raw == null) return descriptor.defaultValue;
   switch (descriptor.type) {
@@ -257,7 +230,6 @@ function deserializeValue(descriptor, raw) {
   }
 }
 
-// canonical string form for app_config storage. read back by deserializeValue.
 function serializeValue(descriptor, value) {
   switch (descriptor.type) {
     case SETTING_TYPES.BOOL:
@@ -292,16 +264,13 @@ function formatValueForDisplay(descriptor, value) {
   }
 }
 
-// duration helpers for the registry below.
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
-// the registry. every entry is one tunable setting; sections group them
-// for $config list pagination. keep order stable: section, then alphabetical.
 const REGISTRY_ENTRIES = [
-  // ---------- link ----------
+  // link
   ["link.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -378,7 +347,7 @@ const REGISTRY_ENTRIES = [
     max: 100
   }],
 
-  // ---------- scam ----------
+  // scam
   ["scam.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -475,7 +444,7 @@ const REGISTRY_ENTRIES = [
     section: "scam"
   }],
 
-  // ---------- respect ----------
+  // respect
   ["respect.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -565,7 +534,7 @@ const REGISTRY_ENTRIES = [
     max: 30 * DAY_MS
   }],
 
-  // ---------- drug ----------
+  // drug
   ["drug.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -592,7 +561,7 @@ const REGISTRY_ENTRIES = [
     max: 100
   }],
 
-  // ---------- rr (restricted reactions) ----------
+  // rr (restricted reactions)
   ["rr.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -673,7 +642,7 @@ const REGISTRY_ENTRIES = [
     max: 200
   }],
 
-  // ---------- ghost-ping ----------
+  // ghost-ping
   ["ghost-ping.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -691,7 +660,7 @@ const REGISTRY_ENTRIES = [
     max: HOUR_MS
   }],
 
-  // ---------- nickname ----------
+  // nickname
   ["nickname.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -709,7 +678,7 @@ const REGISTRY_ENTRIES = [
     max: HOUR_MS
   }],
 
-  // ---------- impersonation ----------
+  // impersonation
   ["impersonation.guard.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -727,7 +696,7 @@ const REGISTRY_ENTRIES = [
     max: 1
   }],
 
-  // ---------- support ----------
+  // support
   ["support.answer.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -754,7 +723,7 @@ const REGISTRY_ENTRIES = [
     max: 5 * MINUTE_MS
   }],
 
-  // ---------- status ----------
+  // status
   ["status.answer.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -775,7 +744,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
     label: "Auto-Detect & Lockdown",
-    description: "Master switch: when off, the bot never auto-detects outages and never auto-locks channels. Owners can still use $status / $lock manually.",
+    description: "When off, the bot never auto-detects outages and never auto-locks channels. Owners can still use $status / $lock manually.",
     section: "status"
   }],
   ["status.autodetect.distinct_users", {
@@ -806,7 +775,7 @@ const REGISTRY_ENTRIES = [
     max: 24 * HOUR_MS
   }],
 
-  // ---------- training ----------
+  // training
   ["training.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -886,7 +855,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.FLOAT,
     defaultValue: 0.30,
     label: "Scam Classifier Threshold",
-    description: "Borderline gate for the scam classifier; samples within this margin are queued for labeling. Default is intentionally low because the scam confidence formula is H/5-weighted and rarely exceeds 0.55 on cold start.",
+    description: "Borderline gate for the scam classifier; samples within this margin are queued for labeling.",
     section: "training",
     min: 0,
     max: 1
@@ -901,7 +870,7 @@ const REGISTRY_ENTRIES = [
     max: 1
   }],
 
-  // ---------- ui ----------
+  // ui
   ["ui.animated-heroes", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -917,7 +886,7 @@ const REGISTRY_ENTRIES = [
     section: "ui"
   }],
 
-  // ---------- log ----------
+  // log
   ["log.queue.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -944,7 +913,7 @@ const REGISTRY_ENTRIES = [
     max: 2000
   }],
 
-  // ---------- daily-stats ----------
+  // daily-stats
   ["daily-stats.enabled", {
     type: SETTING_TYPES.BOOL,
     defaultValue: true,
@@ -954,8 +923,6 @@ const REGISTRY_ENTRIES = [
   }]
 ];
 
-// build the immutable registry map. validate runs late so descriptors can
-// reference their own type-defaulted validate() if they need extra checks.
 function buildRegistry() {
   const map = new Map();
   for (const [key, raw] of REGISTRY_ENTRIES) {
@@ -981,9 +948,7 @@ const SECTION_LIST = Object.freeze(
   Array.from(new Set(Array.from(REGISTRY.values()).map((d) => d.section)))
 );
 
-// per-key value cache. populated by hydrateSettingsCache() and by setSetting().
-// {value: any, loadedAt: epoch-ms}. expires after CACHE_TTL_MS — past that the
-// hot path returns the descriptor default until the next hydrate.
+// per-key cache, populated by hydrateSettingsCache() and setSetting().
 const cache = new Map();
 
 function cacheStore(key, value) {
@@ -993,11 +958,6 @@ function cacheStore(key, value) {
 function cacheRead(key) {
   const entry = cache.get(key);
   if (!entry) return undefined;
-  // BUG FIX (2026-05-24): previously expired entries after CACHE_TTL_MS (60s),
-  // causing getSetting() to fall through to the descriptor default — which
-  // silently undid every $toggle / $config set ~60s after the write. The cache
-  // is the single source of truth for the running process: hydrated on boot,
-  // updated on every setSetting/resetSetting. No reason to expire it.
   return entry.value;
 }
 
@@ -1005,12 +965,10 @@ function cacheEvict(key) {
   cache.delete(key);
 }
 
-// ---------- public API ----------
-
 function getSetting(key) {
   const descriptor = REGISTRY.get(key);
   if (!descriptor) {
-    recordRuntimeEvent("warn", "settings.unknown", `getSetting(${key}) — unknown key`);
+    recordRuntimeEvent("warn", "settings.unknown", `getSetting(${key}) - unknown key`);
     return undefined;
   }
   const cached = cacheRead(key);
@@ -1101,8 +1059,6 @@ async function hydrateSettingsCache(db) {
         const coerced = deserializeValue(descriptor, byKey.get(key));
         cacheStore(key, coerced);
       } else {
-        // leave the cache empty so getSetting returns the descriptor default
-        // until an owner sets a value.
         cache.delete(key);
       }
     }
@@ -1124,7 +1080,7 @@ function buildAuditPanel({ verb, key, descriptor, previous, next, actor, color }
     `**Key:** \`${key}\``,
     `**Section:** \`${descriptor.section}\``,
     `**Type:** \`${descriptor.type}\``,
-    `**${verb === "reset" ? "Reset to default" : "Change"}:** \`${previousDisplay}\` → \`${nextDisplay}\``,
+    `**${verb === "reset" ? "Reset to default" : "Change"}:** \`${previousDisplay}\` -> \`${nextDisplay}\``,
     `**When:** <t:${Math.floor(Date.now() / 1000)}:R>`
   ];
   return buildPanel({
@@ -1227,8 +1183,6 @@ async function resetSetting(key, options = {}) {
   }
   return { ok: true, previous, descriptor };
 }
-
-// ---------- test hooks ----------
 
 function __resetForTests() {
   cache.clear();

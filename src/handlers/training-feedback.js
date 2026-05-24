@@ -1,28 +1,3 @@
-"use strict";
-
-/**
- * handlers/training-feedback.js
- *
- * Button + modal interaction router for the training channel.
- *
- * Public surface:
- *   - maybeHandleTrainingFeedbackInteraction(interaction) -> Promise<boolean>
- *       Returns true if this handler claimed the interaction.
- *
- * Wiring: invoked from src/index.js Events.InteractionCreate chain before the
- * unrouted fallback, mirroring outage-review.js.
- *
- * customId grammar (kept in sync with src/components.js):
- *   train:neg:<id>                              label as negative
- *   train:scam:{light|medium|severe}:<id>       positive scam label + retroactive timeout
- *   train:respect:{warn|light|medium|severe}:<id>
- *                                               positive respect label (+ retro timeout for non-warn)
- *   train:note:<id>                             open staff-note modal
- *   train:note-submit:<id>                      modal submit
- *   train:undo:<id>                             revert label within 30s window
- *   train:lift:<id>                             revert wrongful auto-timeout
- */
-
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -69,15 +44,6 @@ const { buildPanel, WARN, SUCCESS, DANGER, INFO } = require("../embed");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { formatDuration } = require("../duration");
 
-// ---------------------------------------------------------------------------
-// CustomId parser
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a training: customId into a structured action.
- * @param {string} customId
- * @returns {object|null}
- */
 function parseTrainingInteraction(customId) {
   const raw = String(customId || "");
   if (!raw.startsWith("train:")) return null;
@@ -107,20 +73,7 @@ function parseTrainingInteraction(customId) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Permission gate
-// ---------------------------------------------------------------------------
-
-/**
- * Decide whether the interactor is allowed to label training samples.
- * Reads `training.label.role` (default "staff") from settings.
- *   - "owner" → owner only
- *   - "mod"   → mod/admin/owner roles
- *   - "staff" → staff/mod/admin/owner roles
- * Kernel users (OWNER_USER_IDS) always bypass.
- * @param {import('discord.js').Interaction} interaction
- * @returns {boolean}
- */
+// training.label.role: "owner" | "mod" | "staff". Kernel users always pass.
 function canLabelTraining(interaction) {
   const member = interaction?.member;
   const userId = interaction?.user?.id || member?.user?.id;
@@ -143,10 +96,6 @@ function canLabelTraining(interaction) {
   return hasAnyRole(member, allowed);
 }
 
-// ---------------------------------------------------------------------------
-// Ephemeral reply helper
-// ---------------------------------------------------------------------------
-
 async function ephemeralReply(interaction, content, components = []) {
   const payload = {
     content: typeof content === "string" ? content : String(content ?? ""),
@@ -164,10 +113,6 @@ async function ephemeralReply(interaction, content, components = []) {
     recordRuntimeEvent("warn", "training-feedback-reply", err?.message || err);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Severity → duration resolver
-// ---------------------------------------------------------------------------
 
 function resolveSeverityDurationMs(classifier, severity) {
   if (classifier === "scam") {
@@ -196,10 +141,6 @@ function resolveSeverityDurationMs(classifier, severity) {
   }
   return 3_600_000;
 }
-
-// ---------------------------------------------------------------------------
-// DM helper
-// ---------------------------------------------------------------------------
 
 async function dmUser(member, { classifier, severity, durationMs } = {}) {
   if (!member?.createDM) return;
@@ -250,15 +191,10 @@ async function dmLiftedUser(member) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Retroactive action — timeout + delete + DM + log
-// ---------------------------------------------------------------------------
-
 async function applyRetroactiveAction(interaction, sample, { classifier, severity, durationMs }) {
   const guild = interaction?.guild;
   if (!guild) return;
 
-  // Try to fetch original message (may already be gone)
   let originalMessage = null;
   if (sample?.channelId && sample?.messageId) {
     const channel = await guild.channels
@@ -271,7 +207,6 @@ async function applyRetroactiveAction(interaction, sample, { classifier, severit
     }
   }
 
-  // Fetch the offending member
   let guildMember = null;
   if (sample?.authorId) {
     guildMember = await guild.members
@@ -279,7 +214,6 @@ async function applyRetroactiveAction(interaction, sample, { classifier, severit
       .catch(() => null);
   }
 
-  // Apply timeout — best effort
   if (guildMember?.timeout) {
     const reason = `training: ${classifier} ${severity} — labeled by ${interaction.user?.username || interaction.user?.id || "staff"}`;
     try {
@@ -293,12 +227,10 @@ async function applyRetroactiveAction(interaction, sample, { classifier, severit
     }
   }
 
-  // Delete original message — best effort
   if (originalMessage && originalMessage.deletable !== false) {
     try {
       await originalMessage.delete();
     } catch (err) {
-      // The message may have been deleted already; ignore
       recordRuntimeEvent(
         "info",
         "training-retroactive-delete",
@@ -307,12 +239,10 @@ async function applyRetroactiveAction(interaction, sample, { classifier, severit
     }
   }
 
-  // DM the user — best effort
   if (guildMember) {
     await dmUser(guildMember, { classifier, severity, durationMs });
   }
 
-  // Audit log
   try {
     await sendLogPanel(guild, buildPanel({
       header: `Training applied · ${classifier} · ${severity}`,
@@ -328,7 +258,6 @@ async function applyRetroactiveAction(interaction, sample, { classifier, severit
     recordRuntimeEvent("warn", "training-log-applied", err?.message || err);
   }
 
-  // Bump respect tier state if this was a respect label
   if (classifier === "respect" && sample?.authorId) {
     try {
       const decayMs = Number(getSetting("respect.tier.decayMs") ?? 7 * 86_400_000);
@@ -338,10 +267,6 @@ async function applyRetroactiveAction(interaction, sample, { classifier, severit
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Source-message UI update (disable buttons + add "Labeled" field)
-// ---------------------------------------------------------------------------
 
 async function disableButtonsAndAddLabel(
   interaction,
@@ -381,10 +306,6 @@ async function disableButtonsAndAddLabel(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Undo button builder
-// ---------------------------------------------------------------------------
-
 function buildUndoButtonRow(sampleId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -393,10 +314,6 @@ function buildUndoButtonRow(sampleId) {
       .setLabel("Undo (30s)")
   );
 }
-
-// ---------------------------------------------------------------------------
-// Actor label helper
-// ---------------------------------------------------------------------------
 
 function getActorLabel(interaction) {
   return (
@@ -408,10 +325,7 @@ function getActorLabel(interaction) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Direct-DB undo (training-db doesn't expose a clearLabel helper)
-// ---------------------------------------------------------------------------
-
+// training-db doesn't expose a clearLabel helper, so write the UPDATE here.
 async function clearLabelRaw(sampleId) {
   const { getDatabase, schedulePersist } = require("../restricted-emoji-db");
   const db = await getDatabase();
@@ -437,10 +351,6 @@ async function saveStaffNoteRaw(sampleId, note) {
   );
   schedulePersist(db);
 }
-
-// ---------------------------------------------------------------------------
-// Branch handlers
-// ---------------------------------------------------------------------------
 
 async function handleLabelPositive(interaction, { sampleId, classifier, severity }) {
   if (!canLabelTraining(interaction)) {
@@ -483,9 +393,8 @@ async function handleLabelPositive(interaction, { sampleId, classifier, severity
     return;
   }
 
-  // Warn-DM-only path for respect (no timeout)
+  // Warn-only path for respect: DM, no timeout.
   if (classifier === "respect" && severity === "warn") {
-    // Best-effort warn DM
     if (sample.authorId && interaction.guild) {
       const member = await interaction.guild.members
         .fetch(sample.authorId)
@@ -534,7 +443,6 @@ async function handleLabelPositive(interaction, { sampleId, classifier, severity
     return;
   }
 
-  // Full retroactive action for all other severities
   const durationMs = resolveSeverityDurationMs(classifier, severity);
   await applyRetroactiveAction(interaction, sample, {
     classifier,
@@ -610,8 +518,7 @@ async function handleLift(interaction, { sampleId }) {
   const labelerId = interaction.user?.id || null;
   const labelerLabel = getActorLabel(interaction);
 
-  // Owner-allowed override regardless of current label state — staff lifting
-  // a wrongful timeout overrides any prior label.
+  // Lift always overrides prior label; staff reversing a wrongful timeout.
   try {
     await updateTrainingSampleLabel(sampleId, {
       label: "negative",
@@ -629,7 +536,6 @@ async function handleLift(interaction, { sampleId }) {
     return;
   }
 
-  // Revert timeout + DM apology
   if (sample.authorId && interaction.guild) {
     const guildMember = await interaction.guild.members
       .fetch(sample.authorId)
@@ -737,22 +643,15 @@ async function handleNoteSubmit(interaction, { sampleId }) {
   await ephemeralReply(interaction, "note saved.");
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
 async function maybeHandleTrainingFeedbackInteraction(interaction) {
   const parsed = parseTrainingInteraction(interaction?.customId);
   if (!parsed) return false;
 
-  // Reject anything outside a guild (training samples are guild-scoped).
   if (!interaction.inGuild?.()) {
     await ephemeralReply(interaction, "training actions only work inside the server");
     return true;
   }
 
-  // Modal submit must be routed even though parseTrainingInteraction matched
-  // before we know the interaction type — verify the right kind here.
   try {
     switch (parsed.type) {
       case "label-positive":
@@ -786,16 +685,10 @@ async function maybeHandleTrainingFeedbackInteraction(interaction) {
     recordRuntimeEvent("error", "training-feedback-router", err?.message || err);
     try {
       await ephemeralReply(interaction, "something went wrong handling that action");
-    } catch {
-      /* swallow */
-    }
+    } catch {}
     return true;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Exports
-// ---------------------------------------------------------------------------
 
 module.exports = {
   maybeHandleTrainingFeedbackInteraction,

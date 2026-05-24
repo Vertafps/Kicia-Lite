@@ -1,5 +1,3 @@
-"use strict";
-
 const {
   SlashCommandBuilder,
   PermissionFlagsBits
@@ -7,8 +5,7 @@ const {
 const { messageFromInteraction } = require("./utils/reply-target");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-// Owner permission flag — gates command visibility in Discord UI.
-// Server-side enforcement still happens via canUseOwnerCommands in the handler.
+// gates command visibility in Discord UI; server-side enforcement still happens in the handler
 const OWNER_PERMS = String(PermissionFlagsBits.Administrator);
 const STAFF_PERMS = String(PermissionFlagsBits.ManageMessages);
 
@@ -227,7 +224,6 @@ function buildDefinitions() {
 }
 
 function synthesizeMessageContent(interaction) {
-  // Reads the interaction options and produces the equivalent $-command string
   const name = interaction.commandName;
   const sub = interaction.options.getSubcommand(false);
 
@@ -338,27 +334,22 @@ async function handleSlashCommand(interaction) {
     return true;
   }
 
-  // Defer reply if not yet replied
   if (!interaction.replied && !interaction.deferred) {
     try { await interaction.deferReply({ flags: 1 << 6 }); } catch {}
   }
 
-  // Build adapter Message
   const msg = messageFromInteraction(interaction, content);
 
-  // Delegate to existing handler chain
   try {
     const { maybeHandleControlCommand } = require("./handlers/commands");
     const handled = await maybeHandleControlCommand(msg);
     if (!handled) {
-      // Try other handlers (lock, status, etc.) — most are in commands.js, but a few are split out
       const { maybeHandleLockCommand } = require("./handlers/lockdown");
       if (await maybeHandleLockCommand(msg)) return true;
       const { maybeHandleStatusCommand } = require("./handlers/status");
       if (await maybeHandleStatusCommand(msg)) return true;
       const { maybeHandleRoleCommand } = require("./handlers/role-assignment");
       if (await maybeHandleRoleCommand(msg)) return true;
-      // Last resort: reply that it was not handled
       await msg.reply({ content: "command not routed — bug logged" });
     }
   } catch (err) {
@@ -403,7 +394,6 @@ async function handleAutocomplete(interaction) {
       await interaction.respond(slots).catch(() => {});
       return true;
     }
-    // default: empty
     await interaction.respond([]).catch(() => {});
     return true;
   } catch (err) {
@@ -433,9 +423,7 @@ async function registerSlashCommands(client) {
       return;
     }
     const definitions = buildDefinitions();
-    // Register globally — propagates within ~1h. For instant updates per guild,
-    // iterate client.guilds.cache and call guild.commands.set(definitions).
-    // For our single-target deployment, register per-guild for instant feedback.
+    // register per-guild for instant propagation (global takes ~1h)
     for (const [, guild] of client.guilds.cache) {
       try {
         await guild.commands.set(definitions);
@@ -453,9 +441,7 @@ function getSlashCommandDefinitions() {
   return buildDefinitions();
 }
 
-function __resetForTests() {
-  // no module-level state to reset
-}
+function __resetForTests() {}
 
 module.exports = {
   registerSlashCommands,

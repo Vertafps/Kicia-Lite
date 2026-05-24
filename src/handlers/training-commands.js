@@ -1,5 +1,3 @@
-"use strict";
-
 const { canUseOwnerCommands, hasAnyRole } = require("../permissions");
 const {
   STAFF_ROLE_IDS,

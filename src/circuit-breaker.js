@@ -1,20 +1,7 @@
-"use strict";
-
 // per-service circuit breaker — closed/open/half-open
-// used by link-policy.js to gate fishfish, safebrowsing, webrisk, etc.
 
-// internal registry: name → BreakerInstance
 const registry = new Map();
 
-/**
- * @param {object} opts
- * @param {string}   opts.name              - unique breaker name (also registry key)
- * @param {number}  [opts.errorThreshold=0.25] - error rate above which we open
- * @param {number}  [opts.windowMs=300_000]    - rolling window length (5 min)
- * @param {number}  [opts.openMs=60_000]       - how long to stay open before half-open
- * @param {number}  [opts.halfOpenProbes=1]    - how many probes to allow in half-open
- * @param {Function}[opts.onTransition]        - ({from,to,reason}) callback
- */
 function createBreaker({
   name,
   errorThreshold = 0.25,
@@ -25,15 +12,13 @@ function createBreaker({
 } = {}) {
   if (!name) throw new TypeError("createBreaker: name is required");
 
-  // reuse existing instance if one already exists under this name (idempotent)
   if (registry.has(name)) return registry.get(name);
 
-  // rolling window: array of {ts: number, ok: boolean}
   let window = [];
-  let state = "closed"; // "closed" | "open" | "half-open"
+  let state = "closed";
   let openSince = null;
   let lastTransitionAt = null;
-  let probesRemaining = 0; // only relevant in half-open
+  let probesRemaining = 0;
 
   function pruneWindow() {
     const cutoff = Date.now() - windowMs;
@@ -91,15 +76,9 @@ function createBreaker({
         transition("half-open", "open timer expired, probing");
       }
     }
-    // half-open → closed/open handled inside exec()
   }
 
   const instance = {
-    /**
-     * Execute fn() through the breaker.
-     * Returns null immediately (without calling fn) when open or when half-open probes are exhausted.
-     * Returns the fn() result on success, or throws (and records the failure) on error.
-     */
     async exec(fn) {
       maybeAutoTransition();
 
@@ -120,15 +99,13 @@ function createBreaker({
         }
       }
 
-      // state === "closed"
       try {
         const result = await fn();
         recordCall(true);
-        // check if this success crosses nothing (state stays closed)
         return result;
       } catch (err) {
         recordCall(false);
-        maybeAutoTransition(); // might open now
+        maybeAutoTransition();
         throw err;
       }
     },
@@ -171,10 +148,6 @@ function createBreaker({
   return instance;
 }
 
-/**
- * Returns a snapshot of all registered breakers and their current stats.
- * @returns {{ name: string, stats: object }[]}
- */
 function listBreakers() {
   return Array.from(registry.entries()).map(([name, b]) => ({
     name,
@@ -182,7 +155,6 @@ function listBreakers() {
   }));
 }
 
-/** clear all state (used by tests) */
 function __resetForTests() {
   registry.clear();
 }

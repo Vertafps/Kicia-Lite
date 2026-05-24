@@ -1,10 +1,3 @@
-"use strict";
-
-/**
- * Wraps a ChatInputCommandInteraction (or Autocomplete) as a Discord.js
- * Message-like object so existing $-command handlers work unchanged.
- */
-
 function messageFromInteraction(interaction, syntheticContent) {
   const guild = interaction.guild;
   const channel = interaction.channel;
@@ -23,13 +16,11 @@ function messageFromInteraction(interaction, syntheticContent) {
         return await interaction.followUp({ ...payload, flags: payload.flags ?? (1 << 6) });
       }
     } catch (err) {
-      // swallow
       return null;
     }
   }
 
   const msg = {
-    // Identity
     id: interaction.id,
     content: String(syntheticContent || ""),
     author: user,
@@ -40,7 +31,6 @@ function messageFromInteraction(interaction, syntheticContent) {
     channelId: channel?.id,
     mentions: { everyone: false, users: new Map(), roles: new Map() },
 
-    // Methods used by handlers
     async reply(payload) {
       const normalized = typeof payload === "string" ? { content: payload } : payload;
       return safeReplyOrFollowUp(normalized);
@@ -51,7 +41,7 @@ function messageFromInteraction(interaction, syntheticContent) {
       catch { return null; }
     },
 
-    async react() { /* no-op for interactions */ return null; },
+    async react() { return null; },
 
     inGuild() { return Boolean(guild); },
     isFromGuild() { return Boolean(guild); },

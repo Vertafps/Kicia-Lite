@@ -1,15 +1,6 @@
-"use strict";
-
-/**
- * inline-probe — logistic regression trainer + scorer for 384-dim MiniLM heads.
- * pure compute: no discord, no sqlite, no i/o.
- * used by scam-trade and kicia-disrespect classifiers.
- */
-
 const DIM = 384;
 
-// -- seeded prng (mulberry32) -------------------------------------------------
-
+// mulberry32 seeded prng
 function mulberry32(seed) {
   return function () {
     seed = (seed + 0x6D2B79F5) | 0;
@@ -19,8 +10,6 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-// -- math helpers -------------------------------------------------------------
 
 function sigmoid(x) {
   if (x >= 0) {
@@ -38,8 +27,6 @@ function dotProduct(a, b) {
   return s;
 }
 
-// -- fisher-yates in-place shuffle using rng ----------------------------------
-
 function shuffle(arr, rng) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = (rng() * (i + 1)) | 0;
@@ -48,8 +35,6 @@ function shuffle(arr, rng) {
     arr[j] = tmp;
   }
 }
-
-// -- validate sample list -----------------------------------------------------
 
 function validateSamples(samples) {
   if (!Array.isArray(samples) || samples.length === 0) {
@@ -73,10 +58,7 @@ function validateSamples(samples) {
   return expectedLen;
 }
 
-// -- metric helpers -----------------------------------------------------------
-
 function computeMetrics(predictions) {
-  // predictions: [{prob, label}]
   let tp = 0, fp = 0, fn = 0;
   for (const { prob, label } of predictions) {
     const pred = prob >= 0.5 ? 1 : 0;
@@ -92,7 +74,6 @@ function computeMetrics(predictions) {
 }
 
 function computeAUC(predictions) {
-  // sort descending by prob
   const sorted = predictions.slice().sort((a, b) => b.prob - a.prob);
   const totalPos = sorted.reduce((s, p) => s + p.label, 0);
   const totalNeg = sorted.length - totalPos;
@@ -117,8 +98,6 @@ function computeAUC(predictions) {
   return Math.max(0, Math.min(1, auc));
 }
 
-// -- core SGD trainer (Adam optimizer) ----------------------------------------
-
 function trainSGD(samples, dim, options) {
   const {
     epochs = 200,
@@ -131,7 +110,6 @@ function trainSGD(samples, dim, options) {
 
   const rng = mulberry32(seed);
 
-  // validation split
   const indices = Array.from({ length: samples.length }, (_, i) => i);
   shuffle(indices, mulberry32(seed + 1));
   const valCount = Math.max(0, Math.floor(samples.length * validationFraction));
@@ -140,7 +118,7 @@ function trainSGD(samples, dim, options) {
   const trainSamples = samples.filter((_, i) => !valIndices.has(i));
   const valSamples = samples.filter((_, i) => valIndices.has(i));
 
-  // adam state (Float64Array for numerical precision)
+  // Float64Array for numerical precision
   const W = new Float64Array(dim);
   let b = 0;
 
@@ -149,9 +127,8 @@ function trainSGD(samples, dim, options) {
   let mB = 0, vB = 0;
 
   const beta1 = 0.9, beta2 = 0.999, eps = 1e-8;
-  let t = 0; // global adam step counter
+  let t = 0;
 
-  // early stopping
   let bestValLoss = Infinity;
   let patienceCounter = 0;
   const patience = 20;
@@ -180,13 +157,11 @@ function trainSGD(samples, dim, options) {
         gB += err;
       }
 
-      // normalise by batch size + l2
       for (let j = 0; j < dim; j++) {
         gW[j] = gW[j] / bs + l2 * W[j];
       }
       gB /= bs;
 
-      // adam updates for W
       const bc1 = 1 - Math.pow(beta1, t);
       const bc2 = 1 - Math.pow(beta2, t);
       for (let j = 0; j < dim; j++) {
@@ -197,13 +172,11 @@ function trainSGD(samples, dim, options) {
         W[j] -= lr * mHat / (Math.sqrt(vHat) + eps);
       }
 
-      // adam update for b
       mB = beta1 * mB + (1 - beta1) * gB;
       vB = beta2 * vB + (1 - beta2) * gB * gB;
       b -= lr * (mB / bc1) / (Math.sqrt(vB / bc2) + eps);
     }
 
-    // validation loss for early stopping
     if (valSamples.length > 0) {
       let valLoss = 0;
       for (const s of valSamples) {
@@ -225,7 +198,6 @@ function trainSGD(samples, dim, options) {
     }
   }
 
-  // use best val checkpoint if we have one, otherwise current weights
   if (valSamples.length > 0) {
     W.set(bestW);
     b = bestB;
@@ -234,13 +206,10 @@ function trainSGD(samples, dim, options) {
   return { W, b };
 }
 
-// -- public: trainLogisticHead ------------------------------------------------
-
 function trainLogisticHead(samples, options) {
   const dim = validateSamples(samples);
   const { W, b } = trainSGD(samples, dim, options || {});
 
-  // compute metrics on all samples
   const predictions = samples.map((s) => ({
     prob: sigmoid(dotProduct(W, s.vector) + b),
     label: s.label
@@ -257,13 +226,9 @@ function trainLogisticHead(samples, options) {
   };
 }
 
-// -- public: scoreLogisticHead ------------------------------------------------
-
 function scoreLogisticHead(vector, head) {
   return sigmoid(dotProduct(head.W, vector) + head.b);
 }
-
-// -- public: trainAndCrossValidate --------------------------------------------
 
 function trainAndCrossValidate(samples, options) {
   const dim = validateSamples(samples);
@@ -272,13 +237,11 @@ function trainAndCrossValidate(samples, options) {
 
   const FOLDS = 5;
 
-  // too few samples: skip CV
   if (samples.length < 10) {
     const head = trainLogisticHead(samples, opts);
     return { head, metrics: head.metrics, threshold: 0.5 };
   }
 
-  // shuffle indices for fold assignment
   const indices = Array.from({ length: samples.length }, (_, i) => i);
   shuffle(indices, mulberry32(seed));
 
@@ -335,13 +298,10 @@ function trainAndCrossValidate(samples, options) {
 
   const threshold = bestThreshold !== null ? bestThreshold : bestF1Threshold;
 
-  // retrain on all samples for final head
   const finalHead = trainLogisticHead(samples, opts);
 
   return { head: finalHead, metrics, threshold };
 }
-
-// -- exports ------------------------------------------------------------------
 
 module.exports = {
   trainLogisticHead,

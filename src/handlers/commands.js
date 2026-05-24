@@ -70,12 +70,10 @@ function isCommandsListMessage(content) {
 }
 
 const TOGGLE_ALIASES = {
-  // user-facing answer flows
   support:        "support.answer.enabled",
   kb:             "support.answer.enabled",
   ping:           "support.answer.enabled",
   status:         "status.answer.enabled",
-  // guards
   scam:           "scam.guard.enabled",
   trade:          "scam.guard.enabled",
   respect:        "respect.guard.enabled",
@@ -93,7 +91,6 @@ const TOGGLE_ALIASES = {
   reactions:      "rr.guard.enabled",
   rr:             "rr.guard.enabled",
   training:       "training.enabled",
-  // outage auto-detection + auto channel lockdown
   autolock:       "status.autodetect.enabled",
   "auto-lock":    "status.autodetect.enabled",
   autodetect:     "status.autodetect.enabled",
@@ -725,7 +722,6 @@ async function handleToggleCommand(message, parsed, deps) {
   if (parsed.action === "list") {
     const lines = [];
     for (const [alias, key] of Object.entries(TOGGLE_ALIASES)) {
-      // dedupe: only show first alias per key
       if (lines.some((l) => l.endsWith("`" + key + "`"))) continue;
       const cur = settings.getSetting(key);
       const mark = cur === false ? "🔴 off" : "🟢 on ";
@@ -1437,13 +1433,11 @@ async function maybeHandleConfigListInteraction(interaction) {
   const customId = String(interaction.customId || "");
   if (!customId.startsWith(CONFIG_LIST_BUTTON_PREFIX)) return false;
 
-  // Indicator button has no destination — just ack and drop.
   if (customId === `${CONFIG_LIST_BUTTON_PREFIX}indicator`) {
     try { await interaction.deferUpdate(); } catch {}
     return true;
   }
 
-  // Permission gate — only owners can paginate the config list.
   if (!isKernelUserId(interaction.user?.id) && !hasAnyRole(interaction.member, [...OWNER_ROLE_IDS])) {
     try {
       await interaction.reply({ content: "owner only", flags: 1 << 6 });
@@ -1620,9 +1614,7 @@ async function handleConfigCommand(message, parsed) {
           guild: message.guild
         });
         if (r && r.ok) count += 1;
-      } catch {
-        // swallow per-key failures; keep going
-      }
+      } catch {}
     }
     await replyWithCommandPanel(message, {
       header: "Config Reset · All",
@@ -1741,8 +1733,6 @@ async function handleTrustedLinkCommand(message, command, {
 }
 
 async function handlePatternCommand(message, parsed) {
-  // lazy require — avoid pulling embedder + db at module load time, and let
-  // tests stub via require.cache.
   const patterns = require("../custom-patterns");
   const { parseDurationInput, formatDuration } = require("../duration");
 

@@ -1,38 +1,15 @@
-"use strict";
-
-/**
- * Custom timeout patterns — owner-defined phrases that trigger auto-timeout
- * when a future message is semantically similar enough.
- *
- * Pipeline:
- *   1. owner runs `$pattern add 1h v2 is better than v3` — phrase is normalized
- *      via buildNormalizedTextForms().folded (defuses leet + confusables),
- *      embedded to a 384-dim unit vector via MiniLM, persisted as JSON in
- *      `custom_timeout_patterns`, and cached in-memory.
- *   2. every message routes through matchMessage(text) — text is normalized
- *      the same way, embedded once, then cosine-compared against every cached
- *      pattern vector. best score above its pattern's threshold wins.
- *   3. moderation handler fires the timeout + deletes the message; no DM is
- *      ever sent. staff log captures the match.
- *
- * Vector storage is JSON.stringify(Array.from(Float32Array)) — ~6KB per
- * pattern. fine for under ~500 patterns. if it grows past that, migrate to
- * a sibling table with BLOB column.
- */
-
 const { embedText, cosineSim } = require("./embeddings");
 const { buildNormalizedTextForms } = require("./text");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-// in-memory cache: id -> { phrase, vector, timeoutMs, threshold, createdAt,
-// createdBy, normalizedPhrase }
+// in-memory cache: id -> { phrase, vector, timeoutMs, threshold, createdAt, createdBy, normalizedPhrase }
 const cache = new Map();
 let hydrated = false;
 
 const DEFAULT_THRESHOLD = 0.80;
 const MIN_THRESHOLD = 0.5;
 const MAX_THRESHOLD = 0.99;
-const MIN_TIMEOUT_MS = 60_000;                  // 1m floor
+const MIN_TIMEOUT_MS = 60_000;                    // 1m floor
 const MAX_TIMEOUT_MS = 28 * 24 * 60 * 60 * 1000; // discord cap (~28d)
 const MAX_PHRASE_LEN = 512;
 
@@ -50,16 +27,13 @@ function clampTimeout(value) {
 
 function normalizePhrase(phrase) {
   const forms = buildNormalizedTextForms(String(phrase || ""));
-  // .folded keeps the words intact (no aggressive char-stripping) but defuses
-  // confusables/invisibles. for embeddings this is the right level — MiniLM
-  // does its own subword tokenization, so we don't want normalized's space-
-  // separated bag-of-words shape.
+  // .folded defuses confusables/invisibles without the bag-of-words shape that
+  // .normalized produces — MiniLM handles its own subword tokenization
   return String(forms.folded || "").trim();
 }
 
 function lazyGetDb() {
-  // lazy require to avoid circular dep — restricted-emoji-db imports settings,
-  // which may transitively pull this module.
+  // lazy require to avoid circular dep with restricted-emoji-db
   const mod = require("./restricted-emoji-db");
   if (!mod || typeof mod.getDatabase !== "function") return null;
   return mod;
@@ -136,7 +110,6 @@ async function hydrateCustomPatterns() {
   if (hydrated) return cache.size;
   const dbModule = lazyGetDb();
   if (!dbModule) {
-    // tests / cold env — mark hydrated so subsequent calls don't re-attempt
     hydrated = true;
     return 0;
   }
@@ -157,7 +130,7 @@ async function hydrateCustomPatterns() {
       "SELECT id, phrase, normalized_phrase, timeout_ms, threshold, vector_json, created_by, created_at FROM custom_timeout_patterns ORDER BY id ASC"
     );
   } catch (err) {
-    // table doesn't exist yet — schema migration hasn't fired. fine.
+    // table doesn't exist yet — schema migration hasn't fired
     recordRuntimeEvent("warn", "custom-patterns-hydrate-rows", err?.message || err);
     hydrated = true;
     return 0;
@@ -167,7 +140,6 @@ async function hydrateCustomPatterns() {
   for (const row of rows) {
     const entry = mapRowToCacheEntry(row);
     if (!entry.vector) {
-      // missing vector — re-embed and persist
       try {
         const vec = await embedText(entry.normalizedPhrase || entry.phrase);
         entry.vector = vec;
@@ -178,7 +150,6 @@ async function hydrateCustomPatterns() {
         dbModule.schedulePersist?.(db);
       } catch (err) {
         recordRuntimeEvent("warn", "custom-patterns-hydrate-embed", err?.message || err);
-        // skip — without a vector this entry can't be matched
         continue;
       }
     }
@@ -204,7 +175,7 @@ async function addPattern({ phrase, timeoutMs, threshold = DEFAULT_THRESHOLD, cr
   const finalTimeout = clampTimeout(timeoutMs);
   const finalThreshold = clampThreshold(threshold);
 
-  // embed first — fail fast if MiniLM is dead.
+  // embed first — fail fast if MiniLM is unavailable
   const vec = await embedText(normalized);
   if (!vec || !vec.length) throw new Error("embedder returned empty vector");
 
@@ -291,11 +262,10 @@ async function setThreshold(id, value) {
 
 async function listPatterns() {
   await ensureHydrated();
-  const list = [...cache.values()]
+  return [...cache.values()]
     .map(cacheEntryToPublic)
     .filter(Boolean)
     .sort((a, b) => a.id - b.id);
-  return list;
 }
 
 async function matchMessage(text, { minThreshold = null } = {}) {
@@ -344,8 +314,7 @@ async function matchMessage(text, { minThreshold = null } = {}) {
     };
   }
 
-  // for $pattern test: when caller provides a lower minThreshold than the
-  // pattern's own, surface the best score even if it didn't fire.
+  // when caller provides a lower minThreshold, surface the best score even if it didn't fire
   if (minThreshold != null && bestScore >= gate) {
     return {
       matched: false,

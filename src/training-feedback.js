@@ -1,37 +1,4 @@
-"use strict";
-
-/**
- * training-feedback.js
- *
- * Enqueue + per-guild post queue for training-channel samples.
- *
- * Public surface:
- *   - enqueueTrainingSample(message, classification)   — write sample to DB,
- *       schedule a post to the configured training channel.
- *   - drainTrainingChannelQueue()                      — pick up samples that
- *       have posted=0 (e.g. when the channel slot becomes configured).
- *   - startTrainingChannelScheduler()                  — idempotent 30s tick
- *       so cold-start posted=0 rows get picked up.
- *   - flushAllTrainingQueues()                         — graceful shutdown.
- *   - getTrainingQueueStats()                          — observability.
- *   - __resetForTests()
- *
- * Design notes
- * ------------
- * - All require()s for sibling modules go through lazy helpers so this file
- *   can be loaded in any order — the classifier modules pull us in, and we
- *   pull in training-db / channel-config / embed / etc.
- * - Per-guild bounded FIFO. Overflow drops oldest first (same pattern as
- *   log-channel-queue.js) and records a rate-limited warn.
- * - When the configured training channel is missing/unset, we leave
- *   posted=0 on the row; the scheduler (or a channel-slot change) revisits.
- */
-
 const crypto = require("crypto");
-
-// ---------------------------------------------------------------------------
-// Lazy module loaders — avoid top-level requires for circular-prone modules.
-// ---------------------------------------------------------------------------
 
 function getGetSetting() {
   try {
@@ -96,10 +63,6 @@ function getComponentsBuilder() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 function sha1Hash(text) {
   return crypto.createHash("sha1").update(String(text || "")).digest("hex");
 }
@@ -125,12 +88,7 @@ function authorLabelFor(user) {
   return discrim && discrim !== "0" ? `${username}#${discrim}` : username;
 }
 
-// ---------------------------------------------------------------------------
-// Per-guild post queue (mirrors log-channel-queue.js shape).
-// QUEUE: guildId → { entries, timer, stats, guildRef, lastWarnAt }
-//   entries: [{sampleId, classifier, severity}]
-// ---------------------------------------------------------------------------
-
+// QUEUE: guildId -> { entries, timer, stats, guildRef, lastWarnAt }
 const QUEUE = new Map();
 
 function getMaxQueueDepth() {
@@ -222,17 +180,6 @@ function enqueueForPost({ guildId, sampleId, guildRef, classifier, severity }) {
   startDrainIfIdle(state);
 }
 
-// ---------------------------------------------------------------------------
-// enqueueTrainingSample — public API
-// ---------------------------------------------------------------------------
-
-/**
- * @param {object} message       discord.js Message
- * @param {object} classification
- *   {classifier, verdict, severity, signals, confidence, durationMs,
- *    reasonText, embedding, actionActionId}
- * @returns {Promise<{sampleId: number|null, queued: boolean, deduped: boolean, reason?: string}>}
- */
 async function enqueueTrainingSample(message, classification) {
   try {
     const getSetting = getGetSetting();
@@ -249,14 +196,13 @@ async function enqueueTrainingSample(message, classification) {
       return { sampleId: null, queued: false, deduped: false, reason: "no-classification" };
     }
 
-    // ---- Borderline gate (timeouts always pass through for staff visibility)
     const verdict = classification.verdict;
-    // BUG FIX: classifiers expose confidence at signals.confidence, not the
-    // top-level. Read from either shape.
+    // Confidence is exposed at signals.confidence by some classifiers, top-level by others.
     const rawConfidence = classification.confidence ?? classification.signals?.confidence;
     const confidence = Number(rawConfidence);
     const safeConfidence = Number.isFinite(confidence) ? confidence : 0;
 
+    // Timeouts always pass through for staff visibility.
     if (verdict !== "timeout") {
       const thresholdRaw = getSetting(`training.classifier.${classification.classifier}.threshold`);
       const threshold = Number.isFinite(Number(thresholdRaw)) ? Number(thresholdRaw) : 0.55;
@@ -271,7 +217,6 @@ async function enqueueTrainingSample(message, classification) {
       }
     }
 
-    // ---- Normalize text + build dedup key
     const text = String(message.content || "");
     const normalizeText = getNormalizeText();
     const normalized = normalizeText(text).slice(0, 4000);
@@ -283,8 +228,7 @@ async function enqueueTrainingSample(message, classification) {
       "|" +
       classification.classifier;
 
-    // ---- Backfill embedding if not supplied (skip for link — link classifier
-    //      uses URL features, not text embeddings).
+    // Link classifier uses URL features, not text embeddings.
     let embedding = classification.embedding instanceof Float32Array ? classification.embedding : null;
     if (!embedding && classification.classifier !== "link") {
       const embedText = getEmbedText();
@@ -293,13 +237,11 @@ async function enqueueTrainingSample(message, classification) {
           const vec = await embedText(normalized.slice(0, 512));
           if (vec instanceof Float32Array && vec.length > 0) embedding = vec;
         } catch (err) {
-          // backfill-later — write the row without the vector
           getRecordRuntimeEvent()("warn", "training-embed", err?.message || String(err));
         }
       }
     }
 
-    // ---- Persist
     const { createTrainingSample } = getTrainingDb();
     const config = getConfig();
     const signalsJson = JSON.stringify({
@@ -346,14 +288,6 @@ async function enqueueTrainingSample(message, classification) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// postSampleToTrainingChannel
-// ---------------------------------------------------------------------------
-
-/**
- * Post one sample to its guild's configured training channel.
- * Returns true on a successful send (sample marked posted=1).
- */
 async function postSampleToTrainingChannel(guild, sampleId, classifier) {
   if (!guild || sampleId == null) return false;
 
@@ -366,12 +300,11 @@ async function postSampleToTrainingChannel(guild, sampleId, classifier) {
     return false;
   }
   if (!sample) return false;
-  if (sample.posted) return false; // already posted, nothing to do
+  if (sample.posted) return false;
 
   const channelId = getChannelConfig().getConfiguredChannelId("training");
   if (!channelId) {
-    // Channel not configured — leave posted=0; drainTrainingChannelQueue
-    // will revisit when the slot gets set.
+    // No channel configured: leave posted=0 so drain revisits when slot is set.
     return false;
   }
 
@@ -434,10 +367,6 @@ function resolveStaffPingRole(classifier) {
   return ids[0] || null;
 }
 
-// ---------------------------------------------------------------------------
-// buildTrainingPanel
-// ---------------------------------------------------------------------------
-
 function buildTrainingPanel(sample, classifier) {
   const embedMod = getEmbedMod();
   const buildRichPanel = embedMod.buildRichPanel;
@@ -481,7 +410,6 @@ function buildTrainingPanel(sample, classifier) {
     });
   }
 
-  // ---- Signal summary block (classifier-specific layout)
   const signalLines = buildSignalLines(classifier, signals);
   if (signalLines.length) {
     fields.push({
@@ -534,7 +462,6 @@ function buildSignalLines(classifier, signals) {
       `q: ${s.question ? "yes" : "no"}`
     ];
   }
-  // Generic fallback: dump a few well-known fields.
   const lines = [];
   if (s.confidence != null) lines.push(`confidence: ${Number(s.confidence).toFixed(2)}`);
   for (const key of Object.keys(s).slice(0, 6)) {
@@ -546,10 +473,6 @@ function buildSignalLines(classifier, signals) {
   }
   return lines;
 }
-
-// ---------------------------------------------------------------------------
-// buildButtonRows
-// ---------------------------------------------------------------------------
 
 function buildButtonRows(sampleId, classifier, sample) {
   const builder = getComponentsBuilder();
@@ -594,18 +517,6 @@ function buildButtonRowsInline(sampleId, classifier) {
   return [row];
 }
 
-// ---------------------------------------------------------------------------
-// drainTrainingChannelQueue — pick up posted=0 rows.
-// ---------------------------------------------------------------------------
-
-/**
- * Iterate posted=0 samples, enqueue each onto its guild's post queue.
- * Called by the scheduler tick and when the training-channel slot changes.
- *
- * We need a Guild object reference for the post path; we look it up via the
- * global discord client (require('./index') if it exports `client`, else
- * fall back to the first guild on the most-recent ref we know about).
- */
 async function drainTrainingChannelQueue() {
   let samples = [];
   try {
@@ -647,17 +558,12 @@ async function drainTrainingChannelQueue() {
 
 function getClientRef() {
   try {
-    // index.js may export `client` once ready; lazy-load to avoid cycles.
     const idx = require("./index");
     return idx?.client || null;
   } catch (_) {
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Scheduler — idempotent 30s tick.
-// ---------------------------------------------------------------------------
 
 let schedulerTimer = null;
 const SCHEDULER_INTERVAL_MS = 30_000;
@@ -683,10 +589,7 @@ function stopTrainingChannelScheduler() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Graceful shutdown — 2s total budget, up to 10 sends/guild.
-// ---------------------------------------------------------------------------
-
+// Graceful shutdown: 2s total budget, up to 10 sends per guild.
 async function flushAllTrainingQueues() {
   const BUDGET_PER_GUILD = 10;
   const flushPromises = [];
@@ -697,7 +600,7 @@ async function flushAllTrainingQueues() {
     stopDrainTimer(state);
     const toFlush = state.entries.splice(0, BUDGET_PER_GUILD);
     state.stats.pending = Math.max(0, state.stats.pending - toFlush.length);
-    state.entries.length = 0; // abandon anything past budget
+    state.entries.length = 0;
 
     const batch = Promise.allSettled(
       toFlush.map((entry) =>
@@ -726,10 +629,6 @@ async function flushAllTrainingQueues() {
   ]);
 }
 
-// ---------------------------------------------------------------------------
-// Observability
-// ---------------------------------------------------------------------------
-
 function getTrainingQueueStats() {
   const out = {};
   for (const [guildId, state] of QUEUE) {
@@ -738,10 +637,6 @@ function getTrainingQueueStats() {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Test hooks
-// ---------------------------------------------------------------------------
-
 function __resetForTests() {
   for (const [, state] of QUEUE) {
     stopDrainTimer(state);
@@ -749,10 +644,6 @@ function __resetForTests() {
   QUEUE.clear();
   stopTrainingChannelScheduler();
 }
-
-// ---------------------------------------------------------------------------
-// Exports
-// ---------------------------------------------------------------------------
 
 module.exports = {
   enqueueTrainingSample,

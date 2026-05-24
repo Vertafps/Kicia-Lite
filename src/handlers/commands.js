@@ -92,7 +92,13 @@ const TOGGLE_ALIASES = {
   impersonation:  "impersonation.guard.enabled",
   reactions:      "rr.guard.enabled",
   rr:             "rr.guard.enabled",
-  training:       "training.enabled"
+  training:       "training.enabled",
+  // outage auto-detection + auto channel lockdown
+  autolock:       "status.autodetect.enabled",
+  "auto-lock":    "status.autodetect.enabled",
+  autodetect:     "status.autodetect.enabled",
+  "auto-detect":  "status.autodetect.enabled",
+  outage:         "status.autodetect.enabled"
 };
 
 function parseToggleMessage(content) {

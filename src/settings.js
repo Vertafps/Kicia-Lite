@@ -771,6 +771,13 @@ const REGISTRY_ENTRIES = [
     min: 10 * SECOND_MS,
     max: 10 * MINUTE_MS
   }],
+  ["status.autodetect.enabled", {
+    type: SETTING_TYPES.BOOL,
+    defaultValue: true,
+    label: "Auto-Detect & Lockdown",
+    description: "Master switch: when off, the bot never auto-detects outages and never auto-locks channels. Owners can still use $status / $lock manually.",
+    section: "status"
+  }],
   ["status.autodetect.distinct_users", {
     type: SETTING_TYPES.INT,
     defaultValue: 4,

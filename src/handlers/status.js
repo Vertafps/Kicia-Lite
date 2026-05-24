@@ -1,4 +1,5 @@
 const { CHANNEL_LOCK_ROLE_ID, BRAND } = require("../config");
+const { getSetting } = require("../settings");
 const { getStatusJumpUrl } = require("../channel-config");
 const { isNoResponseMessage } = require("../channel-policy");
 const {
@@ -291,6 +292,7 @@ async function maybeHandleStatusCommand(message, { refreshKb = forceRefreshKb } 
   }
 
   if (publicStatusQuery) {
+    if (getSetting("status.answer.enabled") === false) return null;
     return maybeReplyWithPublicStatus(message, { useCooldown: false });
   }
 

@@ -333,6 +333,63 @@ function createSchema(db) {
       last_action_tier INTEGER NOT NULL DEFAULT 0,
       last_action_at INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS training_samples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      classifier TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      guild_id TEXT,
+      channel_id TEXT,
+      message_id TEXT,
+      message_url TEXT,
+      author_id TEXT,
+      author_label TEXT,
+      raw_text TEXT NOT NULL,
+      normalized_text TEXT NOT NULL,
+      signals_json TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      action_action_id TEXT,
+      label TEXT,
+      severity TEXT,
+      labeler_id TEXT,
+      labeler_label TEXT,
+      labeled_at INTEGER,
+      staff_note TEXT,
+      feedback_message_id TEXT,
+      feedback_channel_id TEXT,
+      dedup_key TEXT NOT NULL,
+      posted INTEGER NOT NULL DEFAULT 0,
+      anonymized INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS training_samples_label_idx
+      ON training_samples (classifier, label, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS training_samples_dedup_idx
+      ON training_samples (dedup_key, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS training_samples_unlabeled_idx
+      ON training_samples (classifier, labeled_at) WHERE label IS NULL;
+
+    CREATE INDEX IF NOT EXISTS training_samples_posted_idx
+      ON training_samples (posted, created_at) WHERE posted = 0;
+
+    CREATE INDEX IF NOT EXISTS training_samples_author_idx
+      ON training_samples (author_id) WHERE author_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS training_embeddings (
+      sample_id INTEGER PRIMARY KEY,
+      model_id TEXT NOT NULL,
+      dims INTEGER NOT NULL,
+      vector BLOB NOT NULL,
+      FOREIGN KEY (sample_id) REFERENCES training_samples(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS respect_tier_state (
+      user_id TEXT PRIMARY KEY,
+      last_offense_at INTEGER NOT NULL,
+      tier INTEGER NOT NULL DEFAULT 1
+    );
   `);
 }
 
@@ -2045,5 +2102,8 @@ module.exports = {
   cleanupRestrictedEmojiDatabaseTempFiles,
   getRestrictedEmojiDatabaseSnapshot,
   flushRestrictedEmojiDatabaseNow,
-  resetRestrictedEmojiDatabaseForTests
+  resetRestrictedEmojiDatabaseForTests,
+  // Exported for sibling modules (training-db.js) that share the same database
+  getDatabase,
+  schedulePersist
 };

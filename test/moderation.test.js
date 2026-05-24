@@ -72,13 +72,7 @@ const {
   normalizeHomoglyphs
 } = require("../src/handlers/impersonation");
 const { maybeHandleRestrictedReactionAdd } = require("../src/handlers/restricted-reactions");
-const {
-  classifyScamContextLocally,
-  getExplanationResponseIntent,
-  isKiciaLegitPurchaseIntent,
-  isSafePurchaseMethodQuestion,
-  isSafeSecurityDisableSupport
-} = require("../src/scam-local-classifier");
+// scam-local-classifier was removed; tests that relied on it are removed below.
 const {
   DEFAULT_NICKNAME_RENAME_SENTINEL,
   buildDefaultBadName
@@ -726,127 +720,6 @@ test("unicode normalizer folds mixed-script and zero-width bypass text", () => {
 
   assert.equal(buildNormalizedTextForms("рorn сum аss").normalized, "porn cum ass");
   assert.equal(buildNormalizedTextForms("т р с о а е б п к").normalized, "t p c o a e b n k");
-});
-
-test("local scam classifier protects official Kicia purchase questions", () => {
-  assert.equal(isKiciaLegitPurchaseIntent(["buying kicia"]), true);
-  assert.equal(isKiciaLegitPurchaseIntent(["where can i buy kicia premium"]), true);
-  assert.equal(isKiciaLegitPurchaseIntent(["can i buy kicia with robux"]), true);
-  assert.equal(isKiciaLegitPurchaseIntent(["can i buy kicia with roblox"]), true);
-  assert.equal(isSafePurchaseMethodQuestion(["can i buy ts with roblox"]), true);
-  assert.equal(isSafePurchaseMethodQuestion(["can i buy this with robux"]), true);
-  assert.equal(isSafePurchaseMethodQuestion(["dm me to buy this with robux"]), false);
-  assert.equal(isKiciaLegitPurchaseIntent(["buy kicia from me cheaper"]), false);
-  assert.equal(isKiciaLegitPurchaseIntent(["trade kicia for robux"]), false);
-  assert.equal(detectScamTradeCandidateContext(["where can i buy kicia premium"]), null);
-  assert.equal(detectScamTradeCandidateContext(["can i buy this with robux"]), null);
-
-  const legitVerdict = classifyScamContextLocally({
-    userMessages: ["where can i buy kicia premium"]
-  });
-  assert.equal(legitVerdict.verdict, false);
-  assert.ok(legitVerdict.confidence >= 90);
-
-  const robloxPaymentVerdict = classifyScamContextLocally({
-    userMessages: ["can i buy ts with roblox"]
-  });
-  assert.equal(robloxPaymentVerdict.verdict, false);
-  assert.ok(robloxPaymentVerdict.confidence >= 90);
-
-  const resellerVerdict = classifyScamContextLocally({
-    userMessages: ["buy kicia from me cheaper dm"]
-  }, {
-    strongestSignal: { confidence: 86 }
-  });
-  assert.equal(resellerVerdict.verdict, true);
-});
-
-test("local scam classifier follows KiciaHook safe and unsafe standards", () => {
-  assert.equal(isSafeSecurityDisableSupport(["disable windows defender for executor"]), true);
-  assert.equal(detectScamTradeCandidateContext(["disable antivirus for executor"]), null);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["disable antivirus for executor"]
-  }).verdict, false);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["dms to buy kicia"]
-  }).verdict, true);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["dms to buy this"]
-  }).verdict, true);
-
-  const ambiguousBarter = classifyScamContextLocally({
-    userMessages: ["trading this for that"]
-  });
-  assert.equal(ambiguousBarter.verdict, null);
-  assert.match(ambiguousBarter.reason, /remote AI/i);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["trade with kiciahook pre"]
-  }).verdict, true);
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["i want a script to see a win rate trade with kicia premium"]
-  }).verdict, true);
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["trading kicia premium for account"]
-  }).verdict, true);
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["Kiciahook Premium for Volt"]
-  }).verdict, true);
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["can i trade kicia config here?"]
-  }).verdict, null);
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["do not trade kicia premium"]
-  }).verdict, false);
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["Do not dm me about free robux scams"]
-  }).verdict, false);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["someone said dms to buy kicia is that allowed"]
-  }).verdict, false);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["join my signal group crypto profits"]
-  }).verdict, true);
-
-  const guardedUrgency = classifyScamContextLocally({
-    userMessages: ["limited time act now before expires"]
-  });
-  assert.equal(guardedUrgency.verdict, null);
-  assert.match(guardedUrgency.stage, /guarded/i);
-
-  const genericSale = classifyScamContextLocally({
-    userMessages: ["SELLING MARUANA", "$100"]
-  });
-  assert.equal(genericSale.verdict, true);
-  assert.match(genericSale.reason, /prohibited goods sale/i);
-});
-
-test("local scam classifier separates explanations from private purchase handoffs", () => {
-  const purchaseQuestion = { content: "how to buy?" };
-  const kiciaPurchaseQuestion = { content: "where can i buy kicia premium?" };
-
-  const routeAnswer = getExplanationResponseIntent(["oh buy in the resellers"], purchaseQuestion);
-  assert.equal(routeAnswer.verdict, false);
-  assert.match(routeAnswer.reason, /official purchase/i);
-  assert.equal(detectScamTradeCandidateContext(["oh buy in the resellers"], purchaseQuestion), null);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["open a ticket"],
-    repliedToMessage: kiciaPurchaseQuestion
-  }).verdict, false);
-
-  const privateAnswer = getExplanationResponseIntent(["dms"], kiciaPurchaseQuestion);
-  assert.equal(privateAnswer.verdict, true);
-
-  assert.equal(classifyScamContextLocally({
-    userMessages: ["dm me"],
-    repliedToMessage: kiciaPurchaseQuestion
-  }).verdict, true);
 });
 
 test("contextual selling detection catches split sell and price messages", () => {
@@ -2927,59 +2800,5 @@ test("restricted reactions on staff messages remove the reaction and DM warn the
   assert.equal(reactionAlert?.eventCount, 1);
 });
 
-test("pipeline works correctly when scam embedder is absent (no download)", async () => {
-  const { resetScamEmbedStateForTests } = require("../src/scam-embeddings-classifier");
-  resetScamEmbedStateForTests();
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("selling kicia config cheap dm me");
-
-  const handled = await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    classifyScam: async () => {
-      throw new Error("remote AI should not be called");
-    }
-  });
-
-  assert.equal(handled, true);
-  assert.equal(fixture.deleted.length, 1);
-  assert.equal(fixture.logs.length, 1);
-  assert.match(panelText(fixture.logs[0]), /(?:local-kicia-intent-v3|kicia-decomposed-v1): TRUE/i);
-});
-
-test("executor support wording is not flagged as scam when embedder is absent", async () => {
-  const { resetScamEmbedStateForTests } = require("../src/scam-embeddings-classifier");
-  resetScamEmbedStateForTests();
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("wave executor isnt loading help");
-
-  const handled = await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    classifyScam: async () => ({ attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" })
-  });
-
-  assert.equal(handled, false);
-});
-
-test("antivirus disable request is never flagged as scam even with embedder absent", async () => {
-  const { resetScamEmbedStateForTests } = require("../src/scam-embeddings-classifier");
-  resetScamEmbedStateForTests();
-  await clearDailyStatsTracking(1);
-  const fixture = buildModerationMessage("disable windows defender so the executor works");
-  let aiCalls = 0;
-
-  await maybeHandleModerationWatch(fixture.message, {
-    kb,
-    runtimeStatus: "UP",
-    sendLog: fixture.sendLog,
-    classifyScam: async () => {
-      aiCalls++;
-      return { attempted: true, verdict: false, answer: "FALSE", model: "test-gemini" };
-    }
-  });
-
-  assert.equal(aiCalls, 0, "antivirus support phrasing should not reach AI");
-});
+// Tests for scam-embeddings-classifier (absent/no-download path) removed —
+// src/scam-embeddings-classifier was deleted as part of the scam-system removal.

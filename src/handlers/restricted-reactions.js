@@ -27,6 +27,7 @@ const {
   EMOJI_SPAM_TIER3_WINDOW_MS,
   EMOJI_SPAM_TIER3_COUNT
 } = require("../config");
+const { getSetting } = require("../settings");
 const { buildPanel, buildRichPanel, WARN, DANGER, resolveAvatarURL } = require("../embed");
 const { formatDuration } = require("../duration");
 const { sendLogPanel } = require("../log-channel");
@@ -208,6 +209,8 @@ function buildRestrictedReactionLogPanel({
 }
 
 async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
+  if (getSetting("rr.guard.enabled") === false) return false;
+
   const {
     listEmojis = listRestrictedEmojis,
     sendLog = sendLogPanel
@@ -244,12 +247,12 @@ async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
   // Spam escalation — determine tier
   const escalation = await bumpEmojiSpamState({
     userId: user.id,
-    tier1Window: EMOJI_SPAM_TIER1_WINDOW_MS,
-    tier1Count: EMOJI_SPAM_TIER1_COUNT,
-    tier2Window: EMOJI_SPAM_TIER2_WINDOW_MS,
-    tier2Count: EMOJI_SPAM_TIER2_COUNT,
-    tier3Window: EMOJI_SPAM_TIER3_WINDOW_MS,
-    tier3Count: EMOJI_SPAM_TIER3_COUNT
+    tier1Window: getSetting("rr.tier1.window") ?? EMOJI_SPAM_TIER1_WINDOW_MS,
+    tier1Count: getSetting("rr.tier1.count") ?? EMOJI_SPAM_TIER1_COUNT,
+    tier2Window: getSetting("rr.tier2.window") ?? EMOJI_SPAM_TIER2_WINDOW_MS,
+    tier2Count: getSetting("rr.tier2.count") ?? EMOJI_SPAM_TIER2_COUNT,
+    tier3Window: getSetting("rr.tier3.window") ?? EMOJI_SPAM_TIER3_WINDOW_MS,
+    tier3Count: getSetting("rr.tier3.count") ?? EMOJI_SPAM_TIER3_COUNT
   }).catch((err) => {
     recordRuntimeEvent("warn", "emoji-spam-state", err?.message || err);
     return { tier: 0, count: 1 };
@@ -258,10 +261,10 @@ async function maybeHandleRestrictedReactionAdd(reaction, user, deps = {}) {
   let timeoutResult = null;
   let durationMs = 0;
   if (escalation.tier === 1) {
-    durationMs = EMOJI_SPAM_TIER1_TIMEOUT_MS;
+    durationMs = getSetting("rr.tier1.timeout") ?? EMOJI_SPAM_TIER1_TIMEOUT_MS;
     timeoutResult = await tryTimeoutMember(reactingMember, durationMs, "restricted emoji spam (tier 1)");
   } else if (escalation.tier === 2) {
-    durationMs = EMOJI_SPAM_TIER2_TIMEOUT_MS;
+    durationMs = getSetting("rr.tier2.timeout") ?? EMOJI_SPAM_TIER2_TIMEOUT_MS;
     timeoutResult = await tryTimeoutMember(reactingMember, durationMs, "restricted emoji spam (tier 2)");
   }
 

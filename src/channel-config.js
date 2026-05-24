@@ -132,6 +132,14 @@ const CHANNEL_CONFIG_SLOTS = [
     defaultId: "",
     required: false,
     uses: ["pinned live status widget (auto-updates every 60s)"]
+  },
+  {
+    key: "training",
+    aliases: ["trainingchannel", "train", "feedback", "scams", "scamreview"],
+    label: "Training Channel",
+    defaultId: "",
+    required: false,
+    uses: ["classifier label collection", "scam/disrespect review pings", "retrain audits"]
   }
 ];
 

@@ -3,6 +3,7 @@ const ui = require("../ui");
 const { buildLinkButtonRows } = require("../components");
 const { BRAND, RECENT_CHANNEL_MESSAGES_N, TRANSCRIPT_N } = require("../config");
 const { getTicketJumpUrl } = require("../channel-config");
+const { getSetting } = require("../settings");
 const { fetchKb, getKbSemanticHints } = require("../kb");
 const { classifyTranscript } = require("../router");
 const { getRuntimeStatus } = require("../runtime-status");
@@ -73,6 +74,7 @@ async function handleDm(message) {
 }
 
 async function handleGuildPing(message) {
+  if (getSetting("support.answer.enabled") === false) return;
   const cooldownEmoji = getCooldownReaction(message.author.id);
   if (cooldownEmoji) {
     await safeReact(message, cooldownEmoji);
@@ -129,7 +131,7 @@ async function handleGuildPing(message) {
     const { AttachmentBuilder } = require("discord.js");
     const { ANIMATED_HEROES } = require("../config");
     let buf, ext;
-    if (ANIMATED_HEROES) {
+    if (getSetting("ui.animated-heroes") ?? ANIMATED_HEROES) {
       try {
         buf = ui.canvas.renderExecutorListAnimated({ executors: route.executors });
         ext = "gif";
@@ -167,7 +169,7 @@ async function handleGuildPing(message) {
     const { AttachmentBuilder } = require("discord.js");
     const { ANIMATED_HEROES } = require("../config");
     let detailBuf, detailExt;
-    if (ANIMATED_HEROES) {
+    if (getSetting("ui.animated-heroes") ?? ANIMATED_HEROES) {
       try {
         detailBuf = ui.canvas.renderExecutorDetailAnimated(route.executor);
         detailExt = "gif";

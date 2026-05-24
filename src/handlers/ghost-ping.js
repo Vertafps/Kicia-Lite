@@ -14,12 +14,15 @@
  */
 
 const { GHOST_PING_RETENTION_MS } = require("../config");
+const { getSetting } = require("../settings");
 const { buildRichPanel, WARN, resolveAvatarURL } = require("../embed");
 const { sendLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
 
-const GHOST_RETENTION = Math.max(5_000, Number(GHOST_PING_RETENTION_MS) || 60_000);
+function getGhostRetention() {
+  return Math.max(5_000, Number(getSetting("ghost-ping.retention") ?? GHOST_PING_RETENTION_MS) || 60_000);
+}
 const MAX_TRACKED = 5_000;
 const CONTENT_SNIPPET_MAX = 400;
 
@@ -28,7 +31,7 @@ const candidates = new Map();
 function pruneExpired(now = Date.now()) {
   if (candidates.size === 0) return;
   for (const [key, entry] of candidates) {
-    if (now - entry.createdAt > GHOST_RETENTION) candidates.delete(key);
+    if (now - entry.createdAt > getGhostRetention()) candidates.delete(key);
   }
 }
 
@@ -126,6 +129,7 @@ function buildGhostPingPanel(entry, guild) {
 }
 
 async function maybeHandleGhostPing(message) {
+  if (getSetting("ghost-ping.guard.enabled") === false) return false;
   if (!message) return false;
   const key = trackedKey(message);
   if (!key) return false;
@@ -135,7 +139,7 @@ async function maybeHandleGhostPing(message) {
   candidates.delete(key);
 
   const now = Date.now();
-  if (now - entry.createdAt > GHOST_RETENTION) return false;
+  if (now - entry.createdAt > getGhostRetention()) return false;
 
   const guild = message.guild || (message.client?.guilds?.cache?.get?.(entry.guildId) || null);
   if (!guild) return false;

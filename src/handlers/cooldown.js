@@ -4,13 +4,15 @@ const {
   USER_COOLDOWN_EMOJI,
   GLOBAL_COOLDOWN_EMOJI
 } = require("../config");
+const { getSetting } = require("../settings");
 
 const lastReplyByUser = new Map();
 let lastGlobalReplyAt = 0;
 
 function cleanupCooldowns(now = Date.now()) {
+  const userCooldown = getSetting("support.cooldown.user") ?? USER_COOLDOWN_MS;
   for (const [userId, lastTime] of lastReplyByUser.entries()) {
-    if (now - lastTime > USER_COOLDOWN_MS) {
+    if (now - lastTime > userCooldown) {
       lastReplyByUser.delete(userId);
     }
   }
@@ -18,10 +20,12 @@ function cleanupCooldowns(now = Date.now()) {
 
 function getCooldownReaction(userId, now = Date.now()) {
   cleanupCooldowns(now);
-  if (lastReplyByUser.has(userId) && now - lastReplyByUser.get(userId) < USER_COOLDOWN_MS) {
+  const userCooldown = getSetting("support.cooldown.user") ?? USER_COOLDOWN_MS;
+  const globalCooldown = getSetting("support.cooldown.global") ?? GLOBAL_COOLDOWN_MS;
+  if (lastReplyByUser.has(userId) && now - lastReplyByUser.get(userId) < userCooldown) {
     return USER_COOLDOWN_EMOJI;
   }
-  if (now - lastGlobalReplyAt < GLOBAL_COOLDOWN_MS) {
+  if (now - lastGlobalReplyAt < globalCooldown) {
     return GLOBAL_COOLDOWN_EMOJI;
   }
   return null;

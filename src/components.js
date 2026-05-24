@@ -7,6 +7,19 @@ const NICKMOD_MODAL_PREFIX = "nickmod:rename-submit:";
 const NICKMOD_NICKNAME_INPUT_ID = "nickmod:nickname";
 const OUTAGE_CONFIRM_PREFIX = "outage:confirm:";
 const OUTAGE_DISMISS_PREFIX = "outage:dismiss:";
+const TRAIN_LABEL_NEG_PREFIX = "train:neg:";
+const TRAIN_SCAM_LIGHT_PREFIX = "train:scam:light:";
+const TRAIN_SCAM_MEDIUM_PREFIX = "train:scam:medium:";
+const TRAIN_SCAM_SEVERE_PREFIX = "train:scam:severe:";
+const TRAIN_RESPECT_LIGHT_PREFIX = "train:respect:light:";
+const TRAIN_RESPECT_MEDIUM_PREFIX = "train:respect:medium:";
+const TRAIN_RESPECT_SEVERE_PREFIX = "train:respect:severe:";
+const TRAIN_RESPECT_WARN_PREFIX = "train:respect:warn:";
+const TRAIN_NOTE_PREFIX = "train:note:";
+const TRAIN_NOTE_MODAL_PREFIX = "train:note-submit:";
+const TRAIN_NOTE_INPUT_ID = "train:note:input";
+const TRAIN_UNDO_PREFIX = "train:undo:";
+const TRAIN_LIFT_PREFIX = "train:lift:";
 
 function isValidHttpUrl(url) {
   try {
@@ -132,6 +145,81 @@ function buildPaginationButtonRows(prefix, { currentPage = 0, totalPages = 1, di
   ];
 }
 
+function buildTrainingFeedbackButtonRows(sampleId, classifier = "scam", sample = {}) {
+  const id = String(sampleId || "").trim();
+  if (!id) return [];
+  const disabled = Boolean(sample.label);  // already labeled → all disabled
+
+  const rows = [];
+
+  if (sample.decision === "action") {
+    // Auto-timeout already applied — staff can re-tier or lift
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${TRAIN_LIFT_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Danger).setLabel("Wrongful (Lift)").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_SCAM_LIGHT_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary).setLabel("Re-tier Light").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_SCAM_MEDIUM_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Primary).setLabel("Re-tier Medium").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_SCAM_SEVERE_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Danger).setLabel("Re-tier Severe").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_NOTE_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary).setLabel("Note").setDisabled(disabled)
+    );
+    rows.push(row1);
+    return rows;
+  }
+
+  // Review path — staff confirms with severity, or rejects
+  if (classifier === "respect") {
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${TRAIN_LABEL_NEG_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary).setLabel("Not Disrespect").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_RESPECT_WARN_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Success).setLabel("Warn DM").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_RESPECT_LIGHT_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Primary).setLabel("Light (15m)").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_RESPECT_SEVERE_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Danger).setLabel("Severe (24h)").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_NOTE_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary).setLabel("Note").setDisabled(disabled)
+    ));
+  } else {
+    // scam (default) — and any link/commerce borderlines route through scam buttons too
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${TRAIN_LABEL_NEG_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary).setLabel("Not Scam").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_SCAM_LIGHT_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Success).setLabel("Light (1h)").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_SCAM_MEDIUM_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Primary).setLabel("Medium (12h)").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_SCAM_SEVERE_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Danger).setLabel("Severe (24h)").setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`${TRAIN_NOTE_PREFIX}${id}`)
+        .setStyle(ButtonStyle.Secondary).setLabel("Note").setDisabled(disabled)
+    ));
+  }
+  return rows;
+}
+
+function buildTrainingNoteModal(sampleId) {
+  // Returns ModalBuilder; pattern from nickname-mod.js buildNicknameModal
+  const { ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
+  const modal = new ModalBuilder()
+    .setCustomId(`${TRAIN_NOTE_MODAL_PREFIX}${sampleId}`)
+    .setTitle("Training note");
+  const input = new TextInputBuilder()
+    .setCustomId(TRAIN_NOTE_INPUT_ID)
+    .setLabel("Note for this sample (optional)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(400)
+    .setRequired(false);
+  modal.addComponents(
+    new (require("discord.js").ActionRowBuilder)().addComponents(input)
+  );
+  return modal;
+}
+
 module.exports = {
   MODLOG_REVERT_PREFIX,
   MODLOG_VIEW_PREFIX,
@@ -140,9 +228,24 @@ module.exports = {
   NICKMOD_RENAME_PREFIX,
   OUTAGE_CONFIRM_PREFIX,
   OUTAGE_DISMISS_PREFIX,
+  TRAIN_LABEL_NEG_PREFIX,
+  TRAIN_LIFT_PREFIX,
+  TRAIN_NOTE_INPUT_ID,
+  TRAIN_NOTE_MODAL_PREFIX,
+  TRAIN_NOTE_PREFIX,
+  TRAIN_RESPECT_LIGHT_PREFIX,
+  TRAIN_RESPECT_MEDIUM_PREFIX,
+  TRAIN_RESPECT_SEVERE_PREFIX,
+  TRAIN_RESPECT_WARN_PREFIX,
+  TRAIN_SCAM_LIGHT_PREFIX,
+  TRAIN_SCAM_MEDIUM_PREFIX,
+  TRAIN_SCAM_SEVERE_PREFIX,
+  TRAIN_UNDO_PREFIX,
   buildNicknameModerationButtonRows,
   buildModerationLogButtonRows,
   buildOutageReviewButtonRows,
   buildPaginationButtonRows,
-  buildLinkButtonRows
+  buildLinkButtonRows,
+  buildTrainingFeedbackButtonRows,
+  buildTrainingNoteModal
 };

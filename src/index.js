@@ -52,6 +52,12 @@ const { preloadEmbedder } = require("./embeddings");
 const { loadOrBuildKbCache } = require("./kb-embeddings");
 const { safeReply } = require("./utils/respond");
 const { startStatusWidgetScheduler, refreshStatusWidget } = require("./handlers/status-widget");
+const { preloadExampleBanks } = require("./example-banks");
+const { hydrateSettingsCache } = require("./settings");
+const { startTrainingChannelScheduler, flushAllTrainingQueues } = require("./training-feedback");
+const { maybeHandleTrainingFeedbackInteraction } = require("./handlers/training-feedback");
+const { registerSlashCommands, maybeHandleSlashCommandInteraction } = require("./slash-commands");
+const { flushAllQueues: flushAllLogQueues } = require("./log-channel-queue");
 
 enableStatusPersistence({
   recordStatusTransition,
@@ -89,7 +95,18 @@ function acquireInstanceLock() {
   }
 }
 
-function releaseInstanceLock() {
+async function releaseInstanceLock() {
+  // Drain async queues before flushing SQLite; cap total wait at 2 s
+  try {
+    await Promise.race([
+      Promise.all([
+        flushAllLogQueues().catch(() => null),
+        flushAllTrainingQueues().catch(() => null)
+      ]),
+      new Promise(r => setTimeout(r, 2000))
+    ]);
+  } catch {}
+
   try {
     flushRestrictedEmojiDatabaseNow();
   } catch (err) {
@@ -104,12 +121,17 @@ function releaseInstanceLock() {
 }
 
 acquireInstanceLock();
-for (const signal of ["SIGINT", "SIGTERM", "exit"]) {
-  process.on(signal, () => {
-    releaseInstanceLock();
-    if (signal !== "exit") process.exit(0);
+// SIGINT / SIGTERM: await async queue drains before exiting
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, async () => {
+    await releaseInstanceLock();
+    process.exit(0);
   });
 }
+// "exit" event is synchronous — best-effort SQLite flush only, can't await
+process.on("exit", () => {
+  try { flushRestrictedEmojiDatabaseNow(); } catch {}
+});
 
 const gatewayIntents = [
   GatewayIntentBits.Guilds,
@@ -215,6 +237,15 @@ client.once(Events.ClientReady, async (readyClient) => {
     recordRuntimeEvent("warn", "channel-config", err?.message || err);
   }
   try {
+    const dbModule = require("./restricted-emoji-db");
+    const db = await dbModule.getDatabase();
+    await hydrateSettingsCache(db);
+    console.log("Settings cache hydrated");
+  } catch (err) {
+    console.warn("Settings hydrate failed:", err.message);
+    recordRuntimeEvent("warn", "settings-hydrate", err?.message || err);
+  }
+  try {
     const restored = await hydratePendingOutageReviews();
     if (restored > 0) {
       console.log(`Outage reviews restored from disk: ${restored}`);
@@ -253,6 +284,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   timer.unref?.();
 
   preloadEmbedder().catch(() => null);
+  preloadExampleBanks().catch((err) => recordRuntimeEvent("warn", "example-banks-preload", err?.message || err));
 
   await refreshAndReportThreatFeed(readyClient, { initial: true });
 
@@ -275,11 +307,24 @@ client.once(Events.ClientReady, async (readyClient) => {
   moderationActionCleanupTimer.unref?.();
 
   try {
+    startTrainingChannelScheduler();
+  } catch (err) {
+    recordRuntimeEvent("warn", "training-scheduler", err?.message || err);
+  }
+
+  try {
     const statsSchedule = await startDailyStatsScheduler(readyClient);
     console.log(`Daily stats scheduled for ${new Date(statsSchedule.nextBoundary).toISOString()}`);
   } catch (err) {
     console.warn("Daily stats scheduler failed to start:", err.message);
     recordRuntimeEvent("error", "daily-stats-scheduler", err?.message || err);
+  }
+
+  // Register slash commands last so all other systems are online first
+  try {
+    await registerSlashCommands(readyClient);
+  } catch (err) {
+    recordRuntimeEvent("warn", "slash-register", err?.message || err);
   }
 });
 
@@ -445,10 +490,13 @@ client.on(Events.MessageDelete, async (message) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   await runGuarded("interaction-handler", async () => {
+    // Slash commands are checked first — they have their own ack flow
+    if (await maybeHandleSlashCommandInteraction(interaction)) return;
     if (await maybeHandleNicknameModerationInteraction(interaction)) return;
     if (await maybeHandleOutageReviewInteraction(interaction)) return;
     if (await maybeHandleModerationLogInteraction(interaction)) return;
     if (await maybeHandleSweepReviewInteraction(interaction)) return;
+    if (await maybeHandleTrainingFeedbackInteraction(interaction)) return;
 
     // If we got here, no handler claimed this interaction. Acknowledge the
     // click so Discord doesn't show "interaction failed" to the user. We do

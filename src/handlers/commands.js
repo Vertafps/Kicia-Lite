@@ -260,6 +260,79 @@ function parseUserIdInput(input) {
   return null;
 }
 
+function parseConfigMessage(content) {
+  const trimmed = String(content || "").trim();
+  const m = trimmed.match(/^\$config(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  const rest = (m[1] || "").trim();
+  if (!rest || rest === "help") return { action: "help" };
+
+  const tokens = rest.split(/\s+/);
+  const cmd = tokens[0]?.toLowerCase();
+
+  if (cmd === "list") {
+    const section = tokens[1] && !/^\d+$/.test(tokens[1]) ? tokens[1].toLowerCase() : null;
+    const page = tokens[1] && /^\d+$/.test(tokens[1])
+      ? Number(tokens[1]) - 1
+      : tokens[2] && /^\d+$/.test(tokens[2])
+        ? Number(tokens[2]) - 1
+        : 0;
+    return { action: "list", section, page: Math.max(0, page) };
+  }
+  if (cmd === "get") {
+    if (!tokens[1]) return { action: "invalid", error: "usage: $config get <key>" };
+    return { action: "get", key: tokens[1] };
+  }
+  if (cmd === "set") {
+    if (!tokens[1] || tokens.length < 3) return { action: "invalid", error: "usage: $config set <key> <value>" };
+    return { action: "set", key: tokens[1], value: tokens.slice(2).join(" ") };
+  }
+  if (cmd === "reset") {
+    if (tokens[1] === "all") {
+      const confirm = tokens[2]?.toLowerCase() === "confirm";
+      return { action: "resetAll", confirmed: confirm };
+    }
+    if (!tokens[1]) return { action: "invalid", error: "usage: $config reset <key> | $config reset all confirm" };
+    return { action: "reset", key: tokens[1] };
+  }
+  if (cmd === "diff") return { action: "diff" };
+  if (cmd === "export") return { action: "export" };
+  return { action: "invalid", error: `unknown subcommand: ${cmd}. try: list, get, set, reset, diff, export, help` };
+}
+
+function parseTrainMessage(content) {
+  const trimmed = String(content || "").trim();
+  const m = trimmed.match(/^\$train(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  const rest = (m[1] || "").trim().toLowerCase();
+  if (!rest) return { action: "help" };
+  if (rest === "scam") return { action: "retrain", classifier: "scam" };
+  if (rest === "respect") return { action: "retrain", classifier: "respect" };
+  if (rest.startsWith("review")) {
+    const parts = rest.split(/\s+/);
+    return { action: "review", classifier: parts[1] || "scam" };
+  }
+  return { action: "invalid", error: "usage: $train scam | $train respect | $train review [classifier]" };
+}
+
+function parseTrainingMessage(content) {
+  const trimmed = String(content || "").trim();
+  const m = trimmed.match(/^\$training(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  const rest = (m[1] || "").trim();
+  if (!rest || rest === "help") return { action: "help" };
+  const tokens = rest.split(/\s+/);
+  const cmd = tokens[0]?.toLowerCase();
+  if (cmd === "stats") return { action: "stats" };
+  if (cmd === "purge") {
+    const target = tokens[1];
+    const userIdMatch = String(target || "").match(/(\d{15,25})/);
+    if (!userIdMatch) return { action: "invalid", error: "usage: $training purge <@user|userid>" };
+    return { action: "purge", userId: userIdMatch[1] };
+  }
+  return { action: "invalid", error: `unknown subcommand: ${cmd}. try: stats, purge` };
+}
+
 function parseWhitelistMessage(content) {
   const trimmed = String(content || "").trim();
   if (!/^\$(?:whitelist|unwhitelist)(?:\s|$)/i.test(trimmed)) return null;
@@ -963,6 +1036,226 @@ async function handleWhitelistCommand(message, command, {
   return true;
 }
 
+async function handleConfigCommand(message, parsed) {
+  const settings = require("../settings");
+  const dbModule = require("../restricted-emoji-db");
+  const db = await dbModule.getDatabase();
+
+  if (parsed.action === "help") {
+    await replyWithCommandPanel(message, {
+      header: "Config",
+      body: [
+        "**Usage**",
+        "`$config list [section] [page]` — list settings",
+        "`$config get <key>` — show one setting",
+        "`$config set <key> <value>` — change a setting",
+        "`$config reset <key>` — restore default",
+        "`$config reset all confirm` — restore every default",
+        "`$config diff` — show changed-from-default",
+        "`$config export` — backup-ready KEY=VALUE",
+        "",
+        "**Sections**: " + settings.listSections().join(", ")
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (parsed.action === "list") {
+    const registry = settings.getRegistry();
+    let entries = [...registry.entries()];
+    if (parsed.section) entries = entries.filter(([, d]) => d.section === parsed.section);
+    if (!entries.length) {
+      await replyWithCommandPanel(message, {
+        header: "Config — No Matches",
+        body: parsed.section ? `no settings in section \`${parsed.section}\`` : "no settings registered",
+        color: WARN
+      });
+      return true;
+    }
+    const pageSize = 15;
+    const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
+    const page = Math.min(parsed.page, totalPages - 1);
+    const slice = entries.slice(page * pageSize, (page + 1) * pageSize);
+    const lines = slice.map(([k, d]) => {
+      const cur = settings.formatValue(k, settings.getSetting(k));
+      const def = settings.formatValue(k, d.defaultValue);
+      const star = cur === def ? "" : " *";
+      return `**${k}**${star}\n  type \`${d.type}\` · current ${cur} · default ${def}`;
+    });
+    await replyWithCommandPanel(message, {
+      header: `Config · ${parsed.section || "all"} (page ${page + 1}/${totalPages})`,
+      body: lines.join("\n\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (parsed.action === "get") {
+    const desc = settings.describeSetting(parsed.key);
+    if (!desc) {
+      const suggestions = settings.suggestKeys(parsed.key, { limit: 3 });
+      await replyWithCommandPanel(message, {
+        header: "Config — Unknown Key",
+        body: `\`${parsed.key}\` is not a setting${suggestions.length ? "\n\n**Did you mean:** " + suggestions.map((k) => `\`${k}\``).join(", ") : ""}`,
+        color: DANGER
+      });
+      return true;
+    }
+    const cur = settings.formatValue(parsed.key, settings.getSetting(parsed.key));
+    const def = settings.formatValue(parsed.key, desc.defaultValue);
+    await replyWithCommandPanel(message, {
+      header: `Config · ${parsed.key}`,
+      body: [
+        `**Type:** \`${desc.type}\``,
+        `**Section:** ${desc.section}`,
+        `**Current:** ${cur}`,
+        `**Default:** ${def}`,
+        desc.description ? `**Description:** ${desc.description}` : ""
+      ].filter(Boolean).join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (parsed.action === "set") {
+    const desc = settings.describeSetting(parsed.key);
+    if (!desc) {
+      const suggestions = settings.suggestKeys(parsed.key, { limit: 3 });
+      await replyWithCommandPanel(message, {
+        header: "Config — Unknown Key",
+        body: `\`${parsed.key}\` is not a setting${suggestions.length ? "\n**Did you mean:** " + suggestions.map((k) => `\`${k}\``).join(", ") : ""}`,
+        color: DANGER
+      });
+      return true;
+    }
+    const result = await settings.setSetting(parsed.key, parsed.value, {
+      db,
+      actor: message.author,
+      guild: message.guild
+    });
+    if (!result.ok) {
+      await replyWithCommandPanel(message, {
+        header: "Config — Invalid Value",
+        body: result.error || "could not set value",
+        color: DANGER
+      });
+      return true;
+    }
+    await replyWithCommandPanel(message, {
+      header: "Config Updated",
+      body: `**${parsed.key}**\n${settings.formatValue(parsed.key, result.previous)} → **${settings.formatValue(parsed.key, result.next)}**`,
+      color: SUCCESS
+    });
+    return true;
+  }
+
+  if (parsed.action === "reset") {
+    const desc = settings.describeSetting(parsed.key);
+    if (!desc) {
+      await replyWithCommandPanel(message, {
+        header: "Config — Unknown Key",
+        body: `\`${parsed.key}\` is not a setting`,
+        color: DANGER
+      });
+      return true;
+    }
+    const result = await settings.resetSetting(parsed.key, {
+      db,
+      actor: message.author,
+      guild: message.guild
+    });
+    if (!result.ok) {
+      await replyWithCommandPanel(message, {
+        header: "Config — Reset Failed",
+        body: result.error || "could not reset",
+        color: DANGER
+      });
+      return true;
+    }
+    await replyWithCommandPanel(message, {
+      header: "Config Reset",
+      body: `**${parsed.key}** restored to default · ${settings.formatValue(parsed.key, desc.defaultValue)}`,
+      color: WARN
+    });
+    return true;
+  }
+
+  if (parsed.action === "resetAll") {
+    if (!parsed.confirmed) {
+      await replyWithCommandPanel(message, {
+        header: "Confirm",
+        body: "send `$config reset all confirm` to wipe every override",
+        color: WARN
+      });
+      return true;
+    }
+    const registry = settings.getRegistry();
+    let count = 0;
+    for (const [key] of registry) {
+      try {
+        const r = await settings.resetSetting(key, {
+          db,
+          actor: message.author,
+          guild: message.guild
+        });
+        if (r && r.ok) count += 1;
+      } catch {
+        // swallow per-key failures; keep going
+      }
+    }
+    await replyWithCommandPanel(message, {
+      header: "Config Reset · All",
+      body: `${count} settings restored to defaults`,
+      color: WARN
+    });
+    return true;
+  }
+
+  if (parsed.action === "diff") {
+    const registry = settings.getRegistry();
+    const diffs = [];
+    for (const [key, desc] of registry) {
+      const cur = settings.getSetting(key);
+      if (cur !== desc.defaultValue) {
+        diffs.push(`**${key}**: ${settings.formatValue(key, desc.defaultValue)} → ${settings.formatValue(key, cur)}`);
+      }
+    }
+    await replyWithCommandPanel(message, {
+      header: "Config — Diff from Default",
+      body: diffs.length ? diffs.join("\n") : "all at defaults",
+      color: diffs.length ? INFO : SUCCESS
+    });
+    return true;
+  }
+
+  if (parsed.action === "export") {
+    const registry = settings.getRegistry();
+    const lines = [];
+    for (const [key, desc] of registry) {
+      const cur = settings.getSetting(key);
+      if (cur !== desc.defaultValue) lines.push(`${key}=${cur}`);
+    }
+    await replyWithCommandPanel(message, {
+      header: "Config Export",
+      body: lines.length ? "```\n" + lines.join("\n") + "\n```" : "no overrides set",
+      color: INFO
+    });
+    return true;
+  }
+
+  if (parsed.action === "invalid") {
+    await replyWithCommandPanel(message, {
+      header: "Config — Invalid",
+      body: parsed.error,
+      color: DANGER
+    });
+    return true;
+  }
+
+  return true;
+}
+
 async function handleTrustedLinkCommand(message, command, {
   listLinks = listTrustedLinks,
   addLink = addTrustedLink,
@@ -1064,6 +1357,25 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleNickCommand(message, nickCommand, deps);
   }
 
+  const configCommand = parseConfigMessage(message.content);
+  if (configCommand) {
+    if (!canUseOwnerCommands(message)) return true;
+    await handleConfigCommand(message, configCommand);
+    return true;
+  }
+
+  const trainCommand = parseTrainMessage(message.content);
+  if (trainCommand) {
+    const { handleTrainCommand } = require("./training-commands");
+    return handleTrainCommand(message, trainCommand);
+  }
+
+  const trainingCommand = parseTrainingMessage(message.content);
+  if (trainingCommand) {
+    const { handleTrainingCommand } = require("./training-commands");
+    return handleTrainingCommand(message, trainingCommand);
+  }
+
   if (isCommandsListMessage(message.content)) {
     if (!canUseOwnerCommands(message)) return true;
     return handleCommandsList(message);
@@ -1087,8 +1399,12 @@ module.exports = {
   parseTrustedLinkMessage,
   parseWhitelistMessage,
   parseUserIdInput,
+  parseConfigMessage,
+  parseTrainMessage,
+  parseTrainingMessage,
   handleStateCommand,
   handleSetChannelCommand,
   handleNickCommand,
+  handleConfigCommand,
   maybeHandleControlCommand
 };

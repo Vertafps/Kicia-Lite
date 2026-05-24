@@ -13,6 +13,14 @@ const {
 const { getBrandJumpUrls, getChannelConfigVersion } = require("./channel-config");
 const { isEditDistanceAtMost, normalizeText } = require("./text");
 const { fetchWithTimeout } = require("./utils/fetch");
+const { getSetting } = require("./settings");
+const { createBreaker } = require("./circuit-breaker");
+
+const fishfishBreaker = createBreaker({ name: "fishfish", errorThreshold: 0.25, windowMs: 300_000, openMs: 60_000 });
+const phishtankBreaker = createBreaker({ name: "phishtank", errorThreshold: 0.25, windowMs: 300_000, openMs: 60_000 });
+const safebrowsingBreaker = createBreaker({ name: "safebrowsing", errorThreshold: 0.25, windowMs: 300_000, openMs: 60_000 });
+const webriskBreaker = createBreaker({ name: "webrisk", errorThreshold: 0.25, windowMs: 300_000, openMs: 60_000 });
+const virustotalBreaker = createBreaker({ name: "virustotal", errorThreshold: 0.25, windowMs: 300_000, openMs: 60_000 });
 
 function getStaticAllowedUrls() {
   return [
@@ -725,9 +733,9 @@ function addRisk(risks, score, reason) {
 }
 
 function getActionForScore(score) {
-  if (score >= 85) return "timeout";
-  if (score >= 55) return "warn";
-  if (score >= 35) return "review";
+  if (score >= (getSetting("link.threshold.action") ?? 85)) return "timeout";
+  if (score >= (getSetting("link.threshold.warn") ?? 55)) return "warn";
+  if (score >= (getSetting("link.threshold.review") ?? 35)) return "review";
   return null;
 }
 
@@ -1018,7 +1026,7 @@ async function checkGoogleWebRisk(url) {
   endpoint.searchParams.set("uri", url.url);
   endpoint.searchParams.set("key", GOOGLE_WEB_RISK_API_KEY);
 
-  try {
+  const result = await webriskBreaker.exec(async () => {
     const response = await fetchWithTimeout(endpoint.toString(), {}, LINK_THREAT_INTEL_TIMEOUT_MS);
     if (!response.ok) return setCachedThreatIntel("webrisk", url, null);
     const payload = await response.json().catch(() => ({}));
@@ -1032,9 +1040,9 @@ async function checkGoogleWebRisk(url) {
       confidence: 96,
       reason: `Google Web Risk matched ${threatTypes.join(", ")}`
     });
-  } catch {
-    return null;
-  }
+  }).catch(() => null);
+  if (result === null) return null;
+  return result;
 }
 
 async function checkGoogleSafeBrowsing(url) {
@@ -1061,7 +1069,7 @@ async function checkGoogleSafeBrowsing(url) {
     }
   };
 
-  try {
+  const result = await safebrowsingBreaker.exec(async () => {
     const response = await fetchWithTimeout(
       endpoint,
       {
@@ -1084,9 +1092,9 @@ async function checkGoogleSafeBrowsing(url) {
       confidence: 96,
       reason: `Google Safe Browsing matched ${threatTypes.join(", ") || "unsafe URL"}`
     });
-  } catch {
-    return null;
-  }
+  }).catch(() => null);
+  if (result === null) return null;
+  return result;
 }
 
 function getVirusTotalUrlId(url) {
@@ -1102,7 +1110,7 @@ async function checkVirusTotalUrlReport(url) {
   const cached = getCachedThreatIntel("virustotal", url);
   if (cached !== undefined) return cached;
 
-  try {
+  const result = await virustotalBreaker.exec(async () => {
     const response = await fetchWithTimeout(
       `https://www.virustotal.com/api/v3/urls/${getVirusTotalUrlId(url)}`,
       {
@@ -1137,9 +1145,9 @@ async function checkVirusTotalUrlReport(url) {
     }
 
     return setCachedThreatIntel("virustotal", url, null);
-  } catch {
-    return null;
-  }
+  }).catch(() => null);
+  if (result === null) return null;
+  return result;
 }
 
 function parseFishFishPayload(payload, kind) {
@@ -1161,7 +1169,7 @@ async function checkFishFishPath(serviceKey, endpoint, kind, cacheSubject) {
   const cached = getCachedThreatIntel(serviceKey, cacheSubject);
   if (cached !== undefined) return cached;
 
-  try {
+  const result = await fishfishBreaker.exec(async () => {
     const response = await fetchWithTimeout(
       endpoint,
       {
@@ -1176,9 +1184,9 @@ async function checkFishFishPath(serviceKey, endpoint, kind, cacheSubject) {
 
     const payload = await response.json().catch(() => ({}));
     return setCachedThreatIntel(serviceKey, cacheSubject, parseFishFishPayload(payload, kind));
-  } catch {
-    return null;
-  }
+  }).catch(() => null);
+  if (result === null) return null;
+  return result;
 }
 
 async function checkFishFish(url) {
@@ -1211,7 +1219,7 @@ async function checkPhishTank(url) {
     app_key: PHISHTANK_API_KEY
   });
 
-  try {
+  const verdict = await phishtankBreaker.exec(async () => {
     const response = await fetchWithTimeout(
       "http://checkurl.phishtank.com/checkurl/",
       {
@@ -1243,9 +1251,9 @@ async function checkPhishTank(url) {
     }
 
     return setCachedThreatIntel("phishtank", url, null);
-  } catch {
-    return null;
-  }
+  }).catch(() => null);
+  if (verdict === null) return null;
+  return verdict;
 }
 
 async function checkThreatIntel(url) {

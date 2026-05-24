@@ -310,7 +310,6 @@ function createSchema(db) {
     db.exec("DROP TABLE IF EXISTS scam_decision_audit;");
   } catch {}
 
-  // Migration: ensure new feature tables exist.
   db.exec(`
     CREATE TABLE IF NOT EXISTS restricted_emoji_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -452,7 +452,6 @@ async function maybeHandleOutageDetection(message, {
 } = {}) {
   pruneExpiredReviews(now);
 
-  // owner-tunable kill switch — when off, no auto-detection / auto-lock fires
   try {
     const { getSetting } = require("./settings");
     if (getSetting("status.autodetect.enabled") === false) return false;

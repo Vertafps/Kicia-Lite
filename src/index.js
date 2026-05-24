@@ -98,7 +98,6 @@ function acquireInstanceLock() {
 }
 
 async function releaseInstanceLock() {
-  // Drain async queues before flushing SQLite; cap total wait at 2 s
   try {
     await Promise.race([
       Promise.all([
@@ -123,14 +122,12 @@ async function releaseInstanceLock() {
 }
 
 acquireInstanceLock();
-// SIGINT / SIGTERM: await async queue drains before exiting
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => {
     await releaseInstanceLock();
     process.exit(0);
   });
 }
-// "exit" event is synchronous — best-effort SQLite flush only, can't await
 process.on("exit", () => {
   try { flushRestrictedEmojiDatabaseNow(); } catch {}
 });
@@ -323,7 +320,6 @@ client.once(Events.ClientReady, async (readyClient) => {
     recordRuntimeEvent("error", "daily-stats-scheduler", err?.message || err);
   }
 
-  // Register slash commands last so all other systems are online first
   try {
     await registerSlashCommands(readyClient);
   } catch (err) {
@@ -493,7 +489,6 @@ client.on(Events.MessageDelete, async (message) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   await runGuarded("interaction-handler", async () => {
-    // Slash commands are checked first — they have their own ack flow
     if (await maybeHandleSlashCommandInteraction(interaction)) return;
     if (await maybeHandleNicknameModerationInteraction(interaction)) return;
     if (await maybeHandleOutageReviewInteraction(interaction)) return;

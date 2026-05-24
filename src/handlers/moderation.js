@@ -544,7 +544,6 @@ async function handleScamTradeMessage(message, result, {
   });
   await sendLog(message.guild, payload).catch(() => null);
 
-  // stash for downstream training enqueue (so the sample row can link back).
   if (result && typeof result === "object") {
     result.actionActionId = review.actionId;
   }
@@ -569,7 +568,6 @@ async function handleKiciaDisrespectMessage(message, result, {
     recordRuntimeEvent("warn", "respect-tier-bump", err?.message || err);
   }
 
-  // tier → duration mapping (tier 1 = warn only, no timeout)
   let durationMs = 0;
   if (tier >= 2) {
     const t2 = Number(getSetting("respect.timeout"));
@@ -623,8 +621,6 @@ async function handleKiciaDisrespectMessage(message, result, {
   });
   await sendLog(message.guild, payload).catch(() => null);
 
-  // stash tier/duration/actionId on result so enqueueTrainingSample can pick
-  // them up if it inspects the classification record.
   if (result && typeof result === "object") {
     result.actionActionId = review.actionId;
     result.durationMs = durationMs;
@@ -647,7 +643,6 @@ async function handleCustomPatternMessage(message, match, {
     `custom pattern #${match.patternId}`
   );
   const deleteResult = await tryDeleteMessage(message);
-  // NO DM per owner request — silent timeout.
 
   if (!timeoutResult.applied) {
     recordRuntimeEvent("warn", "custom-pattern-timeout", timeoutResult.reason);
@@ -755,10 +750,7 @@ async function maybeHandleModerationWatch(message, {
       }
     }
 
-    // 3) Scam / trade classifier (new — kicia-product sale/trade detection).
-    // Gated by `scam.guard.enabled` setting (default on). Timeout verdicts run
-    // the full pipeline AND enqueue a training sample so staff can see them
-    // in the training channel. Review verdicts enqueue only.
+    // 3) Scam / trade classifier
     if (getSetting("scam.guard.enabled") !== false && message.content?.length) {
       try {
         const accountAgeMs = message.author?.createdTimestamp
@@ -774,7 +766,6 @@ async function maybeHandleModerationWatch(message, {
         });
         if (scamResult?.verdict === "timeout") {
           const handled = await handleScamTradeMessage(message, scamResult, { sendLog, now });
-          // staff-visibility: also drop a training sample for the timeout.
           Promise.resolve(enqueueTrainingSample(message, scamResult)).catch(() => null);
           if (handled) return true;
         } else if (scamResult?.verdict === "review") {
@@ -785,10 +776,7 @@ async function maybeHandleModerationWatch(message, {
       }
     }
 
-    // 4) Kicia disrespect classifier (new — tiered escalation on disrespect
-    // toward kicia entities). Gated by `respect.guard.enabled`. Timeout
-    // verdicts route through tier escalation in the handler (tier 1 = warn
-    // DM only, no timeout). Review verdicts enqueue training only.
+    // 4) Kicia disrespect classifier
     if (getSetting("respect.guard.enabled") !== false && message.content?.length) {
       try {
         const respectKb = resolvedKb || await fetchKbFn().catch(() => null);
@@ -809,9 +797,7 @@ async function maybeHandleModerationWatch(message, {
       }
     }
 
-    // 5) Custom timeout patterns — owner-defined phrases, semantic match.
-    // No DM, silent timeout + delete + staff log. Lazy-require so tests can
-    // stub via require.cache and we don't load the embedder for cold paths.
+    // 5) Custom timeout patterns - lazy-require so cold paths skip the embedder
     if (message.content?.length) {
       try {
         const patterns = require("../custom-patterns");

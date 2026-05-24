@@ -148,12 +148,11 @@ function buildPaginationButtonRows(prefix, { currentPage = 0, totalPages = 1, di
 function buildTrainingFeedbackButtonRows(sampleId, classifier = "scam", sample = {}) {
   const id = String(sampleId || "").trim();
   if (!id) return [];
-  const disabled = Boolean(sample.label);  // already labeled → all disabled
+  const disabled = Boolean(sample.label);
 
   const rows = [];
 
   if (sample.decision === "action") {
-    // Auto-timeout already applied — staff can re-tier or lift
     const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${TRAIN_LIFT_PREFIX}${id}`)
         .setStyle(ButtonStyle.Danger).setLabel("Wrongful (Lift)").setDisabled(disabled),
@@ -170,7 +169,6 @@ function buildTrainingFeedbackButtonRows(sampleId, classifier = "scam", sample =
     return rows;
   }
 
-  // Review path — staff confirms with severity, or rejects
   if (classifier === "respect") {
     rows.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${TRAIN_LABEL_NEG_PREFIX}${id}`)
@@ -185,7 +183,6 @@ function buildTrainingFeedbackButtonRows(sampleId, classifier = "scam", sample =
         .setStyle(ButtonStyle.Secondary).setLabel("Note").setDisabled(disabled)
     ));
   } else {
-    // scam (default) — and any link/commerce borderlines route through scam buttons too
     rows.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${TRAIN_LABEL_NEG_PREFIX}${id}`)
         .setStyle(ButtonStyle.Secondary).setLabel("Not Scam").setDisabled(disabled),
@@ -203,7 +200,6 @@ function buildTrainingFeedbackButtonRows(sampleId, classifier = "scam", sample =
 }
 
 function buildTrainingNoteModal(sampleId) {
-  // Returns ModalBuilder; pattern from nickname-mod.js buildNicknameModal
   const { ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
   const modal = new ModalBuilder()
     .setCustomId(`${TRAIN_NOTE_MODAL_PREFIX}${sampleId}`)

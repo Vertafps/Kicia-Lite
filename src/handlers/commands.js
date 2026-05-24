@@ -55,9 +55,53 @@ function escapeRegexLiteral(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function parseCommandsListMessage(content) {
+  const match = String(content || "").match(/^\$(?:cmd|commands|help)(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const arg = (match[1] || "").trim().toLowerCase();
+  return { category: arg || "menu" };
+}
+
 function isCommandsListMessage(content) {
-  const normalized = String(content || "").trim().toLowerCase();
-  return normalized === "$cmd" || normalized === "$commands";
+  return parseCommandsListMessage(content) !== null;
+}
+
+const TOGGLE_ALIASES = {
+  // user-facing answer flows
+  support:        "support.answer.enabled",
+  kb:             "support.answer.enabled",
+  ping:           "support.answer.enabled",
+  status:         "status.answer.enabled",
+  // guards
+  scam:           "scam.guard.enabled",
+  trade:          "scam.guard.enabled",
+  respect:        "respect.guard.enabled",
+  disrespect:     "respect.guard.enabled",
+  link:           "link.guard.enabled",
+  links:          "link.guard.enabled",
+  drug:           "drug.guard.enabled",
+  drugs:          "drug.guard.enabled",
+  ghost:          "ghost-ping.guard.enabled",
+  "ghost-ping":   "ghost-ping.guard.enabled",
+  nickname:       "nickname.guard.enabled",
+  nicknames:      "nickname.guard.enabled",
+  nick:           "nickname.guard.enabled",
+  impersonation:  "impersonation.guard.enabled",
+  reactions:      "rr.guard.enabled",
+  rr:             "rr.guard.enabled",
+  training:       "training.enabled"
+};
+
+function parseToggleMessage(content) {
+  const m = String(content || "").match(/^\$toggle(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  const rest = (m[1] || "").trim();
+  if (!rest) return { action: "list" };
+  const tokens = rest.split(/\s+/);
+  const feature = tokens[0]?.toLowerCase();
+  const value = tokens[1]?.toLowerCase();
+  if (!feature) return { action: "list" };
+  return { action: "set", feature, value };
 }
 
 function isDatabaseMessage(content) {
@@ -405,63 +449,177 @@ function trimCommandExcerpt(text, max = 120) {
   return `${cleaned.slice(0, Math.max(0, max - 3))}...`;
 }
 
-function buildCommandsBody() {
-  return [
-    "## Everyone",
-    "`$status` show the current KiciaHook status",
-    "Ping me after describing an issue and I will match the docs",
-    "",
-    "## Owners",
-    "`$cmd` show this command list",
-    "`$status up` mark status as up",
-    "`$status down` mark status as down",
-    "`$status unaware` mark status as unaware (auto-detection style)",
-    "`$state` show the bot presence text",
-    "`$state <message>` set the bot presence text",
-    "`$state reset` restore the default bot presence text",
-    "`$set channels` inspect configured bot channels",
-    "`$set channel <slot> <#channel|channelid>` update a bot channel slot",
-    "`$set channel <slot> reset` restore a channel slot default",
-    "`$fetch` refresh the KB cache",
-    "`$jarvis` run runtime, KB, link, whitelist, lockdown, and security diagnostics",
-    "`$testpromax` run the extended diagnostics sweep",
-    "`$role all <roleid>` assign a safe role to every human member missing it",
-    "`$role <@user|userid> <roleid>` assign a role to one member",
-    "`$db` / `$database` inspect the SQLite moderation database",
-    "`$policy [enable|disable|status]` toggle broad link policy + prohibited commerce (FishFish always on)",
-    "`$emoji top` show top restricted-emoji offenders (7d)",
-    "`$whitelist` list manual moderation whitelist users",
-    "`$whitelist <user>` exempt a user from message moderation tracking",
-    "`$whitelist remove <user>` remove a manual moderation whitelist user",
-    "`$lock` lock the configured chat channels",
-    "`$unlock` unlock the configured chat channels",
-    "`$config` show config help",
-    "`$config list [section] [page]` list every tunable setting",
-    "`$config get <key>` show one setting's current value",
-    "`$config set <key> <value>` update a setting (e.g. `$config set scam.severity.severe.timeout 2d`)",
-    "`$config reset <key>` restore a setting's default",
-    "`$config reset all confirm` wipe every override",
-    "`$config diff` show only changed-from-default settings",
-    "`$config export` dump current overrides for backup",
-    "`$train scam` retrain the scam classifier from labeled training samples",
-    "`$train respect` retrain the kicia-disrespect classifier",
-    "`$training purge <@user>` wipe training samples from a banned user",
-    "",
-    "## Staff + Higher",
-    "`$allowlink` list trusted links",
-    "`$allowlink <url>` add a trusted link",
-    "`$removelink <url>` remove a trusted link",
-    "`$emoji` list restricted emojis",
-    "`$emoji <emoji>` add a restricted emoji",
-    "`$emoji remove <emoji>` remove a restricted emoji",
-    "`$nick` list nickname patterns",
-    "`$nick add <word>` add a simple nickname rule",
-    "`$nick add <word> -> <name>` add a simple nickname rule with a custom rename",
-    "`$nick add /^!.*/i -> wawa` rename members matching pattern",
-    "`$nick remove <id>` remove a nickname pattern by id",
-    "`$train review [classifier]` ephemeral: peek at unlabeled training samples",
-    "`$training stats` show training-sample counts per classifier"
-  ].join("\n");
+const COMMAND_CATEGORIES = {
+  menu: {
+    title: "Bot Commands",
+    body: [
+      "open a category with `$cmd <name>` (e.g. `$cmd config`)",
+      "",
+      "**categories**",
+      "`$cmd basics` — what everyone can do",
+      "`$cmd toggle` — quick on/off shortcuts ← start here",
+      "`$cmd status` — runtime status + presence",
+      "`$cmd config` — settings deep-dive",
+      "`$cmd moderation` — link/scam/disrespect/nick/etc",
+      "`$cmd training` — corpus + retrain commands",
+      "`$cmd channels` — channel slots + lockdown",
+      "`$cmd roles` — role assignment",
+      "`$cmd misc` — fetch, jarvis, db, etc"
+    ].join("\n")
+  },
+  basics: {
+    title: "Basics · everyone",
+    body: [
+      "**ping me** with a question — I match it against the KB",
+      "`$status` — show current KiciaHook status",
+      "",
+      "_owners can disable both via `$toggle support off` and `$toggle status off`_"
+    ].join("\n")
+  },
+  toggle: {
+    title: "Toggle · quick on/off",
+    body: [
+      "shorthand for the common config flips",
+      "",
+      "`$toggle` — show every toggle's current state",
+      "`$toggle <feature> on|off`",
+      "",
+      "**features**",
+      "`scam` `respect` `link` `drug` `reactions` `ghost-ping`",
+      "`nickname` `impersonation` `support` `status` `training`",
+      "",
+      "**examples**",
+      "`$toggle scam off` — stop scam/trade detection",
+      "`$toggle support off` — stop bot answering pings",
+      "`$toggle respect on` — re-enable disrespect guard"
+    ].join("\n")
+  },
+  status: {
+    title: "Status · runtime + presence",
+    body: [
+      "`$status` — show current status (everyone)",
+      "`$status up|down|unaware` — set runtime status (owner)",
+      "`$state` — show bot presence text",
+      "`$state <message>` — set bot presence text",
+      "`$state reset` — restore default presence"
+    ].join("\n")
+  },
+  config: {
+    title: "Config · the settings dashboard",
+    body: [
+      "70+ tunable keys. owner only.",
+      "",
+      "`$config` — help",
+      "`$config list [section]` — browse settings",
+      "`$config get <key>` — show one",
+      "`$config set <key> <value>` — change one",
+      "`$config reset <key>` — back to default",
+      "`$config reset all confirm` — nuke every override",
+      "`$config diff` — only show what you've changed",
+      "`$config export` — backup dump",
+      "",
+      "**sections:** link, scam, respect, drug, rr, ghost-ping,",
+      "nickname, impersonation, support, status, training, ui, log, daily-stats",
+      "",
+      "_tip: use `$toggle` for the common on/off stuff. use `$config`",
+      "when you actually want to tune thresholds or timeouts._"
+    ].join("\n")
+  },
+  moderation: {
+    title: "Moderation · staff +",
+    body: [
+      "**Trusted links**",
+      "`$allowlink` — list · `$allowlink <url>` — add · `$removelink <url>` — remove",
+      "",
+      "**Restricted emoji**",
+      "`$emoji` — list · `$emoji <emoji>` — add · `$emoji remove <emoji>` — remove",
+      "`$emoji top` — top offenders (7d)",
+      "",
+      "**Nickname rules**",
+      "`$nick` — list",
+      "`$nick add <word>` — simple rule",
+      "`$nick add <word> -> <name>` — with rename",
+      "`$nick add /regex/i -> name` — regex rule",
+      "`$nick remove <id>` — drop a rule",
+      "",
+      "**Whitelist (owner)**",
+      "`$whitelist [user]` · `$whitelist remove <user>`"
+    ].join("\n")
+  },
+  training: {
+    title: "Training · corpus + retrain",
+    body: [
+      "**workflow**: borderline catches post in your training channel with",
+      "buttons. staff click Not Scam / Light / Medium / Severe. severity",
+      "buttons retroactively timeout the user.",
+      "",
+      "`$training stats` — counts per classifier (staff+)",
+      "`$training purge <@user>` — wipe a banned user's samples (owner)",
+      "`$train scam` — retrain scam classifier (owner, ≥20 labels)",
+      "`$train respect` — retrain disrespect classifier (owner)",
+      "`$train review [classifier]` — peek 5 unlabeled (staff+)",
+      "",
+      "set the channel: `$set channel training <#channel>`"
+    ].join("\n")
+  },
+  channels: {
+    title: "Channels · slots + lockdown",
+    body: [
+      "`$set channels` — inspect every slot",
+      "`$set channel <slot> <#channel|id>` — assign a slot",
+      "`$set channel <slot> reset` — restore default",
+      "",
+      "**slots:** general, support, logs, ignorelogs, staff, daily,",
+      "docs, ticket, status, statuswidget, training",
+      "",
+      "`$lock` — lock configured chat channels",
+      "`$unlock` — unlock configured chat channels"
+    ].join("\n")
+  },
+  roles: {
+    title: "Roles · assignment (owner)",
+    body: [
+      "`$role <@user|userid> <roleid>` — give one user a role",
+      "`$role all <roleid>` — give every human missing it",
+      "`$role status` — check active bulk job",
+      "`$role cancel` — stop the current bulk job"
+    ].join("\n")
+  },
+  misc: {
+    title: "Misc · diagnostics & ops",
+    body: [
+      "`$fetch` — refresh KB cache (owner)",
+      "`$jarvis` — full diagnostics sweep (owner)",
+      "`$testpromax` — extended diagnostics (owner)",
+      "`$db` / `$database` — SQLite inspect (owner)",
+      "`$policy [enable|disable|status]` — broad link+commerce toggle (owner)"
+    ].join("\n")
+  }
+};
+
+const TOGGLE_CATEGORY_ALIASES = { tog: "toggle", toggles: "toggle" };
+const STATUS_CATEGORY_ALIASES = { stats: "status" };
+const MISC_CATEGORY_ALIASES = { other: "misc", diag: "misc", diagnostics: "misc" };
+const CMD_CATEGORY_ALIASES = {
+  ...TOGGLE_CATEGORY_ALIASES,
+  ...STATUS_CATEGORY_ALIASES,
+  ...MISC_CATEGORY_ALIASES,
+  mod: "moderation",
+  channel: "channels",
+  role: "roles",
+  conf: "config",
+  settings: "config",
+  train: "training",
+  basic: "basics",
+  help: "menu",
+  list: "menu",
+  "": "menu"
+};
+
+function resolveCommandCategory(name) {
+  const lower = String(name || "").toLowerCase();
+  const canonical = CMD_CATEGORY_ALIASES[lower] ?? lower;
+  return COMMAND_CATEGORIES[canonical] ? canonical : null;
 }
 
 async function replyWithCommandPanel(message, panel) {
@@ -471,12 +629,112 @@ async function replyWithCommandPanel(message, panel) {
   });
 }
 
-async function handleCommandsList(message) {
+async function handleCommandsList(message, parsed) {
+  const requested = parsed?.category || "menu";
+  const resolved = resolveCommandCategory(requested);
+  if (!resolved) {
+    await replyWithCommandPanel(message, {
+      header: "Unknown Category",
+      body: `\`${requested}\` is not a category. try \`$cmd\` to see the menu.`,
+      color: DANGER
+    });
+    return true;
+  }
+  const section = COMMAND_CATEGORIES[resolved];
   await replyWithCommandPanel(message, {
-    header: "Bot Commands",
-    body: buildCommandsBody(),
+    header: section.title,
+    body: section.body,
     color: INFO
   });
+  return true;
+}
+
+function coerceToggleValue(raw) {
+  const v = String(raw || "").toLowerCase().trim();
+  if (["on", "true", "yes", "1", "enable", "enabled"].includes(v)) return true;
+  if (["off", "false", "no", "0", "disable", "disabled"].includes(v)) return false;
+  return null;
+}
+
+async function handleToggleCommand(message, parsed, deps) {
+  const settings = require("../settings");
+  const dbModule = require("../restricted-emoji-db");
+
+  if (parsed.action === "list") {
+    const lines = [];
+    for (const [alias, key] of Object.entries(TOGGLE_ALIASES)) {
+      // dedupe: only show first alias per key
+      if (lines.some((l) => l.endsWith("`" + key + "`"))) continue;
+      const cur = settings.getSetting(key);
+      const mark = cur === false ? "🔴 off" : "🟢 on ";
+      lines.push(`${mark} \`${alias}\` → \`${key}\``);
+    }
+    await replyWithCommandPanel(message, {
+      header: "Toggles · current state",
+      body: [
+        "use `$toggle <feature> on|off` to flip one",
+        "",
+        ...lines
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  const settingKey = TOGGLE_ALIASES[parsed.feature];
+  if (!settingKey) {
+    const known = [...new Set(Object.keys(TOGGLE_ALIASES))].join(", ");
+    await replyWithCommandPanel(message, {
+      header: "Toggle · unknown feature",
+      body: `\`${parsed.feature}\` isn't a known toggle.\n\n**known:** ${known}`,
+      color: DANGER
+    });
+    return true;
+  }
+
+  if (parsed.value === undefined) {
+    const cur = settings.getSetting(settingKey);
+    await replyWithCommandPanel(message, {
+      header: `Toggle · ${parsed.feature}`,
+      body: `\`${settingKey}\` is currently ${cur === false ? "🔴 **off**" : "🟢 **on**"}\n\nflip it: \`$toggle ${parsed.feature} on\` / \`$toggle ${parsed.feature} off\``,
+      color: INFO
+    });
+    return true;
+  }
+
+  const next = coerceToggleValue(parsed.value);
+  if (next === null) {
+    await replyWithCommandPanel(message, {
+      header: "Toggle · bad value",
+      body: `expected \`on\` or \`off\`, got \`${parsed.value}\``,
+      color: DANGER
+    });
+    return true;
+  }
+
+  try {
+    const db = await dbModule.getDatabase();
+    const result = await settings.setSetting(settingKey, next, { db, actor: message.author, guild: message.guild });
+    if (result && result.ok === false) {
+      await replyWithCommandPanel(message, {
+        header: "Toggle · failed",
+        body: result.error || "could not update setting",
+        color: DANGER
+      });
+      return true;
+    }
+    await replyWithCommandPanel(message, {
+      header: `Toggle · ${parsed.feature}`,
+      body: `\`${settingKey}\` is now ${next ? "🟢 **on**" : "🔴 **off**"}`,
+      color: next ? SUCCESS : WARN
+    });
+  } catch (err) {
+    await replyWithCommandPanel(message, {
+      header: "Toggle · error",
+      body: err?.message || String(err),
+      color: DANGER
+    });
+  }
   return true;
 }
 
@@ -1389,9 +1647,16 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return handleTrainingCommand(message, trainingCommand);
   }
 
-  if (isCommandsListMessage(message.content)) {
+  const toggleCommand = parseToggleMessage(message.content);
+  if (toggleCommand) {
     if (!canUseOwnerCommands(message)) return true;
-    return handleCommandsList(message);
+    return handleToggleCommand(message, toggleCommand, deps);
+  }
+
+  const cmdListParsed = parseCommandsListMessage(message.content);
+  if (cmdListParsed) {
+    if (!canUseOwnerCommands(message)) return true;
+    return handleCommandsList(message, cmdListParsed);
   }
 
   if (isDatabaseMessage(message.content)) {

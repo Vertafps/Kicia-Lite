@@ -993,7 +993,11 @@ function cacheStore(key, value) {
 function cacheRead(key) {
   const entry = cache.get(key);
   if (!entry) return undefined;
-  if (Date.now() - entry.loadedAt > CACHE_TTL_MS) return undefined;
+  // BUG FIX (2026-05-24): previously expired entries after CACHE_TTL_MS (60s),
+  // causing getSetting() to fall through to the descriptor default — which
+  // silently undid every $toggle / $config set ~60s after the write. The cache
+  // is the single source of truth for the running process: hydrated on boot,
+  // updated on every setSetting/resetSetting. No reason to expire it.
   return entry.value;
 }
 

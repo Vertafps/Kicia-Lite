@@ -435,6 +435,17 @@ function buildCommandsBody() {
     "`$whitelist remove <user>` remove a manual moderation whitelist user",
     "`$lock` lock the configured chat channels",
     "`$unlock` unlock the configured chat channels",
+    "`$config` show config help",
+    "`$config list [section] [page]` list every tunable setting",
+    "`$config get <key>` show one setting's current value",
+    "`$config set <key> <value>` update a setting (e.g. `$config set scam.severity.severe.timeout 2d`)",
+    "`$config reset <key>` restore a setting's default",
+    "`$config reset all confirm` wipe every override",
+    "`$config diff` show only changed-from-default settings",
+    "`$config export` dump current overrides for backup",
+    "`$train scam` retrain the scam classifier from labeled training samples",
+    "`$train respect` retrain the kicia-disrespect classifier",
+    "`$training purge <@user>` wipe training samples from a banned user",
     "",
     "## Staff + Higher",
     "`$allowlink` list trusted links",
@@ -447,7 +458,9 @@ function buildCommandsBody() {
     "`$nick add <word>` add a simple nickname rule",
     "`$nick add <word> -> <name>` add a simple nickname rule with a custom rename",
     "`$nick add /^!.*/i -> wawa` rename members matching pattern",
-    "`$nick remove <id>` remove a nickname pattern by id"
+    "`$nick remove <id>` remove a nickname pattern by id",
+    "`$train review [classifier]` ephemeral: peek at unlabeled training samples",
+    "`$training stats` show training-sample counts per classifier"
   ].join("\n");
 }
 

@@ -101,7 +101,7 @@ const MUST_FLAG_CASES = [
   ["v3 is buns",            "direct insult · v3 + neg lexicon"],
   ["kicia is trash",        "direct insult · kicia + neg lexicon"],
   ["kiciahook sucks ass",   "two neg-lex tokens"],
-  ["v4 is dogshit",         "v4 + strong neg-lex"],
+  ["v2 is dogshit",         "v2 + strong neg-lex"],
   ["kicia is mid honestly", "intensifier amps polarity"],
   ["kicia is broken garbage", "two neg-lex tokens"],
   ["v3 is literally ass",   "intensifier + ass"],
@@ -458,7 +458,7 @@ test.describe("kicia-disrespect: buildEntityVocabularyFromKb", () => {
     const vocab = buildEntityVocabularyFromKb(null);
     assert.ok(vocab.kiciaEntities.has("kicia"));
     assert.ok(vocab.kiciaEntities.has("v3"));
-    assert.ok(vocab.kiciaEntities.has("v4"));
+    assert.ok(vocab.kiciaEntities.has("v2"));
     assert.ok(vocab.kiciaEntities.has("kiciahook"));
     assert.ok(vocab.kiciaEntities.has("hook"));
     // third party set is empty in default

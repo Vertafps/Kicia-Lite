@@ -54,8 +54,9 @@ const SCAM_SELL_BANK = [
   "kicia key cheap dm",
   "exchange kicia for ue",
   "wts v3 lifetime",
-  "wts v4 cheap",
+  "wts v2 cheap",
   "selling v3 dm me",
+  "selling v2 dm me",
   "trading kiciahook",
   "kicia plug here",
   "vendor kicia keys",
@@ -65,7 +66,24 @@ const SCAM_SELL_BANK = [
   "kicia for robux dm",
   "trade kicia for ue",
   "kicia trade pm me",
-  "who wants to buy my kicia"
+  "who wants to buy my kicia",
+  // ecosystem nouns — these capture the "selling configs / keys / lifetime"
+  // style messages where the user omits the kicia name itself.
+  "im selling configs dm me",
+  "selling configs dm",
+  "wts configs cheap",
+  "selling premium configs",
+  "selling my configs",
+  "im selling keys",
+  "selling kicia keys cheap",
+  "wts lifetime",
+  "selling lifetime dm me",
+  "selling premium dm",
+  "selling subs dm",
+  "selling subscription pm",
+  "wts premium",
+  "selling cracked kicia",
+  "selling license dm me"
 ];
 
 const SCAM_BUY_BANK = [
@@ -87,7 +105,8 @@ const SCAM_BUY_BANK = [
   "is kicia lifetime",
   "is kicia coming back",
   "is v3 paid",
-  "is v4 free",
+  "is v2 paid",
+  "is v3 free",
   "how to download kicia",
   "anyone know kicia link",
   "official kicia site",
@@ -98,7 +117,18 @@ const SCAM_BUY_BANK = [
   "kicia review",
   "how good is kicia",
   "should i buy kicia",
-  "is kicia good"
+  "is kicia good",
+  // ecosystem nouns — buyer-side phrasings so "where to get configs"
+  // doesn't get pulled toward the SELL bank.
+  "where can i get configs",
+  "where do i get configs",
+  "where can i find configs",
+  "how to get configs",
+  "any free configs",
+  "where to download configs",
+  "do i need a key for kicia",
+  "how much is the premium",
+  "is lifetime worth it"
 ];
 
 const RESPECT_DISRESPECT_BANK = [
@@ -110,8 +140,8 @@ const RESPECT_DISRESPECT_BANK = [
   "v3 is buns",
   "v3 is mid",
   "v3 is dogshit",
-  "v4 is trash",
-  "v4 is ass",
+  "v2 is trash",
+  "v2 is ass",
   "kiciahook sucks",
   "kicia sucks now",
   "kicia is bad",
@@ -138,7 +168,7 @@ const RESPECT_NEUTRAL_BANK = [
   "kicia is good",
   "kicia is great",
   "v3 works fine",
-  "v4 is solid",
+  "v2 is solid",
   "kicia is the best",
   "kiciahook is reliable",
   "v3 had a bug",

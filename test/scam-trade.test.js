@@ -64,7 +64,13 @@ const MUST_FLAG_CASES = [
   ["wts v3 lifetime, paypal only",      "wts + v3 topic + payment processor"],
   ["kicia for sale, dm me",             "for-sale phrasing + dm"],
   ["sold my kicia, who wants v3 trade", "sold/trade verbs near v3"],
-  ["selling kicia + ue 5usd dm me",     "explicit sale + price + dm"]
+  ["selling kicia + ue 5usd dm me",     "explicit sale + price + dm"],
+  // ecosystem-noun cases — user reported "Im selling configs" was missed
+  ["im selling configs",                "selling + configs (no kicia word)"],
+  ["wts configs cheap dm me",           "wts + configs + dm"],
+  ["selling lifetime $10 paypal",       "selling + lifetime + price + payment"],
+  ["selling my keys dm me",             "selling + keys + dm"],
+  ["selling premium configs hmu",       "selling + premium + configs + dm slang"]
 ];
 
 test.describe("scam-trade: must-flag cases", () => {
@@ -234,7 +240,7 @@ test.describe("scam-trade: computeDirectionScore", () => {
     assert.strictEqual(computeDirectionScore("selling kiciahook"), 2);
     assert.strictEqual(computeDirectionScore("selling hook"), 2);
     assert.strictEqual(computeDirectionScore("selling v3"), 2);
-    assert.strictEqual(computeDirectionScore("selling v4"), 2);
+    assert.strictEqual(computeDirectionScore("selling v2"), 2);
   });
 });
 
@@ -365,9 +371,12 @@ test.describe("scam-trade: topical gate", () => {
     assert.match(result.reasonText, /not.*topical|topic/i);
   });
 
-  test("'wts hydrogen lifetime $5' → ignore (no kicia topic)", async () => {
+  test("'wts hydrogen lifetime $5' → review (lifetime is ecosystem-noun topical)", async () => {
+    // "lifetime" intentionally matches the broadened topic gate because on this
+    // server it usually means a Kicia license. Selling ANY lifetime here is
+    // commerce the staff want to see, so it goes to the training channel.
     const result = await classifyScamTrade("wts hydrogen lifetime $5");
-    assert.strictEqual(result.verdict, "ignore");
+    assert.notStrictEqual(result.verdict, "ignore");
   });
 });
 

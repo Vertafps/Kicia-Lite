@@ -119,14 +119,14 @@ const FALLBACK_KICIA_ENTITIES = [
   "kicia",
   "kiciahook",
   "hook",
+  "v2",
   "v3",
-  "v4",
   "kicia hook",
-  "kicia v3",
-  "kicia v4"
+  "kicia v2",
+  "kicia v3"
 ];
 
-const KICIA_ALIAS_RE = /kicia|kiciahook|hook|^v[34]$/i;
+const KICIA_ALIAS_RE = /kicia|kiciahook|hook|^v[23]$/i;
 
 function buildEntityVocabularyFromKb(kb) {
   const kicia = new Set();

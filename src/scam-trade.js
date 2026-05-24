@@ -50,7 +50,10 @@ const PRICE_OR_PAYMENT_RE = /\b(?:\$\s*\d+|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|
 const SELLER_RE = /\b(sell(?:ing|s)?|sold|wts|for\s+sale|taking\s+offers?|vendor|plug|trade|trading|swap(?:ping)?|exchange|exchanging|lf\s*(?:trade|swap))\b/i;
 const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get)))\b/i;
 const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu)\b/i;
-const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[34])\b/i;
+// topic gate — recognises the kicia product itself + ecosystem nouns
+// commonly used as the *thing being sold*. on this server, "configs",
+// "keys", "lifetime", "premium" overwhelmingly refer to kicia.
+const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?|cracked\s+kicia)\b/i;
 const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal)\b/i;
 
 // ---------------------------------------------------------------------------

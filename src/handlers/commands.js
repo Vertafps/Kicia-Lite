@@ -3,8 +3,11 @@ const { buildPanel, DANGER, INFO, SUCCESS, WARN } = require("../embed");
 const {
   canUseEmojiCommands,
   canUseOwnerCommands,
-  canUseTrustedLinkCommands
+  canUseTrustedLinkCommands,
+  hasAnyRole,
+  isKernelUserId
 } = require("../permissions");
+const { OWNER_ROLE_IDS } = require("../config");
 const {
   parseEmojiInput,
   listRestrictedEmojis,
@@ -1360,6 +1363,113 @@ async function handleWhitelistCommand(message, command, {
   return true;
 }
 
+const CONFIG_LIST_BUTTON_PREFIX = "config:list:";
+
+function buildConfigListPayload(settings, section, page) {
+  const registry = settings.getRegistry();
+  let entries = [...registry.entries()];
+  if (section) entries = entries.filter(([, d]) => d.section === section);
+  if (!entries.length) {
+    return {
+      panel: {
+        header: "Config — No Matches",
+        body: section ? `no settings in section \`${section}\`` : "no settings registered",
+        color: WARN
+      },
+      components: []
+    };
+  }
+  const pageSize = 15;
+  const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
+  const safePage = Math.max(0, Math.min(Number(page) || 0, totalPages - 1));
+  const slice = entries.slice(safePage * pageSize, (safePage + 1) * pageSize);
+  const lines = slice.map(([k, d]) => {
+    const cur = settings.formatValue(k, settings.getSetting(k));
+    const def = settings.formatValue(k, d.defaultValue);
+    const star = cur === def ? "" : " *";
+    return `**${k}**${star}\n  type \`${d.type}\` · current ${cur} · default ${def}`;
+  });
+
+  const components = [];
+  if (totalPages > 1) {
+    const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+    const tag = section || "_";
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${CONFIG_LIST_BUTTON_PREFIX}${tag}:${safePage - 1}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("◀️")
+        .setLabel("Prev")
+        .setDisabled(safePage <= 0),
+      new ButtonBuilder()
+        .setCustomId(`${CONFIG_LIST_BUTTON_PREFIX}indicator`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel(`${safePage + 1} / ${totalPages}`)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`${CONFIG_LIST_BUTTON_PREFIX}${tag}:${safePage + 1}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("▶️")
+        .setLabel("Next")
+        .setDisabled(safePage >= totalPages - 1)
+    );
+    components.push(row);
+  }
+
+  return {
+    panel: {
+      header: `Config · ${section || "all"} (page ${safePage + 1}/${totalPages})`,
+      body: lines.join("\n\n"),
+      color: INFO
+    },
+    components
+  };
+}
+
+async function maybeHandleConfigListInteraction(interaction) {
+  if (!interaction.isButton?.()) return false;
+  const customId = String(interaction.customId || "");
+  if (!customId.startsWith(CONFIG_LIST_BUTTON_PREFIX)) return false;
+
+  // Indicator button has no destination — just ack and drop.
+  if (customId === `${CONFIG_LIST_BUTTON_PREFIX}indicator`) {
+    try { await interaction.deferUpdate(); } catch {}
+    return true;
+  }
+
+  // Permission gate — only owners can paginate the config list.
+  if (!isKernelUserId(interaction.user?.id) && !hasAnyRole(interaction.member, [...OWNER_ROLE_IDS])) {
+    try {
+      await interaction.reply({ content: "owner only", flags: 1 << 6 });
+    } catch {}
+    return true;
+  }
+
+  const rest = customId.slice(CONFIG_LIST_BUTTON_PREFIX.length);
+  const sepIdx = rest.lastIndexOf(":");
+  if (sepIdx === -1) {
+    try { await interaction.deferUpdate(); } catch {}
+    return true;
+  }
+  const tag = rest.slice(0, sepIdx);
+  const pageNum = Number(rest.slice(sepIdx + 1));
+  const section = tag === "_" ? null : tag;
+
+  const settings = require("../settings");
+  const payload = buildConfigListPayload(settings, section, pageNum);
+  try {
+    await interaction.update({
+      embeds: [buildPanel(payload.panel)],
+      components: payload.components
+    });
+  } catch (err) {
+    try {
+      await interaction.reply({ content: "could not update list", flags: 1 << 6 });
+    } catch {}
+  }
+  return true;
+}
+
 async function handleConfigCommand(message, parsed) {
   const settings = require("../settings");
   const dbModule = require("../restricted-emoji-db");
@@ -1386,31 +1496,11 @@ async function handleConfigCommand(message, parsed) {
   }
 
   if (parsed.action === "list") {
-    const registry = settings.getRegistry();
-    let entries = [...registry.entries()];
-    if (parsed.section) entries = entries.filter(([, d]) => d.section === parsed.section);
-    if (!entries.length) {
-      await replyWithCommandPanel(message, {
-        header: "Config — No Matches",
-        body: parsed.section ? `no settings in section \`${parsed.section}\`` : "no settings registered",
-        color: WARN
-      });
-      return true;
-    }
-    const pageSize = 15;
-    const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
-    const page = Math.min(parsed.page, totalPages - 1);
-    const slice = entries.slice(page * pageSize, (page + 1) * pageSize);
-    const lines = slice.map(([k, d]) => {
-      const cur = settings.formatValue(k, settings.getSetting(k));
-      const def = settings.formatValue(k, d.defaultValue);
-      const star = cur === def ? "" : " *";
-      return `**${k}**${star}\n  type \`${d.type}\` · current ${cur} · default ${def}`;
-    });
-    await replyWithCommandPanel(message, {
-      header: `Config · ${parsed.section || "all"} (page ${page + 1}/${totalPages})`,
-      body: lines.join("\n\n"),
-      color: INFO
+    const payload = buildConfigListPayload(settings, parsed.section, parsed.page);
+    await safeReply(message, {
+      embeds: [buildPanel(payload.panel)],
+      components: payload.components,
+      allowedMentions: { repliedUser: false }
     });
     return true;
   }
@@ -1931,5 +2021,6 @@ module.exports = {
   handleNickCommand,
   handleConfigCommand,
   handlePatternCommand,
+  maybeHandleConfigListInteraction,
   maybeHandleControlCommand
 };

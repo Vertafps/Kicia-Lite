@@ -877,9 +877,9 @@ const REGISTRY_ENTRIES = [
   }],
   ["training.classifier.scam.threshold", {
     type: SETTING_TYPES.FLOAT,
-    defaultValue: 0.55,
+    defaultValue: 0.30,
     label: "Scam Classifier Threshold",
-    description: "Borderline gate for the scam classifier; samples within this margin are queued for labeling.",
+    description: "Borderline gate for the scam classifier; samples within this margin are queued for labeling. Default is intentionally low because the scam confidence formula is H/5-weighted and rarely exceeds 0.55 on cold start.",
     section: "training",
     min: 0,
     max: 1

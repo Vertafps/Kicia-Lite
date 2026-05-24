@@ -57,6 +57,7 @@ const { hydrateCustomPatterns } = require("./custom-patterns");
 const { hydrateSettingsCache } = require("./settings");
 const { startTrainingChannelScheduler, flushAllTrainingQueues } = require("./training-feedback");
 const { maybeHandleTrainingFeedbackInteraction } = require("./handlers/training-feedback");
+const { maybeHandleConfigListInteraction } = require("./handlers/commands");
 const { registerSlashCommands, maybeHandleSlashCommandInteraction } = require("./slash-commands");
 const { flushAllQueues: flushAllLogQueues } = require("./log-channel-queue");
 
@@ -499,6 +500,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await maybeHandleModerationLogInteraction(interaction)) return;
     if (await maybeHandleSweepReviewInteraction(interaction)) return;
     if (await maybeHandleTrainingFeedbackInteraction(interaction)) return;
+    if (await maybeHandleConfigListInteraction(interaction)) return;
 
     // If we got here, no handler claimed this interaction. Acknowledge the
     // click so Discord doesn't show "interaction failed" to the user. We do

@@ -53,6 +53,7 @@ const { loadOrBuildKbCache } = require("./kb-embeddings");
 const { safeReply } = require("./utils/respond");
 const { startStatusWidgetScheduler, refreshStatusWidget } = require("./handlers/status-widget");
 const { preloadExampleBanks } = require("./example-banks");
+const { hydrateCustomPatterns } = require("./custom-patterns");
 const { hydrateSettingsCache } = require("./settings");
 const { startTrainingChannelScheduler, flushAllTrainingQueues } = require("./training-feedback");
 const { maybeHandleTrainingFeedbackInteraction } = require("./handlers/training-feedback");
@@ -285,6 +286,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   preloadEmbedder().catch(() => null);
   preloadExampleBanks().catch((err) => recordRuntimeEvent("warn", "example-banks-preload", err?.message || err));
+  hydrateCustomPatterns().catch((err) => recordRuntimeEvent("warn", "custom-patterns-hydrate", err?.message || err));
 
   await refreshAndReportThreatFeed(readyClient, { initial: true });
 

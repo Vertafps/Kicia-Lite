@@ -344,6 +344,43 @@ function parseConfigMessage(content) {
   return { action: "invalid", error: `unknown subcommand: ${cmd}. try: list, get, set, reset, diff, export, help` };
 }
 
+function parsePatternMessage(content) {
+  const m = String(content || "").match(/^\$pattern(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  const rest = (m[1] || "").trim();
+  if (!rest || rest === "help") return { action: "help" };
+  const tokens = rest.split(/\s+/);
+  const cmd = tokens[0]?.toLowerCase();
+  if (cmd === "list") return { action: "list" };
+  if (cmd === "add") {
+    const timeoutToken = tokens[1];
+    const phrase = tokens.slice(2).join(" ").trim();
+    if (!timeoutToken || !phrase) {
+      return { action: "invalid", error: "usage: `$pattern add <timeout> <phrase>` — e.g. `$pattern add 1h v2 is better than v3`" };
+    }
+    return { action: "add", timeoutInput: timeoutToken, phrase };
+  }
+  if (cmd === "remove" || cmd === "delete" || cmd === "rm") {
+    const id = Number(tokens[1]);
+    if (!Number.isFinite(id)) return { action: "invalid", error: "usage: `$pattern remove <id>`" };
+    return { action: "remove", id };
+  }
+  if (cmd === "test") {
+    const text = tokens.slice(1).join(" ").trim();
+    if (!text) return { action: "invalid", error: "usage: `$pattern test <message>`" };
+    return { action: "test", text };
+  }
+  if (cmd === "threshold" || cmd === "thresh") {
+    const id = Number(tokens[1]);
+    const value = Number(tokens[2]);
+    if (!Number.isFinite(id) || !Number.isFinite(value)) {
+      return { action: "invalid", error: "usage: `$pattern threshold <id> <0.5-0.99>`" };
+    }
+    return { action: "threshold", id, value };
+  }
+  return { action: "invalid", error: `unknown subcommand: \`${cmd}\`. try: list, add, remove, threshold, test` };
+}
+
 function parseTrainMessage(content) {
   const trimmed = String(content || "").trim();
   const m = trimmed.match(/^\$train(?:\s+([\s\S]*))?$/i);
@@ -461,6 +498,7 @@ const COMMAND_CATEGORIES = {
       "`$cmd status` — runtime status + presence",
       "`$cmd config` — settings deep-dive",
       "`$cmd moderation` — link/scam/disrespect/nick/etc",
+      "`$cmd patterns` — custom auto-timeout phrases",
       "`$cmd training` — corpus + retrain commands",
       "`$cmd channels` — channel slots + lockdown",
       "`$cmd roles` — role assignment",
@@ -546,6 +584,20 @@ const COMMAND_CATEGORIES = {
       "`$whitelist [user]` · `$whitelist remove <user>`"
     ].join("\n")
   },
+  patterns: {
+    title: "Custom Patterns · auto-timeout phrases",
+    body: [
+      "owner only. semantic match — paraphrases and leet-speak still trip.",
+      "",
+      "`$pattern list` — show active patterns",
+      "`$pattern add <timeout> <phrase>` — add (e.g. `$pattern add 1h v2 is better than v3`)",
+      "`$pattern remove <id>` — drop one",
+      "`$pattern threshold <id> <0.5-0.99>` — tune sensitivity",
+      "`$pattern test <message>` — dry-run match preview",
+      "",
+      "**no DM is sent** — message deleted, user timed out, staff log records it."
+    ].join("\n")
+  },
   training: {
     title: "Training · corpus + retrain",
     body: [
@@ -611,6 +663,7 @@ const CMD_CATEGORY_ALIASES = {
   settings: "config",
   train: "training",
   basic: "basics",
+  pattern: "patterns",
   help: "menu",
   list: "menu",
   "": "menu"
@@ -1591,6 +1644,191 @@ async function handleTrustedLinkCommand(message, command, {
   return true;
 }
 
+async function handlePatternCommand(message, parsed) {
+  // lazy require — avoid pulling embedder + db at module load time, and let
+  // tests stub via require.cache.
+  const patterns = require("../custom-patterns");
+  const { parseDurationInput, formatDuration } = require("../duration");
+
+  if (parsed.action === "help") {
+    await replyWithCommandPanel(message, {
+      header: "Custom Timeout Patterns",
+      body: [
+        "phrases that auto-timeout users when their messages semantically match.",
+        "no DM is sent — message is deleted + user is timed out + staff log records it.",
+        "",
+        "`$pattern list` — list active patterns",
+        "`$pattern add <timeout> <phrase>` — e.g. `$pattern add 1h v2 is better than v3`",
+        "`$pattern remove <id>` — drop a pattern",
+        "`$pattern threshold <id> <0.5-0.99>` — tune match sensitivity (default 0.80)",
+        "`$pattern test <message>` — dry-run: see which pattern (if any) matches"
+      ].join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (parsed.action === "invalid") {
+    await replyWithCommandPanel(message, {
+      header: "Pattern — Invalid",
+      body: parsed.error,
+      color: DANGER
+    });
+    return true;
+  }
+
+  if (parsed.action === "list") {
+    let list = [];
+    try {
+      list = await patterns.listPatterns();
+    } catch (err) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — List Failed",
+        body: err?.message || String(err),
+        color: DANGER
+      });
+      return true;
+    }
+    if (!list.length) {
+      await replyWithCommandPanel(message, {
+        header: "Patterns · empty",
+        body: "no custom patterns yet. add one with `$pattern add 1h <phrase>`.",
+        color: INFO
+      });
+      return true;
+    }
+    const lines = list.map((p) =>
+      `**#${p.id}** · \`${formatDuration(p.timeoutMs)}\` · th=${p.threshold.toFixed(2)} · "${String(p.phrase).slice(0, 80)}"`
+    );
+    await replyWithCommandPanel(message, {
+      header: `Patterns · ${list.length}`,
+      body: lines.join("\n"),
+      color: INFO
+    });
+    return true;
+  }
+
+  if (parsed.action === "add") {
+    const timeoutMs = parseDurationInput(parsed.timeoutInput);
+    if (!timeoutMs) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — Bad Duration",
+        body: `\`${parsed.timeoutInput}\` is not a duration. try \`30m\`, \`1h\`, \`1d\`.`,
+        color: DANGER
+      });
+      return true;
+    }
+    try {
+      const id = await patterns.addPattern({
+        phrase: parsed.phrase,
+        timeoutMs,
+        threshold: patterns.DEFAULT_THRESHOLD,
+        createdBy: message.author?.id || null
+      });
+      await replyWithCommandPanel(message, {
+        header: "Pattern Added",
+        body: [
+          `**#${id}** · \`${formatDuration(timeoutMs)}\` · "${parsed.phrase}"`,
+          "",
+          `staff can tune via \`$pattern threshold ${id} <0.5-0.99>\`.`
+        ].join("\n"),
+        color: SUCCESS
+      });
+    } catch (err) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — Add Failed",
+        body: err?.message || String(err),
+        color: DANGER
+      });
+    }
+    return true;
+  }
+
+  if (parsed.action === "remove") {
+    let ok = false;
+    try {
+      ok = await patterns.removePattern(parsed.id);
+    } catch (err) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — Remove Failed",
+        body: err?.message || String(err),
+        color: DANGER
+      });
+      return true;
+    }
+    await replyWithCommandPanel(message, {
+      header: ok ? "Pattern Removed" : "Pattern — Not Found",
+      body: ok ? `dropped pattern #${parsed.id}` : `no pattern with id ${parsed.id}`,
+      color: ok ? WARN : DANGER
+    });
+    return true;
+  }
+
+  if (parsed.action === "threshold") {
+    if (parsed.value < 0.5 || parsed.value > 0.99) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — Bad Threshold",
+        body: "threshold must be between 0.5 and 0.99",
+        color: DANGER
+      });
+      return true;
+    }
+    let ok = false;
+    try {
+      ok = await patterns.setThreshold(parsed.id, parsed.value);
+    } catch (err) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — Update Failed",
+        body: err?.message || String(err),
+        color: DANGER
+      });
+      return true;
+    }
+    await replyWithCommandPanel(message, {
+      header: ok ? "Pattern Updated" : "Pattern — Not Found",
+      body: ok
+        ? `pattern #${parsed.id} threshold = ${Number(parsed.value).toFixed(2)}`
+        : `no pattern with id ${parsed.id}`,
+      color: ok ? SUCCESS : DANGER
+    });
+    return true;
+  }
+
+  if (parsed.action === "test") {
+    let result;
+    try {
+      result = await patterns.matchMessage(parsed.text, { minThreshold: 0.5 });
+    } catch (err) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern — Test Failed",
+        body: err?.message || String(err),
+        color: DANGER
+      });
+      return true;
+    }
+    if (result?.matched) {
+      await replyWithCommandPanel(message, {
+        header: "Pattern Test · MATCH",
+        body: `**#${result.patternId}** · score \`${Number(result.score).toFixed(3)}\` · "${result.pattern.phrase}"`,
+        color: WARN
+      });
+      return true;
+    }
+    const best = Number(result?.bestScore || 0).toFixed(3);
+    const bestLine = result?.bestPatternId
+      ? `best candidate was #${result.bestPatternId} ("${result.bestPattern.phrase.slice(0, 60)}") · score \`${best}\` — below its threshold ${result.bestPattern.threshold.toFixed(2)}`
+      : `top score was \`${best}\` — below any pattern threshold`;
+    await replyWithCommandPanel(message, {
+      header: "Pattern Test · no match",
+      body: bestLine,
+      color: INFO
+    });
+    return true;
+  }
+
+  return true;
+}
+
 async function maybeHandleControlCommand(message, deps = {}) {
   const stateCommand = parseStateMessage(message.content);
   if (stateCommand) {
@@ -1635,6 +1873,13 @@ async function maybeHandleControlCommand(message, deps = {}) {
     return true;
   }
 
+  const patternCommand = parsePatternMessage(message.content);
+  if (patternCommand) {
+    if (!canUseOwnerCommands(message)) return true;
+    await handlePatternCommand(message, patternCommand);
+    return true;
+  }
+
   const trainCommand = parseTrainMessage(message.content);
   if (trainCommand) {
     const { handleTrainCommand } = require("./training-commands");
@@ -1674,6 +1919,7 @@ module.exports = {
   parseSetChannelMessage,
   parseEmojiMessage,
   parseNickMessage,
+  parsePatternMessage,
   parseTrustedLinkMessage,
   parseWhitelistMessage,
   parseUserIdInput,
@@ -1684,5 +1930,6 @@ module.exports = {
   handleSetChannelCommand,
   handleNickCommand,
   handleConfigCommand,
+  handlePatternCommand,
   maybeHandleControlCommand
 };

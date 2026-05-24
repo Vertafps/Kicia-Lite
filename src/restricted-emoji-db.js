@@ -390,6 +390,17 @@ function createSchema(db) {
       last_offense_at INTEGER NOT NULL,
       tier INTEGER NOT NULL DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS custom_timeout_patterns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      phrase TEXT NOT NULL,
+      normalized_phrase TEXT NOT NULL,
+      timeout_ms INTEGER NOT NULL,
+      threshold REAL NOT NULL DEFAULT 0.80,
+      vector_json TEXT,
+      created_by TEXT,
+      created_at INTEGER NOT NULL
+    );
   `);
 }
 

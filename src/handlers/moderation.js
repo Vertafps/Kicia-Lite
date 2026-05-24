@@ -634,6 +634,71 @@ async function handleKiciaDisrespectMessage(message, result, {
   return true;
 }
 
+// ─── custom timeout patterns (owner-defined phrases, semantic match) ────────
+
+async function handleCustomPatternMessage(message, match, {
+  sendLog = sendLogPanel,
+  now = Date.now()
+} = {}) {
+  const durationMs = Number(match?.pattern?.timeoutMs) || (60 * 60 * 1000);
+  const timeoutResult = await tryTimeoutMessageMember(
+    message.member,
+    durationMs,
+    `custom pattern #${match.patternId}`
+  );
+  const deleteResult = await tryDeleteMessage(message);
+  // NO DM per owner request — silent timeout.
+
+  if (!timeoutResult.applied) {
+    recordRuntimeEvent("warn", "custom-pattern-timeout", timeoutResult.reason);
+  }
+  await recordModerationStat(
+    timeoutResult.applied ? "custom_pattern_timeout" : "custom_pattern_alert",
+    now
+  );
+
+  const review = await createReviewRecord(message, {
+    actionType: "custom_pattern_timeout",
+    actionLabel: `pattern #${match.patternId}`,
+    timeoutMs: durationMs,
+    timeoutApplied: timeoutResult.applied,
+    deleteApplied: deleteResult.deleted,
+    dmSent: false,
+    reasons: [`matched custom pattern #${match.patternId}: "${String(match.pattern.phrase || "").slice(0, 80)}"`],
+    now
+  });
+
+  const displayName = message.member?.displayName
+    || message.author?.globalName
+    || message.author?.username
+    || "user";
+  const avatar = resolveAvatarURL(message.author);
+
+  const panel = buildRichPanel({
+    title: `Custom Pattern Timeout · #${match.patternId}`,
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields: [
+      { name: "User", value: `<@${message.author?.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channelId}>`, inline: true },
+      { name: "Match score", value: Number(match.score || 0).toFixed(3), inline: true },
+      { name: "Threshold", value: Number(match.pattern.threshold || 0).toFixed(2), inline: true },
+      { name: "Timeout", value: timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason, inline: true },
+      { name: "Delete", value: deleteResult.deleted ? "ok" : (deleteResult.reason || "skipped"), inline: true },
+      { name: "Pattern", value: `"${String(match.pattern.phrase || "").slice(0, 200)}"`, inline: false },
+      { name: "Evidence", value: trimExcerpt(message.content) }
+    ],
+    color: timeoutResult.applied ? DANGER : WARN
+  });
+  const payload = attachLogButtons(panel, {
+    actionId: review.actionId,
+    expiresAt: review.expiresAt,
+    canRevert: timeoutResult.applied
+  });
+  await sendLog(message.guild, payload).catch(() => null);
+
+  return true;
+}
+
 // ─── entry point ─────────────────────────────────────────────────────────────
 
 async function maybeHandleModerationWatch(message, {
@@ -741,6 +806,24 @@ async function maybeHandleModerationWatch(message, {
         }
       } catch (err) {
         recordRuntimeEvent("warn", "respect-classifier", err?.message || err);
+      }
+    }
+
+    // 5) Custom timeout patterns — owner-defined phrases, semantic match.
+    // No DM, silent timeout + delete + staff log. Lazy-require so tests can
+    // stub via require.cache and we don't load the embedder for cold paths.
+    if (message.content?.length) {
+      try {
+        const patterns = require("../custom-patterns");
+        if (typeof patterns.matchMessage === "function") {
+          const match = await patterns.matchMessage(message.content);
+          if (match?.matched) {
+            await handleCustomPatternMessage(message, match, { sendLog, now });
+            return true;
+          }
+        }
+      } catch (err) {
+        recordRuntimeEvent("warn", "custom-pattern-match", err?.message || err);
       }
     }
 

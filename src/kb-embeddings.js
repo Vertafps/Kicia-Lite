@@ -1,18 +1,3 @@
-"use strict";
-
-/**
- * Semantic KB index — reuses the MiniLM pipeline already loaded for scam
- * classification to give the KB matcher a free semantic-similarity signal.
- *
- * Strategy:
- *   - On startup (or when the KB JSON changes), embed every issue title +
- *     match phrases, every executor name + aliases. Cache to disk by hash.
- *   - At query time, embed the user message and cosine-similarity it against
- *     the index. The lexical scorer in `kb.js` blends this in.
- *
- * Cache layout mirrors `scam-embeddings-cache.json` for consistency.
- */
-
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");

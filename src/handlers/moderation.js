@@ -1,22 +1,3 @@
-"use strict";
-
-/**
- * Moderation watcher.
- *
- * Thin pipeline:
- *   bypass → link policy → prohibited commerce → done
- *
- * Scam/trade pattern detection, toxicity shadow, suspicious heuristics, raid
- * detection, and roasting reply have been removed. Wick handles raid. Scam
- * detection was false-positive prone and is gone. The link policy continues
- * to do FishFish + threat intel + KB blocklist work; prohibited commerce
- * still catches drug/weapon sales. The owner-only `$policy` toggle narrows
- * link policy to FishFish-only and disables prohibited commerce.
- *
- * Every detection log is sent to the configured log channel via sendLogPanel.
- * No detection output ever lands in the channel that triggered it.
- */
-
 const {
   LINK_MODERATION_TIMEOUT_MS,
   NEW_ACCOUNT_LINK_SCRUTINY_MS,

@@ -1,11 +1,3 @@
-"use strict";
-
-/**
- * Generic text embedding pipeline (MiniLM via @huggingface/transformers).
- * Single shared loader used by the KB semantic index. The scam-* classifiers
- * have been removed; this module is the surviving carrier of the embedder.
- */
-
 const {
   KB_EMBED_MODEL_ID,
   KB_EMBED_TIMEOUT_MS

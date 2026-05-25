@@ -118,6 +118,18 @@ async function handleTrainCommand(message, parsed) {
       ]);
       dbModule.schedulePersist(db, { immediate: true });
 
+      // invalidate classifier head caches so the new weights take effect now
+      // instead of after the 60s cache window expires.
+      try {
+        if (parsed.classifier === "scam") {
+          require("../scam-trade").resetHeadCache?.();
+        } else if (parsed.classifier === "respect") {
+          require("../kicia-disrespect").resetHeadCache?.();
+        }
+      } catch (err) {
+        recordRuntimeEvent("warn", "train-head-cache-reset", err?.message || err);
+      }
+
       await replyPanel(message, {
         header: `Train · ${parsed.classifier} retrained`,
         body: [

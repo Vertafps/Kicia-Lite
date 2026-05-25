@@ -533,6 +533,47 @@ const REGISTRY_ENTRIES = [
     min: HOUR_MS,
     max: 30 * DAY_MS
   }],
+  ["respect.severity.light.timeout", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: 15 * MINUTE_MS,
+    label: "Severity Light Timeout",
+    description: "Mute duration when staff retroactively label as light severity.",
+    section: "respect",
+    min: MINUTE_MS,
+    max: DAY_MS
+  }],
+  ["respect.severity.medium.timeout", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: HOUR_MS,
+    label: "Severity Medium Timeout",
+    description: "Mute duration when staff retroactively label as medium severity.",
+    section: "respect",
+    min: MINUTE_MS,
+    max: 7 * DAY_MS
+  }],
+  ["respect.severity.severe.timeout", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: 24 * HOUR_MS,
+    label: "Severity Severe Timeout",
+    description: "Mute duration when staff retroactively label as severe.",
+    section: "respect",
+    min: MINUTE_MS,
+    max: 28 * DAY_MS
+  }],
+  ["respect.staff.ping.role", {
+    type: SETTING_TYPES.STRING,
+    defaultValue: "",
+    label: "Respect Staff Ping Role",
+    description: "Role ID to ping when respect classifier asks for review (empty = use STAFF_ROLE_IDS[0]).",
+    section: "respect"
+  }],
+  ["link.staff.ping.role", {
+    type: SETTING_TYPES.STRING,
+    defaultValue: "",
+    label: "Link Staff Ping Role",
+    description: "Role ID to ping when link guard asks for review (empty = use STAFF_ROLE_IDS[0]).",
+    section: "link"
+  }],
 
   // drug
   ["drug.guard.enabled", {

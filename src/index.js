@@ -55,7 +55,7 @@ const { startStatusWidgetScheduler, refreshStatusWidget } = require("./handlers/
 const { preloadExampleBanks } = require("./example-banks");
 const { hydrateCustomPatterns } = require("./custom-patterns");
 const { hydrateSettingsCache } = require("./settings");
-const { startTrainingChannelScheduler, flushAllTrainingQueues } = require("./training-feedback");
+const { startTrainingChannelScheduler, drainTrainingChannelQueue, flushAllTrainingQueues } = require("./training-feedback");
 const { maybeHandleTrainingFeedbackInteraction } = require("./handlers/training-feedback");
 const { maybeHandleConfigListInteraction } = require("./handlers/commands");
 const { registerSlashCommands, maybeHandleSlashCommandInteraction } = require("./slash-commands");
@@ -68,33 +68,70 @@ enableStatusPersistence({
 });
 
 const LOCK_PATH = path.join(os.tmpdir(), "kicialite.lock");
+const LOCK_STALE_AGE_MS = 30_000;
+
+// probe whether a pid is alive AND belongs to a node process running our entry.
+// returns true (definitely alive), false (definitely dead), or null (ambiguous).
+function pidLooksAlive(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    if (err.code === "ESRCH") return false;
+    if (err.code === "EPERM") return true;
+    return false;
+  }
+  try {
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    if (!cmdline) return false;
+    if (!/node/i.test(cmdline)) return false;
+    if (!cmdline.includes("index.js")) return false;
+    return true;
+  } catch {
+    return null;
+  }
+}
 
 function acquireInstanceLock() {
   try {
     fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
+    return;
   } catch (err) {
     if (err.code !== "EEXIST") throw err;
-    let existingPid;
-    try {
-      existingPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
-    } catch {}
+  }
 
-    if (Number.isInteger(existingPid)) {
-      try {
-        process.kill(existingPid, 0);
-        throw new Error(`Another KiciaLite instance is already running (PID ${existingPid}).`);
-      } catch (probeErr) {
-        if (probeErr.code !== "ESRCH") throw probeErr;
-      }
+  let existingPid = null;
+  let lockAgeMs = Infinity;
+  try {
+    existingPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
+    lockAgeMs = Date.now() - fs.statSync(LOCK_PATH).mtimeMs;
+  } catch {}
+
+  if (Number.isInteger(existingPid)) {
+    const alive = pidLooksAlive(existingPid);
+    if (alive === true) {
+      throw new Error(`Another KiciaLite instance is already running (PID ${existingPid}).`);
     }
-
-    try {
-      fs.rmSync(LOCK_PATH, { force: true });
-      fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
-    } catch (rmErr) {
-      console.warn("Could not clean up stale lock file:", rmErr.message);
+    if (alive === null && lockAgeMs < LOCK_STALE_AGE_MS) {
+      throw new Error(
+        `Lockfile present (PID ${existingPid}, age ${Math.round(lockAgeMs / 1000)}s); probe ambiguous, refusing to start.`
+      );
     }
   }
+
+  try {
+    fs.rmSync(LOCK_PATH, { force: true });
+    fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: "wx" });
+  } catch (rmErr) {
+    console.warn("Could not clean up stale lock file:", rmErr.message);
+  }
+}
+
+function startLockHeartbeat() {
+  const timer = setInterval(() => {
+    try { fs.utimesSync(LOCK_PATH, new Date(), new Date()); } catch {}
+  }, 10_000);
+  timer.unref?.();
+  return timer;
 }
 
 async function releaseInstanceLock() {
@@ -308,9 +345,14 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   try {
     startTrainingChannelScheduler();
+    drainTrainingChannelQueue().catch((err) =>
+      recordRuntimeEvent("warn", "training-drain-startup", err?.message || err)
+    );
   } catch (err) {
     recordRuntimeEvent("warn", "training-scheduler", err?.message || err);
   }
+
+  startLockHeartbeat();
 
   try {
     const statsSchedule = await startDailyStatsScheduler(readyClient);

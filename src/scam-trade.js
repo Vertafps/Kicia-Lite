@@ -708,8 +708,15 @@ function __resetForTests() {
   _settingsResolved = false;
 }
 
+function resetHeadCache() {
+  _head = null;
+  _headLoadedAt = 0;
+  _headAttempted = false;
+}
+
 module.exports = {
   classifyScamTrade,
+  resetHeadCache,
   __resetForTests,
   __internals: {
     computeDirectionScore,

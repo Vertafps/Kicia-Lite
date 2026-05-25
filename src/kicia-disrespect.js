@@ -579,9 +579,14 @@ function __resetForTests() {
   _headCache = { value: null, loadedAt: 0, fetching: null };
 }
 
+function resetHeadCache() {
+  _headCache = { value: null, loadedAt: 0, fetching: null };
+}
+
 module.exports = {
   classifyKiciaDisrespect,
   buildEntityVocabularyFromKb,
+  resetHeadCache,
   __resetForTests,
   __internals: {
     splitClauses,

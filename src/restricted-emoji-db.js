@@ -304,8 +304,8 @@ function createSchema(db) {
     db.exec("ALTER TABLE moderation_actions ADD COLUMN recent_messages_json TEXT;");
   } catch {}
 
-  // Migration: drop the old scam_decision_audit table from pre-v2 databases.
-  // Scam detection has been removed entirely; the table is no longer used.
+  // legacy table from an earlier scam-detection design; current scam pipeline
+  // uses training_samples / scam_offense_state instead.
   try {
     db.exec("DROP TABLE IF EXISTS scam_decision_audit;");
   } catch {}

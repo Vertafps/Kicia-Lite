@@ -286,7 +286,10 @@ async function main() {
 
   console.log(`real-row updates complete: ${updateCount} applied, ${updateMiss} skipped (already labeled or missing)`);
 
-  dbModule.flushRestrictedEmojiDatabaseNow();
+  // schedulePersist sets the dirty flag and immediate:true forces a sync write.
+  // Calling flushRestrictedEmojiDatabaseNow() alone is a no-op when raw db.run()
+  // was used (no helper set the dirty flag).
+  dbModule.schedulePersist(db, { immediate: true });
 
   await new Promise((r) => setTimeout(r, 500));
 

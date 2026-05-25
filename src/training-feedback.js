@@ -202,7 +202,7 @@ async function enqueueTrainingSample(message, classification) {
     const confidence = Number(rawConfidence);
     const safeConfidence = Number.isFinite(confidence) ? confidence : 0;
 
-    // Timeouts always pass through for staff visibility.
+    // Timeouts always pass through to SQLite so the corpus stays complete.
     if (verdict !== "timeout") {
       const thresholdRaw = getSetting(`training.classifier.${classification.classifier}.threshold`);
       const threshold = Number.isFinite(Number(thresholdRaw)) ? Number(thresholdRaw) : 0.55;
@@ -251,6 +251,9 @@ async function enqueueTrainingSample(message, classification) {
 
     const decision = verdict === "timeout" ? "action" : "review";
 
+    const postActions = getSetting("training.post.action.enabled");
+    const shouldPost = verdict !== "timeout" || postActions === true;
+
     const { sampleId, deduped } = await createTrainingSample({
       classifier: classification.classifier,
       guildId: message.guild.id,
@@ -266,11 +269,16 @@ async function enqueueTrainingSample(message, classification) {
       actionActionId: classification.actionActionId || null,
       dedupKey,
       vector: embedding,
-      modelId: embedding ? config.KB_EMBED_MODEL_ID || "Xenova/all-MiniLM-L6-v2" : null
+      modelId: embedding ? config.KB_EMBED_MODEL_ID || "Xenova/all-MiniLM-L6-v2" : null,
+      posted: shouldPost ? 0 : 1
     });
 
     if (deduped) {
       return { sampleId, queued: false, deduped: true };
+    }
+
+    if (!shouldPost) {
+      return { sampleId, queued: false, deduped: false, reason: "action-no-post" };
     }
 
     enqueueForPost({

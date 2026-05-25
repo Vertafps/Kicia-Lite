@@ -91,6 +91,8 @@ const TOGGLE_ALIASES = {
   reactions:      "rr.guard.enabled",
   rr:             "rr.guard.enabled",
   training:       "training.enabled",
+  "training-posts":   "training.post.action.enabled",
+  "action-posts":     "training.post.action.enabled",
   autolock:       "status.autodetect.enabled",
   "auto-lock":    "status.autodetect.enabled",
   autodetect:     "status.autodetect.enabled",
@@ -531,11 +533,13 @@ const COMMAND_CATEGORIES = {
       "**features**",
       "`scam` `respect` `link` `drug` `reactions` `ghost-ping`",
       "`nickname` `impersonation` `support` `status` `training`",
+      "`training-posts` `action-posts`",
       "",
       "**examples**",
       "`$toggle scam off` — stop scam/trade detection",
       "`$toggle support off` — stop bot answering pings",
-      "`$toggle respect on` — re-enable disrespect guard"
+      "`$toggle respect on` — re-enable disrespect guard",
+      "`$toggle action-posts on` — also post auto-actions to training channel"
     ].join("\n")
   },
   status: {

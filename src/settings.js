@@ -910,6 +910,13 @@ const REGISTRY_ENTRIES = [
     min: 0,
     max: 1
   }],
+  ["training.post.action.enabled", {
+    type: SETTING_TYPES.BOOL,
+    defaultValue: false,
+    label: "Post Auto-Actions to Training Channel",
+    description: "When true, also post auto-action samples to the training channel. Default false because the moderation log channel already shows them with revert controls.",
+    section: "training"
+  }],
 
   // ui
   ["ui.animated-heroes", {

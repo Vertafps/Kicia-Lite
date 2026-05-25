@@ -99,7 +99,8 @@ async function createTrainingSample({
   actionActionId = null,
   dedupKey,
   vector = null,
-  modelId = null
+  modelId = null,
+  posted = 0
 } = {}) {
   const db = await getDatabase();
   const now = Date.now();
@@ -119,12 +120,14 @@ async function createTrainingSample({
   const signalsStr =
     typeof signalsJson === "string" ? signalsJson : JSON.stringify(signalsJson ?? {});
 
+  const postedFlag = posted ? 1 : 0;
+
   db.run(
     `INSERT INTO training_samples
        (classifier, created_at, guild_id, channel_id, message_id, message_url,
         author_id, author_label, raw_text, normalized_text, signals_json,
         decision, action_action_id, dedup_key, posted, anonymized)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       classifier,
       now,
@@ -139,7 +142,8 @@ async function createTrainingSample({
       signalsStr,
       decision,
       actionActionId,
-      dedupKey
+      dedupKey,
+      postedFlag
     ]
   );
 

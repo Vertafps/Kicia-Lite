@@ -379,9 +379,9 @@ const REGISTRY_ENTRIES = [
   }],
   ["scam.firstoffense.confidence", {
     type: SETTING_TYPES.FLOAT,
-    defaultValue: 0.92,
+    defaultValue: 0.50,
     label: "First-Offense Confidence",
-    description: "Combined confidence required to auto-timeout on first offense.",
+    description: "Combined confidence required to auto-timeout on first offense. The scam formula maxes around 0.85 for typical real catches so this lives well under 1.0.",
     section: "scam",
     min: 0,
     max: 1
@@ -415,9 +415,9 @@ const REGISTRY_ENTRIES = [
   }],
   ["scam.head.threshold", {
     type: SETTING_TYPES.FLOAT,
-    defaultValue: 0.78,
+    defaultValue: 0.65,
     label: "Head Threshold",
-    description: "Trained-head sigmoid score above which the head signal counts.",
+    description: "Trained-head sigmoid score above which the head signal counts toward H.",
     section: "scam",
     min: 0,
     max: 1

@@ -529,6 +529,13 @@ async function handleScamTradeMessage(message, result, {
     result.actionActionId = review.actionId;
   }
 
+  try {
+    const { bumpScamOffense } = require("../training-db");
+    await bumpScamOffense(message.author.id, { now, decayMs: 24 * 3600_000 });
+  } catch (err) {
+    recordRuntimeEvent("warn", "scam-offense-bump", err?.message || err);
+  }
+
   return true;
 }
 
@@ -740,10 +747,22 @@ async function maybeHandleModerationWatch(message, {
         const memberAgeMs = message.member?.joinedTimestamp
           ? now - Number(message.member.joinedTimestamp)
           : null;
+        let repeatOffender = false;
+        try {
+          const { getScamOffenseState } = require("../training-db");
+          const state = await getScamOffenseState(message.author.id);
+          if (state && state.offenseCount >= 2 && (Date.now() - state.lastOffenseAt) < 24 * 3600_000) {
+            repeatOffender = true;
+          }
+        } catch (err) {
+          recordRuntimeEvent("warn", "scam-offense-read", err?.message || err);
+        }
+
         const scamResult = await classifyScamTrade(message.content, {
           member: message.member,
           accountAgeMs,
-          memberAgeMs
+          memberAgeMs,
+          repeatOffender
         });
         if (scamResult?.verdict === "timeout") {
           const handled = await handleScamTradeMessage(message, scamResult, { sendLog, now });

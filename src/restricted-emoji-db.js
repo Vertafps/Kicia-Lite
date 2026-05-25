@@ -400,6 +400,14 @@ function createSchema(db) {
       created_by TEXT,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS scam_offense_state (
+      user_id TEXT PRIMARY KEY,
+      last_offense_at INTEGER NOT NULL,
+      offense_count INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS scam_offense_state_recent_idx
+      ON scam_offense_state (last_offense_at DESC);
   `);
 }
 

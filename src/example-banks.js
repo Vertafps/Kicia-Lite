@@ -54,7 +54,34 @@ const SCAM_SELL_BANK = [
   "selling subscription pm",
   "wts premium",
   "selling cracked kicia",
-  "selling license dm me"
+  "selling license dm me",
+  "selling cracked kicia hmu",
+  "trusted kicia seller dm me",
+  "kicia vouches available",
+  "have kicia gf only dm",
+  "selling kicia going first",
+  "kicia for paypal gf",
+  "kicia for usdt dm",
+  "kicia for steam gc",
+  "kicia for nitro",
+  "kicia for amazon gc",
+  "kicia for cashapp dm",
+  "kicia tos first then pay",
+  "mm kicia trade",
+  "mm for kicia",
+  "selling kicia 10 usdt",
+  "kicia for sol dm",
+  "kicia 5 eth dm",
+  "kicia rep list dm",
+  "got kicia keys cheap dm",
+  "slide in dms for kicia",
+  "inbox me for kicia",
+  "selling kicia lifetime sub",
+  "selling cracked kicia configs",
+  "got premium kicia configs dm",
+  "have v3 lifetime hmu",
+  "selling kicia method",
+  "kicia method dm me"
 ];
 
 const SCAM_BUY_BANK = [
@@ -97,7 +124,17 @@ const SCAM_BUY_BANK = [
   "where to download configs",
   "do i need a key for kicia",
   "how much is the premium",
-  "is lifetime worth it"
+  "is lifetime worth it",
+  "how do i buy kicia",
+  "where do i get configs",
+  "who has kicia keys",
+  "where to download configs",
+  "where to get kicia method",
+  "is kicia method free",
+  "official kicia download link",
+  "do i need to pay for kicia",
+  "kicia trial free",
+  "free kicia configs link"
 ];
 
 const RESPECT_DISRESPECT_BANK = [

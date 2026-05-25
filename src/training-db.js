@@ -454,6 +454,50 @@ async function resetRespectTier(userId) {
   schedulePersist(db);
 }
 
+async function getScamOffenseState(userId) {
+  const db = await getDatabase();
+  const rows = getRows(
+    db,
+    "SELECT offense_count, last_offense_at FROM scam_offense_state WHERE user_id = ? LIMIT 1",
+    [String(userId)]
+  );
+  if (!rows.length) return null;
+  return {
+    offenseCount:  Number(rows[0].offense_count),
+    lastOffenseAt: Number(rows[0].last_offense_at)
+  };
+}
+
+// If last_offense_at has aged past decayMs, reset count to 1; else increment.
+async function bumpScamOffense(userId, { now = Date.now(), decayMs = 24 * 3600_000 } = {}) {
+  const db = await getDatabase();
+  const existing = await getScamOffenseState(userId);
+
+  let newCount;
+  if (!existing || existing.lastOffenseAt < now - Number(decayMs)) {
+    newCount = 1;
+  } else {
+    newCount = existing.offenseCount + 1;
+  }
+
+  db.run(
+    `INSERT INTO scam_offense_state (user_id, last_offense_at, offense_count)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       last_offense_at = excluded.last_offense_at,
+       offense_count = excluded.offense_count`,
+    [String(userId), now, newCount]
+  );
+  schedulePersist(db);
+  return { offenseCount: newCount, lastOffenseAt: now };
+}
+
+async function clearScamOffense(userId) {
+  const db = await getDatabase();
+  db.run("DELETE FROM scam_offense_state WHERE user_id = ?", [String(userId)]);
+  schedulePersist(db);
+}
+
 function __resetForTests() {
   _getDatabase = null;
   _schedulePersist = null;
@@ -477,6 +521,9 @@ module.exports = {
   getRespectTierState,
   bumpRespectTier,
   resetRespectTier,
+  getScamOffenseState,
+  bumpScamOffense,
+  clearScamOffense,
   __resetForTests,
   mapSampleRow
 };

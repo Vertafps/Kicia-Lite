@@ -4,12 +4,16 @@ const { buildNormalizedTextForms } = require("./text");
 const { scoreLogisticHead } = require("./inline-probe");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-const PRICE_OR_PAYMENT_RE = /\b(?:\$\s*\d+|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx)|cashapp|paypal|crypto|btc|eth|ltc|gift\s*card|venmo|zelle)\b/i;
-const SELLER_RE = /\b(sell(?:ing|s)?|sold|wts|for\s+sale|taking\s+offers?|vendor|plug|trade|trading|swap(?:ping)?|exchange|exchanging|lf\s*(?:trade|swap))\b/i;
+const PRICE_OR_PAYMENT_RE = /\b(?:\$\s*\d+|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx)|cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|gift\s*card|steam\s*g(?:ift\s*card|c)|amazon\s*gc|roblox\s*gc|nitro|venmo|zelle|western\s*union|\bwu\b|moneygram)\b/i;
+const CASHAPP_TAG_RE = /\bcashapp\b[\s\S]{0,20}\$\w+|\$\w+[\s\S]{0,20}\bcashapp\b/i;
+const SELLER_RE = /\b(sell(?:ing|s)?|sold|wts|for\s+sale|taking\s+offers?|vendor|plug|trade|trading|swap(?:ping)?|exchange|exchanging|lf\s*(?:trade|swap)|vouch(?:es|ed)?|going\s+first|gf\s+(?:only|rep)|tos\s+(?:first|required)|t\.?o\.?s\.?\s+first)\b/i;
+const TRUSTED_SELLER_RE = /\btrusted(?:\s+seller)?\b/i;
+const MIDDLEMAN_RE = /\b(?:middleman|mm)\b/i;
 const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get)))\b/i;
-const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu)\b/i;
+const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu|slide\s+in(?:to)?\s+(?:my\s+)?dms?|msg\s+me\s+asap|pm\s+asap|dm\s+urgent|inbox\s+me)\b/i;
 const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?|cracked\s+kicia)\b/i;
 const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal)\b/i;
+const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+serious|sarcasm|sarcastic)\b|\(jk\)|\(joking\)|\(kidding\)|\blmao\b/i;
 
 const DEFAULTS = {
   firstOffenseConfidence: 0.92,
@@ -22,6 +26,9 @@ const DEFAULTS = {
   newAccountDays: 30,
   newMemberDays: 7
 };
+
+const NEW_ACCOUNT_MS = 7 * 24 * 3600_000;
+const NEW_MEMBER_MS = 24 * 3600_000;
 
 let _settingsModule = null;
 let _settingsResolved = false;
@@ -132,13 +139,83 @@ async function getScamHead() {
   return _head;
 }
 
-function computeDirectionScore(text) {
-  const sellerHit = SELLER_RE.exec(text);
+// collapse spaced-letter runs like "s e l l i n g" into "selling". Requires
+// 4+ consecutive single-char tokens so natural text ("a b test") never matches.
+function densifyObfuscated(text) {
+  return String(text || "").replace(/\b\w(?:\s+\w\b){3,}/g, (match) => match.replace(/\s+/g, ""));
+}
+
+// substring topic check for the densified form — word boundaries don't survive
+// the collapse so we look for kicia-ecosystem nouns inside concatenated runs.
+const TOPIC_SUBSTRINGS = ["kicia", "kiciahook", "config", "license", "lifetime", "premium", "subscription", "cracked"];
+
+function topicHitInDense(dense) {
+  if (!dense) return false;
+  for (const needle of TOPIC_SUBSTRINGS) {
+    if (dense.includes(needle)) return true;
+  }
+  return false;
+}
+
+function anyHit(re, folded, dense) {
+  if (re.test(folded)) return { hit: true, viaDense: false };
+  if (dense && dense !== folded && re.test(dense)) return { hit: true, viaDense: true };
+  return { hit: false, viaDense: false };
+}
+
+function commerceContext(folded, dense) {
+  return PRICE_OR_PAYMENT_RE.test(folded) || PRICE_OR_PAYMENT_RE.test(dense)
+    || CASHAPP_TAG_RE.test(folded) || CASHAPP_TAG_RE.test(dense)
+    || DM_RE.test(folded) || DM_RE.test(dense);
+}
+
+function sellerSignal(folded, dense) {
+  const direct = anyHit(SELLER_RE, folded, dense);
+  if (direct.hit) return direct;
+  // "trusted" / "middleman" / "mm" only count as seller signals when there's
+  // commerce context nearby — bare words are too noisy in normal chat.
+  const hasCommerce = commerceContext(folded, dense);
+  if (!hasCommerce) return { hit: false, viaDense: false };
+  if (TRUSTED_SELLER_RE.test(folded)) return { hit: true, viaDense: false };
+  if (TRUSTED_SELLER_RE.test(dense)) return { hit: true, viaDense: true };
+  if (MIDDLEMAN_RE.test(folded)) return { hit: true, viaDense: false };
+  if (MIDDLEMAN_RE.test(dense)) return { hit: true, viaDense: true };
+  return { hit: false, viaDense: false };
+}
+
+function detectJokeMarker(folded, dense) {
+  if (JOKE_RE.test(folded)) return true;
+  if (dense && dense !== folded && JOKE_RE.test(dense)) return true;
+  return false;
+}
+
+function isNewAccount(accountAgeMs) {
+  return Number.isFinite(accountAgeMs) && accountAgeMs >= 0 && accountAgeMs < NEW_ACCOUNT_MS;
+}
+
+function isNewMember(memberAgeMs) {
+  return Number.isFinite(memberAgeMs) && memberAgeMs >= 0 && memberAgeMs < NEW_MEMBER_MS;
+}
+
+function computeDirectionScore(text, denseText) {
+  const dense = denseText == null ? densifyObfuscated(text) : denseText;
+  const seller = sellerSignal(text, dense);
   const buyerHit = BUYER_RE.exec(text);
-  const topicHit = KICIA_TOPIC_RE.exec(text);
-  if (sellerHit && topicHit && Math.abs(sellerHit.index - topicHit.index) <= 40) return +2;
-  if (sellerHit && topicHit) return +1;
-  if (buyerHit && !sellerHit) return -2;
+  let topicHit = KICIA_TOPIC_RE.exec(text);
+  if (!topicHit && dense !== text) topicHit = KICIA_TOPIC_RE.exec(dense);
+  // dense substring fallback — word boundaries don't survive run collapse
+  if (!topicHit && dense !== text && topicHitInDense(dense)) {
+    topicHit = { index: 0 };
+  }
+  if (seller.hit && topicHit) {
+    const sellerRef = SELLER_RE.exec(text)
+      || (dense !== text ? SELLER_RE.exec(dense) : null)
+      || TRUSTED_SELLER_RE.exec(text)
+      || MIDDLEMAN_RE.exec(text);
+    if (sellerRef && Math.abs(sellerRef.index - topicHit.index) <= 40) return +2;
+    return +1;
+  }
+  if (buyerHit && !seller.hit) return -2;
   return 0;
 }
 
@@ -191,14 +268,61 @@ function computeConfidence({ H, semDelta, headScore }) {
   return clamp(hComponent + semComponent + headComponent, 0, 1);
 }
 
-function pickSeverity(H, confidence, priceHit, dmHit) {
-  if (H >= 4 && confidence >= 0.98 && priceHit && dmHit) return "severe";
-  if (H >= 4 && confidence >= 0.95 && confidence < 0.98) return "medium";
-  if (H === 3 && confidence >= 0.92 && confidence < 0.95) return "light";
-  // boundary fallback: keep the lightest legal tier if no exact tier matched
-  if (H === 3 && confidence >= 0.92) return "light";
-  if (H >= 4 && confidence >= 0.92 && confidence < 0.95) return "light";
-  return null;
+const SEVERITY_LADDER = [null, "light", "medium", "severe"];
+
+function bumpSeverity(severity, steps) {
+  if (!steps) return severity;
+  const idx = SEVERITY_LADDER.indexOf(severity);
+  if (idx < 0) return severity;
+  const next = Math.min(SEVERITY_LADDER.length - 1, Math.max(0, idx + steps));
+  return SEVERITY_LADDER[next];
+}
+
+function pickSeverity(H, confidence, signalsOrPriceHit, dmHitOrOptions, maybeOptions) {
+  // legacy: pickSeverity(H, conf, priceHit, dmHit) — keep the old confidence
+  // ladder so existing tests + callers that haven't migrated still work.
+  if (typeof signalsOrPriceHit === "boolean") {
+    const priceHit = !!signalsOrPriceHit;
+    const dmHit = !!dmHitOrOptions;
+    const opts = maybeOptions || {};
+    const newAccount = !!opts.isNewAccount;
+    const repeat = !!opts.repeatOffender;
+    let base = null;
+    if (H >= 4 && confidence >= 0.98 && priceHit && dmHit) base = "severe";
+    else if (H >= 4 && confidence >= 0.95 && confidence < 0.98) base = "medium";
+    else if (H === 3 && confidence >= 0.92 && confidence < 0.95) base = "light";
+    else if (H === 3 && confidence >= 0.92) base = "light";
+    else if (H >= 4 && confidence >= 0.92 && confidence < 0.95) base = "light";
+    if (!base) return null;
+    if (newAccount) base = bumpSeverity(base, 1);
+    if (repeat) base = bumpSeverity(base, 1);
+    return base;
+  }
+
+  const signals = signalsOrPriceHit || {};
+  const options = dmHitOrOptions || {};
+  const priceHit = !!signals.priceHit;
+  const dmHit = !!signals.dmHit;
+  const directionScore = Number(signals.directionScore) || 0;
+  const newAccount = !!options.isNewAccount;
+  const repeat = !!options.repeatOffender;
+
+  let base = null;
+  if (H >= 4 && priceHit && dmHit && directionScore >= 2) {
+    if (confidence >= 0.95 || newAccount) base = "severe";
+    else base = "medium";
+  } else if (H >= 3 && priceHit && dmHit) {
+    base = "medium";
+  } else if (H >= 3) {
+    base = "light";
+  } else if ((H === 2 && priceHit && dmHit) || repeat) {
+    base = "light";
+  }
+
+  if (!base) return null;
+  if (newAccount && base !== "severe") base = bumpSeverity(base, 1);
+  if (repeat) base = bumpSeverity(base, 1);
+  return base;
 }
 
 function severityTimeoutMs(severity) {
@@ -226,7 +350,12 @@ function buildReasonText({
   headScore,
   H,
   confidence,
-  bankCold
+  bankCold,
+  newAccount,
+  newMember,
+  repeatOffender,
+  obfuscated,
+  jokeDowngraded
 }) {
   const parts = [];
   if (verdict === "timeout") {
@@ -240,6 +369,11 @@ function buildReasonText({
   if (priceHit) parts.push("price/payment");
   if (dmHit) parts.push("dm-solicit");
   if (topicHit) parts.push("kicia-topical");
+  if (newAccount) parts.push("new account");
+  if (newMember) parts.push("new member");
+  if (repeatOffender) parts.push("repeat offender");
+  if (obfuscated) parts.push("obfuscated (spaced)");
+  if (jokeDowngraded) parts.push("joke marker (downgraded)");
   if (semAvailable) {
     parts.push(`sem=${semDelta >= 0 ? "+" : ""}${semDelta.toFixed(3)}`);
   } else if (bankCold) {
@@ -259,7 +393,12 @@ function emptySignals() {
     semDelta: 0,
     headScore: null,
     confidence: 0,
-    H: 0
+    H: 0,
+    isNewAccount: false,
+    isNewMember: false,
+    repeatOffender: false,
+    obfuscated: false,
+    jokeMarker: false
   };
 }
 
@@ -299,12 +438,23 @@ const NOOP_RESULT = Object.freeze({
     semDelta: 0,
     headScore: null,
     confidence: 0,
-    H: 0
+    H: 0,
+    isNewAccount: false,
+    isNewMember: false,
+    repeatOffender: false,
+    obfuscated: false,
+    jokeMarker: false
   }),
   durationMs: null,
   reasonText: "ignore - empty text",
   embedding: null
 });
+
+function downgradeVerdict(verdict) {
+  if (verdict === "timeout") return "review";
+  if (verdict === "review") return "ignore";
+  return verdict;
+}
 
 async function classifyScamTrade(text, options = {}) {
   const raw = String(text || "");
@@ -312,6 +462,8 @@ async function classifyScamTrade(text, options = {}) {
 
   const forms = buildNormalizedTextForms(raw);
   const folded = forms.folded || raw;
+  const dense = densifyObfuscated(folded);
+  const usedDense = dense !== folded;
 
   if (META_OR_WARNING_RE.test(folded)) {
     return buildIgnore({
@@ -321,11 +473,27 @@ async function classifyScamTrade(text, options = {}) {
     });
   }
 
-  const directionScore = computeDirectionScore(folded);
-  const priceHit = PRICE_OR_PAYMENT_RE.test(folded);
-  const dmHit = DM_RE.test(folded);
-  const topicHit = KICIA_TOPIC_RE.test(folded);
+  const directionScore = computeDirectionScore(folded, dense);
+  const priceHitFolded = PRICE_OR_PAYMENT_RE.test(folded) || CASHAPP_TAG_RE.test(folded);
+  const priceHitDense = usedDense && (PRICE_OR_PAYMENT_RE.test(dense) || CASHAPP_TAG_RE.test(dense));
+  const priceHit = priceHitFolded || priceHitDense;
+  const dmHitFolded = DM_RE.test(folded);
+  const dmHitDense = usedDense && DM_RE.test(dense);
+  const dmHit = dmHitFolded || dmHitDense;
+  const topicHitFolded = KICIA_TOPIC_RE.test(folded);
+  const topicHitDense = usedDense && (KICIA_TOPIC_RE.test(dense) || topicHitInDense(dense));
+  const topicHit = topicHitFolded || topicHitDense;
+  const obfuscated = usedDense && (
+    (priceHitDense && !priceHitFolded)
+    || (dmHitDense && !dmHitFolded)
+    || (topicHitDense && !topicHitFolded)
+    || (SELLER_RE.test(dense) && !SELLER_RE.test(folded))
+  );
   const buyerVeto = directionScore <= -1;
+
+  const newAccount = isNewAccount(options.accountAgeMs);
+  const newMember = isNewMember(options.memberAgeMs);
+  const repeatOffender = !!options.repeatOffender;
 
   if (!topicHit) {
     return buildIgnore({
@@ -339,7 +507,12 @@ async function classifyScamTrade(text, options = {}) {
         semDelta: 0,
         headScore: null,
         confidence: 0,
-        H: 0
+        H: 0,
+        isNewAccount: newAccount,
+        isNewMember: newMember,
+        repeatOffender,
+        obfuscated,
+        jokeMarker: false
       },
       embedding: options.embedding || null
     });
@@ -357,7 +530,12 @@ async function classifyScamTrade(text, options = {}) {
         semDelta: 0,
         headScore: null,
         confidence: 0,
-        H: 0
+        H: 0,
+        isNewAccount: newAccount,
+        isNewMember: newMember,
+        repeatOffender,
+        obfuscated,
+        jokeMarker: false
       },
       embedding: options.embedding || null
     });
@@ -423,7 +601,14 @@ async function classifyScamTrade(text, options = {}) {
 
   const H = sigDirection + sigPrice + sigDm + sigSem + sigHead;
   const patternScore = sigDirection + sigPrice + sigDm + (topicHit ? 1 : 0);
-  const confidence = computeConfidence({ H, semDelta, headScore });
+  let confidence = computeConfidence({ H, semDelta, headScore });
+
+  // account-age confidence bumps mirror the link-classifier behavior
+  if (newAccount) {
+    confidence = clamp(confidence + (priceHit ? 0.10 : 0.05), 0, 1);
+  }
+
+  const jokeMarker = detectJokeMarker(folded, dense);
 
   const signals = {
     directionScore,
@@ -434,109 +619,83 @@ async function classifyScamTrade(text, options = {}) {
     semDelta: sem.available ? semDelta : 0,
     headScore,
     confidence,
-    H
+    H,
+    isNewAccount: newAccount,
+    isNewMember: newMember,
+    repeatOffender,
+    obfuscated,
+    jokeMarker
   };
 
   const firstOffenseConfidence = Number(readSetting(
     "scam.firstoffense.confidence",
     DEFAULTS.firstOffenseConfidence
   ));
+  // new-account + strong pattern (price+dm+direction) lowers the confidence
+  // gate — H=3 in cold-start tops out around 0.67 even with the +0.10 bump,
+  // and the signal already says "this is a scammer".
+  const effectiveConfidenceGate = (newAccount && priceHit && dmHit && directionScore >= 2)
+    ? Math.min(firstOffenseConfidence, 0.65)
+    : firstOffenseConfidence;
 
-  if (H >= 3 && directionScore >= 2 && confidence >= firstOffenseConfidence) {
-    const severity = pickSeverity(H, confidence, priceHit, dmHit);
-    if (severity) {
-      const durationMs = severityTimeoutMs(severity);
-      return buildResult({
-        verdict: "timeout",
-        severity,
-        signals,
-        durationMs,
-        reasonText: buildReasonText({
-          verdict: "timeout",
-          severity,
-          directionScore,
-          priceHit,
-          dmHit,
-          topicHit,
-          semDelta,
-          semAvailable: sem.available,
-          headScore,
-          H,
-          confidence,
-          bankCold: !banksWarm
-        }),
-        embedding: vec
-      });
+  // joke downgrade applies to staff/bypass or long-tenured members, never new accounts
+  const jokeBypassEligible = jokeMarker && !newAccount
+    && (options.hasBypass === true || (Number.isFinite(options.memberAgeMs) && options.memberAgeMs > 7 * 86_400_000));
+
+  let verdict = "ignore";
+  let severity = null;
+  let jokeDowngraded = false;
+
+  if (H >= 3 && directionScore >= 2 && confidence >= effectiveConfidenceGate) {
+    const sev = pickSeverity(H, confidence, signals, { isNewAccount: newAccount, repeatOffender });
+    if (sev) {
+      verdict = "timeout";
+      severity = sev;
     }
+  } else if ((H >= 2 && topicHit) || (H === 1 && directionScore >= 1)) {
+    verdict = "review";
   }
 
-  if (H >= 2 && topicHit) {
-    return buildResult({
-      verdict: "review",
-      severity: null,
-      signals,
-      durationMs: null,
-      reasonText: buildReasonText({
-        verdict: "review",
-        severity: null,
-        directionScore,
-        priceHit,
-        dmHit,
-        topicHit,
-        semDelta,
-        semAvailable: sem.available,
-        headScore,
-        H,
-        confidence,
-        bankCold: !banksWarm
-      }),
-      embedding: vec
-    });
+  // last-mile severity bump for repeat offenders when we still arrived at review
+  if (verdict === "review" && repeatOffender) {
+    verdict = "timeout";
+    severity = "light";
   }
 
-  if (H === 1 && directionScore >= 1) {
-    return buildResult({
-      verdict: "review",
-      severity: null,
-      signals,
-      durationMs: null,
-      reasonText: buildReasonText({
-        verdict: "review",
-        severity: null,
-        directionScore,
-        priceHit,
-        dmHit,
-        topicHit,
-        semDelta,
-        semAvailable: sem.available,
-        headScore,
-        H,
-        confidence,
-        bankCold: !banksWarm
-      }),
-      embedding: vec
-    });
+  if (jokeBypassEligible && verdict !== "ignore") {
+    verdict = downgradeVerdict(verdict);
+    if (verdict === "ignore" || verdict === "review") severity = null;
+    jokeDowngraded = true;
   }
+
+  const reasonText = buildReasonText({
+    verdict,
+    severity,
+    directionScore,
+    priceHit,
+    dmHit,
+    topicHit,
+    semDelta,
+    semAvailable: sem.available,
+    headScore,
+    H,
+    confidence,
+    bankCold: !banksWarm,
+    newAccount,
+    newMember,
+    repeatOffender,
+    obfuscated,
+    jokeDowngraded
+  });
+
+  const durationMs = verdict === "timeout" ? severityTimeoutMs(severity) : null;
 
   return buildResult({
-    verdict: "ignore",
-    severity: null,
+    verdict,
+    severity,
     signals,
-    durationMs: null,
-    reasonText: buildReasonText({
-      verdict: "ignore",
-      severity: null,
-      directionScore,
-      priceHit,
-      dmHit,
-      topicHit,
-      semDelta,
-      semAvailable: sem.available,
-      headScore,
-      H,
-      confidence,
-      bankCold: !banksWarm
-    }),
+    durationMs,
+    reasonText,
     embedding: vec
   });
 }
@@ -561,12 +720,18 @@ module.exports = {
     normalizeSemDelta,
     getScamHead,
     readSetting,
+    densifyObfuscated,
+    detectJokeMarker,
+    isNewAccount,
+    isNewMember,
+    bumpSeverity,
     DEFAULTS,
     SELLER_RE,
     BUYER_RE,
     KICIA_TOPIC_RE,
     DM_RE,
     PRICE_OR_PAYMENT_RE,
-    META_OR_WARNING_RE
+    META_OR_WARNING_RE,
+    JOKE_RE
   }
 };

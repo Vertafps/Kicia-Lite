@@ -30,25 +30,9 @@ const DEFAULTS = {
 const NEW_ACCOUNT_MS = 7 * 24 * 3600_000;
 const NEW_MEMBER_MS = 24 * 3600_000;
 
-let _settingsModule = null;
-let _settingsResolved = false;
-
-function getSettingsModule() {
-  if (_settingsResolved) return _settingsModule;
-  _settingsResolved = true;
-  try {
-    _settingsModule = require("./settings");
-  } catch {
-    _settingsModule = null;
-  }
-  return _settingsModule;
-}
-
 function readSetting(key, fallback) {
-  const mod = getSettingsModule();
-  if (!mod || typeof mod.getSetting !== "function") return fallback;
   try {
-    const value = mod.getSetting(key);
+    const value = require("./settings").getSetting(key);
     return value == null ? fallback : value;
   } catch {
     return fallback;
@@ -139,14 +123,11 @@ async function getScamHead() {
   return _head;
 }
 
-// collapse spaced-letter runs like "s e l l i n g" into "selling". Requires
-// 4+ consecutive single-char tokens so natural text ("a b test") never matches.
+// collapses "s e l l i n g" -> "selling"; requires 4+ adjacent single-char tokens
 function densifyObfuscated(text) {
   return String(text || "").replace(/\b\w(?:\s+\w\b){3,}/g, (match) => match.replace(/\s+/g, ""));
 }
 
-// substring topic check for the densified form — word boundaries don't survive
-// the collapse so we look for kicia-ecosystem nouns inside concatenated runs.
 const TOPIC_SUBSTRINGS = ["kicia", "kiciahook", "config", "license", "lifetime", "premium", "subscription", "cracked"];
 
 function topicHitInDense(dense) {
@@ -172,8 +153,7 @@ function commerceContext(folded, dense) {
 function sellerSignal(folded, dense) {
   const direct = anyHit(SELLER_RE, folded, dense);
   if (direct.hit) return direct;
-  // "trusted" / "middleman" / "mm" only count as seller signals when there's
-  // commerce context nearby — bare words are too noisy in normal chat.
+  // trusted/middleman/mm gated on commerce context — too noisy otherwise
   const hasCommerce = commerceContext(folded, dense);
   if (!hasCommerce) return { hit: false, viaDense: false };
   if (TRUSTED_SELLER_RE.test(folded)) return { hit: true, viaDense: false };
@@ -203,7 +183,6 @@ function computeDirectionScore(text, denseText) {
   const buyerHit = BUYER_RE.exec(text);
   let topicHit = KICIA_TOPIC_RE.exec(text);
   if (!topicHit && dense !== text) topicHit = KICIA_TOPIC_RE.exec(dense);
-  // dense substring fallback — word boundaries don't survive run collapse
   if (!topicHit && dense !== text && topicHitInDense(dense)) {
     topicHit = { index: 0 };
   }
@@ -279,8 +258,7 @@ function bumpSeverity(severity, steps) {
 }
 
 function pickSeverity(H, confidence, signalsOrPriceHit, dmHitOrOptions, maybeOptions) {
-  // legacy: pickSeverity(H, conf, priceHit, dmHit) — keep the old confidence
-  // ladder so existing tests + callers that haven't migrated still work.
+  // legacy 4-arg form: pickSeverity(H, conf, priceHit, dmHit)
   if (typeof signalsOrPriceHit === "boolean") {
     const priceHit = !!signalsOrPriceHit;
     const dmHit = !!dmHitOrOptions;
@@ -578,7 +556,6 @@ async function classifyScamTrade(text, options = {}) {
     }
   }
 
-  // head is trained on minilm embeddings, only meaningful when we have a vector
   const head = vec ? await getScamHead() : null;
   let headScore = null;
   if (vec && head) {
@@ -603,7 +580,6 @@ async function classifyScamTrade(text, options = {}) {
   const patternScore = sigDirection + sigPrice + sigDm + (topicHit ? 1 : 0);
   let confidence = computeConfidence({ H, semDelta, headScore });
 
-  // account-age confidence bumps mirror the link-classifier behavior
   if (newAccount) {
     confidence = clamp(confidence + (priceHit ? 0.10 : 0.05), 0, 1);
   }
@@ -631,14 +607,12 @@ async function classifyScamTrade(text, options = {}) {
     "scam.firstoffense.confidence",
     DEFAULTS.firstOffenseConfidence
   ));
-  // new-account + strong pattern (price+dm+direction) lowers the confidence
-  // gate — H=3 in cold-start tops out around 0.67 even with the +0.10 bump,
-  // and the signal already says "this is a scammer".
+  // new-account + price+dm+direction caps the gate at 0.65 — H=3 cold-start
+  // tops out around 0.67 even with the +0.10 bump.
   const effectiveConfidenceGate = (newAccount && priceHit && dmHit && directionScore >= 2)
     ? Math.min(firstOffenseConfidence, 0.65)
     : firstOffenseConfidence;
 
-  // joke downgrade applies to staff/bypass or long-tenured members, never new accounts
   const jokeBypassEligible = jokeMarker && !newAccount
     && (options.hasBypass === true || (Number.isFinite(options.memberAgeMs) && options.memberAgeMs > 7 * 86_400_000));
 
@@ -656,7 +630,6 @@ async function classifyScamTrade(text, options = {}) {
     verdict = "review";
   }
 
-  // last-mile severity bump for repeat offenders when we still arrived at review
   if (verdict === "review" && repeatOffender) {
     verdict = "timeout";
     severity = "light";
@@ -704,8 +677,6 @@ function __resetForTests() {
   _head = null;
   _headLoadedAt = 0;
   _headAttempted = false;
-  _settingsModule = null;
-  _settingsResolved = false;
 }
 
 function resetHeadCache() {

@@ -10,7 +10,7 @@ async function retryWithJitter(fn, {
   baseMs = 200,
   maxMs = 2000,
   shouldRetry = defaultShouldRetry,
-  onRetry,
+  onRetry
 } = {}) {
   let lastErr;
 
@@ -30,11 +30,7 @@ async function retryWithJitter(fn, {
       const nextDelayMs = Math.floor(expDelay + jitter);
 
       if (typeof onRetry === "function") {
-        try {
-          onRetry({ attempt, err, nextDelayMs });
-        } catch (_) {
-          // never let the callback abort the retry loop
-        }
+        try { onRetry({ attempt, err, nextDelayMs }); } catch {}
       }
 
       await new Promise((resolve) => setTimeout(resolve, nextDelayMs));

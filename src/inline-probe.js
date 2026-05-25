@@ -118,7 +118,6 @@ function trainSGD(samples, dim, options) {
   const trainSamples = samples.filter((_, i) => !valIndices.has(i));
   const valSamples = samples.filter((_, i) => valIndices.has(i));
 
-  // Float64Array for numerical precision
   const W = new Float64Array(dim);
   let b = 0;
 
@@ -268,7 +267,7 @@ function trainAndCrossValidate(samples, options) {
 
   const metrics = computeMetrics(allPredictions);
 
-  // threshold sweep: find smallest threshold with precision >= 0.95
+  // sweep: smallest threshold with precision >= 0.95, fall back to best F1
   let bestThreshold = null;
   let bestF1Threshold = 0.5;
   let bestF1 = -Infinity;

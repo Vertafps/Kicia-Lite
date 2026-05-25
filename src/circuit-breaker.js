@@ -8,7 +8,7 @@ function createBreaker({
   windowMs = 300_000,
   openMs = 60_000,
   halfOpenProbes = 1,
-  onTransition,
+  onTransition
 } = {}) {
   if (!name) throw new TypeError("createBreaker: name is required");
 
@@ -54,11 +54,7 @@ function createBreaker({
     }
 
     if (typeof onTransition === "function") {
-      try {
-        onTransition({ from, to, reason });
-      } catch (_) {
-        // never let a callback bring down the breaker logic
-      }
+      try { onTransition({ from, to, reason }); } catch {}
     }
   }
 
@@ -67,7 +63,6 @@ function createBreaker({
       pruneWindow();
       const total = window.length;
       const rate = errorRate();
-      // need at least 5 calls in window before we'll open
       if (total >= 5 && rate > errorThreshold) {
         transition("open", `error rate ${(rate * 100).toFixed(1)}% > threshold ${(errorThreshold * 100).toFixed(1)}%`);
       }
@@ -125,7 +120,7 @@ function createBreaker({
         totalCalls: total,
         errorCount: errors,
         openSince,
-        lastTransitionAt,
+        lastTransitionAt
       };
     },
 
@@ -141,7 +136,7 @@ function createBreaker({
     reset() {
       window = [];
       transition("closed", "reset");
-    },
+    }
   };
 
   registry.set(name, instance);
@@ -151,7 +146,7 @@ function createBreaker({
 function listBreakers() {
   return Array.from(registry.entries()).map(([name, b]) => ({
     name,
-    stats: b.stats(),
+    stats: b.stats()
   }));
 }
 

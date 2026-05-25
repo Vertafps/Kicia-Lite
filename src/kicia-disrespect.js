@@ -3,75 +3,35 @@ const { buildNormalizedTextForms } = require("./text");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { scoreLogisticHead } = require("./inline-probe");
 
-let _settingsModule = undefined;
-function tryGetSettings() {
-  if (_settingsModule === undefined) {
-    try {
-      _settingsModule = require("./settings");
-    } catch {
-      _settingsModule = null;
-    }
+const _modCache = new Map();
+function lazyMod(name) {
+  if (!_modCache.has(name)) {
+    try { _modCache.set(name, require(name)); }
+    catch { _modCache.set(name, null); }
   }
-  return _settingsModule;
+  return _modCache.get(name);
 }
 
 function getSettingOrDefault(key, fallback) {
-  const mod = tryGetSettings();
+  const mod = lazyMod("./settings");
   if (!mod || typeof mod.getSetting !== "function") return fallback;
   try {
     const v = mod.getSetting(key);
-    return v === null || v === undefined ? fallback : v;
+    return v == null ? fallback : v;
   } catch {
     return fallback;
   }
 }
 
-let _banksModule = undefined;
-function tryGetBanks() {
-  if (_banksModule === undefined) {
-    try {
-      _banksModule = require("./example-banks");
-    } catch {
-      _banksModule = null;
-    }
-  }
-  return _banksModule;
-}
-
 function getBankVectors(bankName) {
-  const mod = tryGetBanks();
+  const mod = lazyMod("./example-banks");
   if (!mod || typeof mod.getBank !== "function") return null;
   try {
     const bank = mod.getBank(bankName);
-    if (!bank || !Array.isArray(bank) || bank.length === 0) return null;
-    return bank;
+    return Array.isArray(bank) && bank.length ? bank : null;
   } catch {
     return null;
   }
-}
-
-let _permissionsModule = undefined;
-function tryGetPermissions() {
-  if (_permissionsModule === undefined) {
-    try {
-      _permissionsModule = require("./permissions");
-    } catch {
-      _permissionsModule = null;
-    }
-  }
-  return _permissionsModule;
-}
-
-let _emojiDbModule = undefined;
-function tryGetEmojiDb() {
-  if (_emojiDbModule === undefined) {
-    try {
-      _emojiDbModule = require("./restricted-emoji-db");
-    } catch {
-      _emojiDbModule = null;
-    }
-  }
-  return _emojiDbModule;
 }
 
 const FALLBACK_KICIA_ENTITIES = [
@@ -159,8 +119,7 @@ function splitClauses(folded) {
     }
   }
 
-  // merge fragments shorter than 3 tokens into the preceding clause so things
-  // like "but really" don't carry spurious polarity on their own
+  // glue short tails ("but really") onto the prior clause to avoid stray polarity
   const merged = [];
   for (const clause of result) {
     const tokens = clause.split(/\s+/).filter(Boolean);
@@ -227,7 +186,7 @@ function attributeClause(clause, vocab) {
 }
 
 function clauseLocalPolarity(clause) {
-  // keep apostrophes in tokens so contractions like "isn't" survive for negation detection
+  // keep apostrophes so "isn't" survives for negation detection
   const tokens = String(clause || "")
     .toLowerCase()
     .split(/[^a-z0-9']+/)
@@ -250,7 +209,7 @@ function clauseLocalPolarity(clause) {
 
   const intens = INTENSIFIER_RE.test(clause);
 
-  // negation applies if any of the 3 tokens before a polarity token matches NEGATION_RE
+  // negation applies if it's within 3 tokens before any polarity token
   let negation = false;
   for (const { i } of polarityTokenIndices) {
     const start = Math.max(0, i - 3);
@@ -267,8 +226,7 @@ function clauseLocalPolarity(clause) {
   const sign = rawPol > 0 ? 1 : rawPol < 0 ? -1 : 0;
   const polarity = sign * (1 + 0.5 * (intens ? 1 : 0)) * (negation ? -1 : 1);
 
-  // classic inverted sarcasm: negation + intensifier over a positive lexicon.
-  // routes to review so it never auto-timeouts a plain compliment.
+  // inverted sarcasm: negation + intensifier + positive lex — routes to review
   const sarcasmHint = (negation && intens && posTokens > 0);
 
   return { polarity, sarcasmHint, posTokens, negTokens, intens, negation };
@@ -322,7 +280,7 @@ async function loadRespectHead() {
   if (_headCache.fetching) return _headCache.fetching;
 
   _headCache.fetching = (async () => {
-    const emojiDb = tryGetEmojiDb();
+    const emojiDb = lazyMod("./restricted-emoji-db");
     if (!emojiDb || typeof emojiDb.getDatabase !== "function") {
       _headCache = { value: null, loadedAt: now, fetching: null };
       return null;
@@ -447,7 +405,7 @@ async function classifyKiciaDisrespect(text, options = {}) {
 
   const vocab = kb ? buildEntityVocabularyFromKb(kb) : getDefaultVocabulary();
 
-  // .folded keeps case/confusable mapping; the leet-normalized form mangles v3/v4
+  // .folded preserves v3/v4; the leet-normalized form mangles them
   const forms = buildNormalizedTextForms(text);
   const folded = String(forms.folded || "").toLowerCase().trim();
 
@@ -458,21 +416,21 @@ async function classifyKiciaDisrespect(text, options = {}) {
   }
 
   const userId = providedUserId || member?.id || member?.user?.id || null;
-  const permissions = tryGetPermissions();
+  const permissions = lazyMod("./permissions");
   if (permissions && typeof permissions.hasModerationBypassMember === "function") {
     try {
       if (permissions.hasModerationBypassMember(member, userId)) {
         return ignoreResult("member has moderation bypass", null);
       }
-    } catch { /* ignore */ }
+    } catch {}
   }
-  const emojiDb = tryGetEmojiDb();
+  const emojiDb = lazyMod("./restricted-emoji-db");
   if (userId && emojiDb && typeof emojiDb.isModerationWhitelistedUser === "function") {
     try {
       if (await emojiDb.isModerationWhitelistedUser(userId)) {
         return ignoreResult("user is moderation-whitelisted", null);
       }
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   const constructive = CONSTRUCTIVE_RE.test(folded);
@@ -508,7 +466,7 @@ async function classifyKiciaDisrespect(text, options = {}) {
 
   const headScore = await computeHeadScore(usedVec);
 
-  // emphatic "!" / "!!" suppresses the question veto so exclamations aren't read as inquiries
+  // "!" / "!!" suppresses the question veto so exclamations aren't read as inquiries
   const trimmedRaw = String(text || "").trim();
   const exclamatory = trimmedRaw.endsWith("!") || trimmedRaw.includes("!!");
   const question = QUESTION_PATTERN_RE.test(folded.trim()) && !exclamatory;
@@ -541,8 +499,7 @@ async function classifyKiciaDisrespect(text, options = {}) {
     kiciaPosMag
   };
 
-  // question form needs BOTH pattern AND semantic to converge before slipping past the veto,
-  // so "is v3 bad now?" stays an ignore while "why is kicia such absolute trash garbage?" doesn't
+  // question form requires both pattern AND semantic to converge to slip past the veto
   if (question && !(kiciaSig && semHigh)) {
     return finalize("ignore", signals, attributedClauses, usedVec, "question form without converging signals");
   }
@@ -571,10 +528,7 @@ async function classifyKiciaDisrespect(text, options = {}) {
 }
 
 function __resetForTests() {
-  _settingsModule = undefined;
-  _banksModule = undefined;
-  _permissionsModule = undefined;
-  _emojiDbModule = undefined;
+  _modCache.clear();
   _defaultVocab = null;
   _headCache = { value: null, loadedAt: 0, fetching: null };
 }

@@ -304,8 +304,7 @@ function createSchema(db) {
     db.exec("ALTER TABLE moderation_actions ADD COLUMN recent_messages_json TEXT;");
   } catch {}
 
-  // legacy table from an earlier scam-detection design; current scam pipeline
-  // uses training_samples / scam_offense_state instead.
+  // legacy table; replaced by training_samples / scam_offense_state
   try {
     db.exec("DROP TABLE IF EXISTS scam_decision_audit;");
   } catch {}
@@ -2121,7 +2120,6 @@ module.exports = {
   getRestrictedEmojiDatabaseSnapshot,
   flushRestrictedEmojiDatabaseNow,
   resetRestrictedEmojiDatabaseForTests,
-  // Exported for sibling modules (training-db.js) that share the same database
   getDatabase,
   schedulePersist
 };

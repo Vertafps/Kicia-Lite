@@ -2,7 +2,6 @@ const { embedText, cosineSim } = require("./embeddings");
 const { buildNormalizedTextForms } = require("./text");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-// in-memory cache: id -> { phrase, vector, timeoutMs, threshold, createdAt, createdBy, normalizedPhrase }
 const cache = new Map();
 let hydrated = false;
 
@@ -27,13 +26,11 @@ function clampTimeout(value) {
 
 function normalizePhrase(phrase) {
   const forms = buildNormalizedTextForms(String(phrase || ""));
-  // .folded defuses confusables/invisibles without the bag-of-words shape that
-  // .normalized produces — MiniLM handles its own subword tokenization
+  // .folded only — let MiniLM tokenize, not the bag-of-words .normalized form
   return String(forms.folded || "").trim();
 }
 
 function lazyGetDb() {
-  // lazy require to avoid circular dep with restricted-emoji-db
   const mod = require("./restricted-emoji-db");
   if (!mod || typeof mod.getDatabase !== "function") return null;
   return mod;
@@ -130,7 +127,7 @@ async function hydrateCustomPatterns() {
       "SELECT id, phrase, normalized_phrase, timeout_ms, threshold, vector_json, created_by, created_at FROM custom_timeout_patterns ORDER BY id ASC"
     );
   } catch (err) {
-    // table doesn't exist yet — schema migration hasn't fired
+    // most likely: schema migration hasn't run yet
     recordRuntimeEvent("warn", "custom-patterns-hydrate-rows", err?.message || err);
     hydrated = true;
     return 0;
@@ -175,7 +172,6 @@ async function addPattern({ phrase, timeoutMs, threshold = DEFAULT_THRESHOLD, cr
   const finalTimeout = clampTimeout(timeoutMs);
   const finalThreshold = clampThreshold(threshold);
 
-  // embed first — fail fast if MiniLM is unavailable
   const vec = await embedText(normalized);
   if (!vec || !vec.length) throw new Error("embedder returned empty vector");
 
@@ -314,7 +310,6 @@ async function matchMessage(text, { minThreshold = null } = {}) {
     };
   }
 
-  // when caller provides a lower minThreshold, surface the best score even if it didn't fire
   if (minThreshold != null && bestScore >= gate) {
     return {
       matched: false,

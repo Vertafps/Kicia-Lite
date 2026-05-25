@@ -1,5 +1,3 @@
-// Owner-tunable settings registry + read-through cache backed by app_config.
-
 const {
   parseDurationInput,
   formatDuration,
@@ -9,8 +7,6 @@ const {
 const { buildPanel, WARN, INFO } = require("./embed");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-// inline two-row levenshtein. kept local so circular imports stay impossible
-// regardless of what other modules choose to export.
 function levenshteinDistance(a, b) {
   const left = String(a || "");
   const right = String(b || "");
@@ -44,7 +40,6 @@ const SETTING_TYPES = Object.freeze({
   STRING: "string"
 });
 
-// lazy require to avoid circular import at module load.
 let _emojiDb = null;
 function emojiDb() {
   if (!_emojiDb) {
@@ -996,7 +991,6 @@ const SECTION_LIST = Object.freeze(
   Array.from(new Set(Array.from(REGISTRY.values()).map((d) => d.section)))
 );
 
-// per-key cache, populated by hydrateSettingsCache() and setSetting().
 const cache = new Map();
 
 function cacheStore(key, value) {

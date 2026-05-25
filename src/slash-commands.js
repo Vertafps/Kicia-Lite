@@ -5,13 +5,12 @@ const {
 const { messageFromInteraction } = require("./utils/reply-target");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-// gates command visibility in Discord UI; server-side enforcement still happens in the handler
+// visibility hint only; the handler still re-checks server-side
 const OWNER_PERMS = String(PermissionFlagsBits.Administrator);
 const STAFF_PERMS = String(PermissionFlagsBits.ManageMessages);
 
 function buildDefinitions() {
   return [
-    // ---- status ----
     new SlashCommandBuilder()
       .setName("status")
       .setDescription("Show or set the KiciaHook runtime status")
@@ -22,7 +21,6 @@ function buildDefinitions() {
           .addChoices({ name: "up", value: "up" }, { name: "down", value: "down" }, { name: "unaware", value: "unaware" })))
       .toJSON(),
 
-    // ---- state (presence) ----
     new SlashCommandBuilder()
       .setName("state")
       .setDescription("Bot presence text (owner)")
@@ -34,28 +32,24 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("reset").setDescription("Reset to default"))
       .toJSON(),
 
-    // ---- fetch ----
     new SlashCommandBuilder()
       .setName("fetch")
       .setDescription("Refresh KB cache (owner)")
       .setDefaultMemberPermissions(OWNER_PERMS)
       .toJSON(),
 
-    // ---- jarvis ----
     new SlashCommandBuilder()
       .setName("jarvis")
       .setDescription("Run diagnostics (owner)")
       .setDefaultMemberPermissions(OWNER_PERMS)
       .toJSON(),
 
-    // ---- testpromax ----
     new SlashCommandBuilder()
       .setName("testpromax")
       .setDescription("Extended diagnostics (owner)")
       .setDefaultMemberPermissions(OWNER_PERMS)
       .toJSON(),
 
-    // ---- role ----
     new SlashCommandBuilder()
       .setName("role")
       .setDescription("Role assignment (owner)")
@@ -71,14 +65,12 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("cancel").setDescription("Request bulk job stop"))
       .toJSON(),
 
-    // ---- db ----
     new SlashCommandBuilder()
       .setName("db")
       .setDescription("Inspect SQLite (owner)")
       .setDefaultMemberPermissions(OWNER_PERMS)
       .toJSON(),
 
-    // ---- set-channels / set-channel ----
     new SlashCommandBuilder()
       .setName("set-channels")
       .setDescription("Show configured channels (owner)")
@@ -93,7 +85,6 @@ function buildDefinitions() {
       .addChannelOption(o => o.setName("channel").setDescription("Target channel").setRequired(true))
       .toJSON(),
 
-    // ---- whitelist ----
     new SlashCommandBuilder()
       .setName("whitelist")
       .setDescription("Moderation whitelist (owner)")
@@ -107,7 +98,6 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("list").setDescription("List whitelisted users"))
       .toJSON(),
 
-    // ---- lock / unlock ----
     new SlashCommandBuilder()
       .setName("lock")
       .setDescription("Lock configured channels (owner)")
@@ -119,7 +109,6 @@ function buildDefinitions() {
       .setDefaultMemberPermissions(OWNER_PERMS)
       .toJSON(),
 
-    // ---- allowlink (staff+) ----
     new SlashCommandBuilder()
       .setName("allowlink")
       .setDescription("Trusted-link management (staff+)")
@@ -133,7 +122,6 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("list").setDescription("List trusted URLs"))
       .toJSON(),
 
-    // ---- emoji (staff+) ----
     new SlashCommandBuilder()
       .setName("emoji")
       .setDescription("Restricted reactions (staff+)")
@@ -150,7 +138,6 @@ function buildDefinitions() {
         .addIntegerOption(o => o.setName("count").setDescription("How many").setMinValue(1).setMaxValue(20)))
       .toJSON(),
 
-    // ---- nick (staff+) ----
     new SlashCommandBuilder()
       .setName("nick")
       .setDescription("Nickname rules (staff+)")
@@ -165,7 +152,6 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("list").setDescription("List nickname rules"))
       .toJSON(),
 
-    // ---- policy ----
     new SlashCommandBuilder()
       .setName("policy")
       .setDescription("Toggle scam/link policy (owner)")
@@ -174,7 +160,6 @@ function buildDefinitions() {
         .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }, { name: "status", value: "status" }))
       .toJSON(),
 
-    // ---- config (owner) ----
     new SlashCommandBuilder()
       .setName("config")
       .setDescription("Owner-tunable settings")
@@ -197,7 +182,6 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("export").setDescription("Export current overrides"))
       .toJSON(),
 
-    // ---- train (owner) ----
     new SlashCommandBuilder()
       .setName("train")
       .setDescription("Retrain classifiers (owner)")
@@ -210,7 +194,6 @@ function buildDefinitions() {
           .addChoices({ name: "scam", value: "scam" }, { name: "respect", value: "respect" })))
       .toJSON(),
 
-    // ---- training (staff) ----
     new SlashCommandBuilder()
       .setName("training")
       .setDescription("Training corpus management")

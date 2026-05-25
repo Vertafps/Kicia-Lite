@@ -797,7 +797,7 @@ async function maybeHandleModerationWatch(message, {
       }
     }
 
-    // 5) Custom timeout patterns - lazy-require so cold paths skip the embedder
+    // 5) Custom timeout patterns
     if (message.content?.length) {
       try {
         const patterns = require("../custom-patterns");

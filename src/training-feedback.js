@@ -1,67 +1,10 @@
 const crypto = require("crypto");
-
-function getGetSetting() {
-  try {
-    return require("./settings").getSetting;
-  } catch (_) {
-    return () => undefined;
-  }
-}
-
-function getNormalizeText() {
-  try {
-    return require("./text").normalizeText;
-  } catch (_) {
-    return (s) => String(s || "");
-  }
-}
-
-function getEmbedText() {
-  try {
-    return require("./embeddings").embedText;
-  } catch (_) {
-    return null;
-  }
-}
-
-function getTrainingDb() {
-  return require("./training-db");
-}
-
-function getChannelConfig() {
-  return require("./channel-config");
-}
-
-function getRecordRuntimeEvent() {
-  try {
-    return require("./runtime-health").recordRuntimeEvent;
-  } catch (_) {
-    return () => {};
-  }
-}
-
-function getEmbedMod() {
-  return require("./embed");
-}
-
-function getConfig() {
-  try {
-    return require("./config");
-  } catch (_) {
-    return {};
-  }
-}
-
-function getComponentsBuilder() {
-  try {
-    const mod = require("./components");
-    return typeof mod.buildTrainingFeedbackButtonRows === "function"
-      ? mod.buildTrainingFeedbackButtonRows
-      : null;
-  } catch (_) {
-    return null;
-  }
-}
+const { getSetting } = require("./settings");
+const { normalizeText } = require("./text");
+const { embedText } = require("./embeddings");
+const { recordRuntimeEvent } = require("./runtime-health");
+const { buildRichPanel, DANGER, WARN } = require("./embed");
+const config = require("./config");
 
 function sha1Hash(text) {
   return crypto.createHash("sha1").update(String(text || "")).digest("hex");
@@ -70,7 +13,7 @@ function sha1Hash(text) {
 function parseJsonSafe(json) {
   try {
     return JSON.parse(json || "{}");
-  } catch (_) {
+  } catch {
     return {};
   }
 }
@@ -88,17 +31,16 @@ function authorLabelFor(user) {
   return discrim && discrim !== "0" ? `${username}#${discrim}` : username;
 }
 
-// QUEUE: guildId -> { entries, timer, stats, guildRef, lastWarnAt }
 const QUEUE = new Map();
 
 function getMaxQueueDepth() {
-  const v = getGetSetting()("training.post.max_queue");
+  const v = getSetting("training.post.max_queue");
   const n = v == null ? 100 : parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : 100;
 }
 
 function getDrainIntervalMs() {
-  const rate = getGetSetting()("training.post.rate_per_sec");
+  const rate = getSetting("training.post.rate_per_sec");
   const r = rate == null ? 1 : Number(rate);
   if (!Number.isFinite(r) || r <= 0) return 1000;
   return Math.max(250, Math.round(1000 / r));
@@ -126,7 +68,7 @@ function enforceMaxDepth(state, maxDepth) {
   const now = Date.now();
   if (state.lastWarnAt == null || now - state.lastWarnAt > 5 * 60_000) {
     state.lastWarnAt = now;
-    getRecordRuntimeEvent()(
+    recordRuntimeEvent(
       "warn",
       "training-post-overflow",
       `dropped ${droppedNow} sample(s) for guild ${state.guildRef?.id ?? "unknown"} (depth cap ${maxDepth})`
@@ -152,7 +94,7 @@ function startDrainIfIdle(state) {
       );
       if (ok) state.stats.sent++;
     } catch (err) {
-      getRecordRuntimeEvent()("warn", "training-post", err?.message || String(err));
+      recordRuntimeEvent("warn", "training-post", err?.message || String(err));
     }
   }, intervalMs);
   if (typeof state.timer.unref === "function") state.timer.unref();
@@ -182,7 +124,6 @@ function enqueueForPost({ guildId, sampleId, guildRef, classifier, severity }) {
 
 async function enqueueTrainingSample(message, classification) {
   try {
-    const getSetting = getGetSetting();
     if (!getSetting("training.enabled")) {
       return { sampleId: null, queued: false, deduped: false, reason: "disabled" };
     }
@@ -197,12 +138,10 @@ async function enqueueTrainingSample(message, classification) {
     }
 
     const verdict = classification.verdict;
-    // Confidence is exposed at signals.confidence by some classifiers, top-level by others.
     const rawConfidence = classification.confidence ?? classification.signals?.confidence;
     const confidence = Number(rawConfidence);
     const safeConfidence = Number.isFinite(confidence) ? confidence : 0;
 
-    // Timeouts always pass through to SQLite so the corpus stays complete.
     if (verdict !== "timeout") {
       const thresholdRaw = getSetting(`training.classifier.${classification.classifier}.threshold`);
       const threshold = Number.isFinite(Number(thresholdRaw)) ? Number(thresholdRaw) : 0.55;
@@ -218,7 +157,6 @@ async function enqueueTrainingSample(message, classification) {
     }
 
     const text = String(message.content || "");
-    const normalizeText = getNormalizeText();
     const normalized = normalizeText(text).slice(0, 4000);
 
     const dedupKey =
@@ -228,22 +166,17 @@ async function enqueueTrainingSample(message, classification) {
       "|" +
       classification.classifier;
 
-    // Link classifier uses URL features, not text embeddings.
     let embedding = classification.embedding instanceof Float32Array ? classification.embedding : null;
     if (!embedding && classification.classifier !== "link") {
-      const embedText = getEmbedText();
-      if (embedText) {
-        try {
-          const vec = await embedText(normalized.slice(0, 512));
-          if (vec instanceof Float32Array && vec.length > 0) embedding = vec;
-        } catch (err) {
-          getRecordRuntimeEvent()("warn", "training-embed", err?.message || String(err));
-        }
+      try {
+        const vec = await embedText(normalized.slice(0, 512));
+        if (vec instanceof Float32Array && vec.length > 0) embedding = vec;
+      } catch (err) {
+        recordRuntimeEvent("warn", "training-embed", err?.message || String(err));
       }
     }
 
-    const { createTrainingSample } = getTrainingDb();
-    const config = getConfig();
+    const { createTrainingSample } = require("./training-db");
     const signalsJson = JSON.stringify({
       ...(classification.signals || {}),
       confidence: safeConfidence
@@ -291,7 +224,7 @@ async function enqueueTrainingSample(message, classification) {
 
     return { sampleId, queued: true, deduped: false };
   } catch (err) {
-    getRecordRuntimeEvent()("error", "training-enqueue", err?.message || String(err));
+    recordRuntimeEvent("error", "training-enqueue", err?.message || String(err));
     return { sampleId: null, queued: false, deduped: false, reason: "error" };
   }
 }
@@ -299,22 +232,19 @@ async function enqueueTrainingSample(message, classification) {
 async function postSampleToTrainingChannel(guild, sampleId, classifier) {
   if (!guild || sampleId == null) return false;
 
-  const { getTrainingSampleById, setTrainingSamplePosted } = getTrainingDb();
+  const { getTrainingSampleById, setTrainingSamplePosted } = require("./training-db");
   let sample = null;
   try {
     sample = await getTrainingSampleById(sampleId);
   } catch (err) {
-    getRecordRuntimeEvent()("warn", "training-db-read", err?.message || String(err));
+    recordRuntimeEvent("warn", "training-db-read", err?.message || String(err));
     return false;
   }
   if (!sample) return false;
   if (sample.posted) return false;
 
-  const channelId = getChannelConfig().getConfiguredChannelId("training");
-  if (!channelId) {
-    // No channel configured: leave posted=0 so drain revisits when slot is set.
-    return false;
-  }
+  const channelId = require("./channel-config").getConfiguredChannelId("training");
+  if (!channelId) return false; // leave posted=0; drain will revisit when the slot is set
 
   let channel = null;
   try {
@@ -323,7 +253,7 @@ async function postSampleToTrainingChannel(guild, sampleId, classifier) {
     channel = null;
   }
   if (!channel) {
-    getRecordRuntimeEvent()(
+    recordRuntimeEvent(
       "warn",
       "training-channel-missing",
       `channel ${channelId} unreachable for guild ${guild.id}`
@@ -346,7 +276,7 @@ async function postSampleToTrainingChannel(guild, sampleId, classifier) {
   try {
     sent = await channel.send(payload);
   } catch (err) {
-    getRecordRuntimeEvent()("warn", "training-channel-send", err?.message || String(err));
+    recordRuntimeEvent("warn", "training-channel-send", err?.message || String(err));
     return false;
   }
   if (!sent) return false;
@@ -358,29 +288,22 @@ async function postSampleToTrainingChannel(guild, sampleId, classifier) {
       posted: 1
     });
   } catch (err) {
-    getRecordRuntimeEvent()("warn", "training-db-mark-posted", err?.message || String(err));
+    recordRuntimeEvent("warn", "training-db-mark-posted", err?.message || String(err));
   }
   return true;
 }
 
 function resolveStaffPingRole(classifier) {
-  const getSetting = getGetSetting();
   const fromSetting = getSetting(`${classifier}.staff.ping.role`);
   if (fromSetting) {
     const str = String(fromSetting).trim();
     if (str) return str;
   }
-  const cfg = getConfig();
-  const ids = Array.isArray(cfg.STAFF_ROLE_IDS) ? cfg.STAFF_ROLE_IDS : [];
+  const ids = Array.isArray(config.STAFF_ROLE_IDS) ? config.STAFF_ROLE_IDS : [];
   return ids[0] || null;
 }
 
 function buildTrainingPanel(sample, classifier) {
-  const embedMod = getEmbedMod();
-  const buildRichPanel = embedMod.buildRichPanel;
-  const DANGER = embedMod.DANGER;
-  const WARN = embedMod.WARN;
-
   const signals = parseJsonSafe(sample.signalsJson || sample.signals_json);
   const isAction = sample.decision === "action";
   const confidenceRaw = Number(signals.confidence ?? 0);
@@ -483,18 +406,14 @@ function buildSignalLines(classifier, signals) {
 }
 
 function buildButtonRows(sampleId, classifier, sample) {
-  const builder = getComponentsBuilder();
-  if (builder) {
-    try {
-      const rows = builder(sampleId, classifier, sample);
+  try {
+    const { buildTrainingFeedbackButtonRows } = require("./components");
+    if (typeof buildTrainingFeedbackButtonRows === "function") {
+      const rows = buildTrainingFeedbackButtonRows(sampleId, classifier, sample);
       if (Array.isArray(rows)) return rows;
-    } catch (err) {
-      getRecordRuntimeEvent()(
-        "warn",
-        "training-buttons",
-        err?.message || String(err)
-      );
     }
+  } catch (err) {
+    recordRuntimeEvent("warn", "training-buttons", err?.message || String(err));
   }
   return buildButtonRowsInline(sampleId, classifier);
 }
@@ -528,15 +447,18 @@ function buildButtonRowsInline(sampleId, classifier) {
 async function drainTrainingChannelQueue() {
   let samples = [];
   try {
-    const { listUnpostedTrainingSamples } = getTrainingDb();
+    const { listUnpostedTrainingSamples } = require("./training-db");
     samples = await listUnpostedTrainingSamples({ limit: 100 });
   } catch (err) {
-    getRecordRuntimeEvent()("warn", "training-drain-list", err?.message || String(err));
+    recordRuntimeEvent("warn", "training-drain-list", err?.message || String(err));
     return;
   }
   if (!Array.isArray(samples) || !samples.length) return;
 
-  const client = getClientRef();
+  let client = null;
+  try {
+    client = require("./index")?.client || null;
+  } catch {}
 
   for (const sample of samples) {
     if (!sample || !sample.guildId) continue;
@@ -564,15 +486,6 @@ async function drainTrainingChannelQueue() {
   }
 }
 
-function getClientRef() {
-  try {
-    const idx = require("./index");
-    return idx?.client || null;
-  } catch (_) {
-    return null;
-  }
-}
-
 let schedulerTimer = null;
 const SCHEDULER_INTERVAL_MS = 30_000;
 
@@ -580,7 +493,7 @@ function startTrainingChannelScheduler() {
   if (schedulerTimer) return;
   schedulerTimer = setInterval(() => {
     drainTrainingChannelQueue().catch((err) => {
-      getRecordRuntimeEvent()(
+      recordRuntimeEvent(
         "warn",
         "training-scheduler",
         err?.message || String(err)
@@ -597,7 +510,7 @@ function stopTrainingChannelScheduler() {
   }
 }
 
-// Graceful shutdown: 2s total budget, up to 10 sends per guild.
+// shutdown flush: 2s total budget, 10 sends per guild
 async function flushAllTrainingQueues() {
   const BUDGET_PER_GUILD = 10;
   const flushPromises = [];
@@ -617,7 +530,7 @@ async function flushAllTrainingQueues() {
             if (ok) state.stats.sent++;
           })
           .catch((err) => {
-            getRecordRuntimeEvent()(
+            recordRuntimeEvent(
               "warn",
               "training-flush",
               err?.message || String(err)

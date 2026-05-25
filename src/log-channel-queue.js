@@ -1,55 +1,35 @@
-// per-guild rate-limited log channel write queue
-// drain rate: 4 messages / 5s per guild (1 per 1250ms)
+// per-guild log-channel queue; default rate is 4 msgs / 5s (1 per 1250ms)
+
+const { getSetting } = require("./settings");
+const { recordRuntimeEvent } = require("./runtime-health");
 
 const CRITICAL_PRIORITY_TAGS = Object.freeze([]);
 
-// guildId -> { entries, timer, stats, guildRef, lastWarnAt }
 const QUEUE = new Map();
 
-function getLogChannel() {
-  return require("./log-channel");
-}
-
-function getGetSetting() {
-  try {
-    return require("./settings").getSetting;
-  } catch (_) {
-    return () => undefined;
-  }
-}
-
-function getRecordRuntimeEvent() {
-  try {
-    return require("./runtime-health").recordRuntimeEvent;
-  } catch (_) {
-    return () => {};
-  }
-}
-
 function isQueueEnabled() {
-  const v = getGetSetting()("log.queue.enabled");
+  const v = getSetting("log.queue.enabled");
   return v == null ? true : Boolean(v);
 }
 
 function getRate() {
-  const v = getGetSetting()("log.queue.rate");
+  const v = getSetting("log.queue.rate");
   const n = v == null ? 4 : parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : 4;
 }
 
 function getMaxDepth() {
-  const v = getGetSetting()("log.queue.maxDepth");
+  const v = getSetting("log.queue.maxDepth");
   const n = v == null ? 200 : parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : 200;
 }
 
-// drain interval = 5000ms / rate
 function getDrainIntervalMs() {
   return Math.max(50, Math.floor(5000 / getRate()));
 }
 
 async function sendLogPanelDirect(guild, panel, options) {
-  const logChannel = getLogChannel();
+  const logChannel = require("./log-channel");
   try {
     let ok;
     if (options && options.ignoreLogChannel) {
@@ -59,7 +39,7 @@ async function sendLogPanelDirect(guild, panel, options) {
     }
     return Boolean(ok);
   } catch (err) {
-    getRecordRuntimeEvent()("warn", "log-channel-queue-inline", err?.message || String(err));
+    recordRuntimeEvent("warn", "log-channel-queue-inline", err?.message || String(err));
     return false;
   }
 }
@@ -70,7 +50,7 @@ function initState(guild) {
     timer: null,
     stats: { pending: 0, dropped: 0, sent: 0 },
     guildRef: guild,
-    lastWarnAt: null,
+    lastWarnAt: null
   };
 }
 
@@ -92,12 +72,11 @@ function startDrainIfIdle(state) {
         entry.resolve({ queued: true, sent: ok });
       })
       .catch((err) => {
-        getRecordRuntimeEvent()("warn", "log-queue-drain", err?.message || String(err));
+        recordRuntimeEvent("warn", "log-queue-drain", err?.message || String(err));
         entry.resolve({ queued: true, sent: false });
       });
   }, getDrainIntervalMs());
 
-  // don't block Node process exit
   if (typeof state.timer.unref === "function") state.timer.unref();
 }
 
@@ -118,7 +97,7 @@ function enforceMaxDepth(state, maxDepth) {
   const now = Date.now();
   if (state.lastWarnAt == null || now - state.lastWarnAt > 60_000) {
     state.lastWarnAt = now;
-    getRecordRuntimeEvent()(
+    recordRuntimeEvent(
       "warn",
       "log-channel-queue",
       `queue overflow for guild ${state.guildRef?.id ?? "unknown"} — dropping oldest entries`
@@ -183,7 +162,7 @@ async function flushAllQueues() {
             entry.resolve({ queued: true, sent: ok, reason: "shutdown-flush" });
           })
           .catch((err) => {
-            getRecordRuntimeEvent()("warn", "log-queue-flush", err?.message || String(err));
+            recordRuntimeEvent("warn", "log-queue-flush", err?.message || String(err));
             entry.resolve({ queued: true, sent: false, reason: "shutdown-flush-error" });
           })
       )
@@ -192,13 +171,12 @@ async function flushAllQueues() {
     flushPromises.push(batchPromise);
   }
 
-  // 2-second total budget
   await Promise.race([
     Promise.allSettled(flushPromises),
     new Promise((resolve) => {
       const t = setTimeout(resolve, 2000);
       if (typeof t.unref === "function") t.unref();
-    }),
+    })
   ]);
 }
 
@@ -222,5 +200,5 @@ module.exports = {
   enqueueLogPanel,
   flushAllQueues,
   getQueueStats,
-  __resetForTests,
+  __resetForTests
 };

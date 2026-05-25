@@ -7,15 +7,15 @@ function messageFromInteraction(interaction, syntheticContent) {
   let replied = interaction.replied || interaction.deferred;
 
   async function safeReplyOrFollowUp(payload) {
+    const flags = payload.flags ?? (1 << 6); // ephemeral
     try {
       if (!replied) {
         replied = true;
-        await interaction.reply({ ...payload, flags: payload.flags ?? (1 << 6) }); // ephemeral by default
+        await interaction.reply({ ...payload, flags });
         return await interaction.fetchReply().catch(() => null);
-      } else {
-        return await interaction.followUp({ ...payload, flags: payload.flags ?? (1 << 6) });
       }
-    } catch (err) {
+      return await interaction.followUp({ ...payload, flags });
+    } catch {
       return null;
     }
   }

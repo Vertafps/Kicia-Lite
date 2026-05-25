@@ -18,8 +18,6 @@ async function withLock(key, fn) {
     return await fn();
   } finally {
     release();
-
-    // optimistic cleanup — prevents unbounded map growth on one-shot keys
     if (locks.get(key) === previous.then(() => next) || !locks.has(key)) {
       locks.delete(key);
     }
@@ -47,5 +45,5 @@ module.exports = {
   isLocked,
   getLockedKeys,
   withGuildLock,
-  __resetForTests,
+  __resetForTests
 };

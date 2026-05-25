@@ -118,8 +118,7 @@ async function handleTrainCommand(message, parsed) {
       ]);
       dbModule.schedulePersist(db, { immediate: true });
 
-      // invalidate classifier head caches so the new weights take effect now
-      // instead of after the 60s cache window expires.
+      // invalidate head caches so new weights apply immediately, not after the 60s TTL
       try {
         if (parsed.classifier === "scam") {
           require("../scam-trade").resetHeadCache?.();

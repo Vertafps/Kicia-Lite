@@ -73,7 +73,7 @@ function parseTrainingInteraction(customId) {
   return null;
 }
 
-// training.label.role: "owner" | "mod" | "staff". Kernel users always pass.
+// training.label.role: "owner" | "mod" | "staff"; kernel users always pass
 function canLabelTraining(interaction) {
   const member = interaction?.member;
   const userId = interaction?.user?.id || member?.user?.id;
@@ -325,7 +325,6 @@ function getActorLabel(interaction) {
   );
 }
 
-// training-db doesn't expose a clearLabel helper, so write the UPDATE here.
 async function clearLabelRaw(sampleId) {
   const { getDatabase, schedulePersist } = require("../restricted-emoji-db");
   const db = await getDatabase();
@@ -393,7 +392,6 @@ async function handleLabelPositive(interaction, { sampleId, classifier, severity
     return;
   }
 
-  // Warn-only path for respect: DM, no timeout.
   if (classifier === "respect" && severity === "warn") {
     if (sample.authorId && interaction.guild) {
       const member = await interaction.guild.members
@@ -518,7 +516,7 @@ async function handleLift(interaction, { sampleId }) {
   const labelerId = interaction.user?.id || null;
   const labelerLabel = getActorLabel(interaction);
 
-  // Lift always overrides prior label; staff reversing a wrongful timeout.
+  // lift always overrides prior label
   try {
     await updateTrainingSampleLabel(sampleId, {
       label: "negative",

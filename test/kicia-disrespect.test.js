@@ -258,10 +258,16 @@ test.describe("kicia-disrespect: edge inputs", () => {
 // ============================================================================
 
 test.describe("kicia-disrespect: splitClauses", () => {
-  test("no punctuation, no conjunction → single clause", () => {
+  test("dual-copula run-on splits into two clauses (the counter-example)", () => {
+    // "kicia is good ue is dogshit" has no punctuation/conjunction but the
+    // dual-copula soft-split breaks it so per-clause attribution can put
+    // "good" on kicia and "dogshit" on ue.
     const clauses = splitClauses("kicia is good ue is dogshit");
-    assert.strictEqual(clauses.length, 1);
-    assert.strictEqual(clauses[0], "kicia is good ue is dogshit");
+    assert.strictEqual(clauses.length, 2);
+    assert.match(clauses[0], /kicia/);
+    assert.match(clauses[0], /good/);
+    assert.match(clauses[1], /ue/);
+    assert.match(clauses[1], /dogshit/);
   });
 
   test("comma split: 'kicia is good, but v3 sucks'", () => {

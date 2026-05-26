@@ -80,7 +80,14 @@ const MUST_FLAG_CASES = [
   ["handing out v3 keys, dm me",        "freebie · handing out + topic + dm"],
   ["dropping free kicia configs dm me to claim",
                                         "freebie · drop + free + topic + dm claim"],
-  ["legit free kicia premium dm me",    "freebie · legit free + topic + dm"]
+  ["legit free kicia premium dm me",    "freebie · legit free + topic + dm"],
+  // multi-char spaced seller verbs (scammer-style mid-word splits)
+  ["GUYS IM SEL LING KICKERHOOK V3",    "spaced seller verb + fuzzy topic (real prod miss)"],
+  ["guys im sel ling kicia v3",         "spaced 'sel ling' + topic"],
+  ["se lling kiciahook hmu",            "spaced 'se lling' + topic + dm slang"],
+  ["sell ing v3 lifetime",              "spaced 'sell ing' + topic + lifetime"],
+  ["s elling kicia keys",               "spaced 's elling' + topic"],
+  ["t rading kicia for ue",             "spaced 't rading' + topic"]
 ];
 
 test.describe("scam-trade: must-flag cases", () => {

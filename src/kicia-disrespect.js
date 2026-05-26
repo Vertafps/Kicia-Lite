@@ -106,6 +106,18 @@ const COMPARATIVE_NEG_RE = /\b(?:worse\s+than|behind|bottom\s+(?:of|tier|barrel)
 // "ue mogs kicia", "fluxus destroys kicia" — put-down verb with kicia as object
 const COMPARATIVE_PUTDOWN_RE = /\b(mogs|smokes|destroys|cooks|outclasses|beats)\b/i;
 
+// Scam-classifier-territory signals. When any of these fires, the respect
+// head's "disrespect" score is unreliable — the model was trained on respect
+// labels, but scam text shares enough embedding-space neighbours with
+// disrespect samples ("kicia is X" patterns) to leak a high score. We defer
+// to the scam classifier instead of producing a low-confidence respect warn.
+const SCAM_LIKE_RE = /\b(?:sell(?:ing|s)?|sold|wts|wtb|for\s+sale|trade|trading|swap(?:ping)?|paypal|cashapp|venmo|crypto|btc|eth|ltc|usdt|robux|rbx|nitro|cracked|dm\s*me|pm\s*me|hmu|inbox\s*me|free\s+(?:configs?|keys?|kicia|v[23]|premium|lifetime|license|version)|giving\s+away|handing\s+out|drop(?:ping)?\s+free|legit\s+free)\b/i;
+// Pre-densified seller-verb splits ("sel ling", "se lling", "sell ing", etc.)
+// — the scam classifier densifies these before classifying, but respect
+// reads the raw folded text. Match the spaced variants explicitly so we
+// defer even when the scam verb hasn't been reassembled yet.
+const SCAM_LIKE_SPACED_RE = /\b(?:s\s+e\s+l\s+l(?:\s+i\s+n\s+g|\s+s)?|s\s+elling|se\s+lling|sel\s+ling|sell\s+ing|sellin\s+g|s\s+old|so\s+ld|w\s+ts|t\s+rade|tr\s+ade|tra\s+de|s\s+wap)\b/i;
+
 function splitClauses(folded) {
   const source = String(folded || "").trim();
   if (!source) return [];
@@ -487,6 +499,16 @@ async function classifyKiciaDisrespect(text, options = {}) {
   const constructive = CONSTRUCTIVE_RE.test(folded);
   if (constructive) {
     return ignoreResult("constructive criticism / feature request", null);
+  }
+
+  // Scam-classifier deferral. If the text shows commerce intent (seller verb,
+  // payment rail, DM solicitation, freebie wording, or known spaced-verb
+  // obfuscation), the scam classifier owns the decision. The respect head was
+  // trained on respect-labelled data and produces unreliable scores on
+  // scam-shaped text — letting it fire here leaked low-conf "head says
+  // disrespect" verdicts on actual scams.
+  if (SCAM_LIKE_RE.test(folded) || SCAM_LIKE_SPACED_RE.test(folded)) {
+    return ignoreResult("scam-like signal (defer to scam classifier)", null);
   }
 
   const clauses = splitClauses(folded);

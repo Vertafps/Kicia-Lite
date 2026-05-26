@@ -175,7 +175,16 @@ const MUST_NOT_FLAG_CASES = [
 
   // soft criticism never auto-times-out
   ["i don't like kicia",              "soft criticism · no neg-lex (warn at most)"],
-  ["kicia could be better",           "soft criticism · no neg-lex"]
+  ["kicia could be better",           "soft criticism · no neg-lex"],
+
+  // scam-deferral cases — respect must NOT fire on scam-shaped text
+  // (the trained head was leaking high scores into these on prod)
+  ["GUYS IM SEL LING KICKERHOOK V3",  "scam-deferral · spaced seller + fuzzy topic"],
+  ["selling kicia for ue dm me",      "scam-deferral · explicit sale"],
+  ["wts kicia hook lifetime",         "scam-deferral · wts + topic"],
+  ["free configs dm me",              "scam-deferral · freebie giveaway"],
+  ["trading kicia for fluxus",        "scam-deferral · trade verb"],
+  ["sel ling kicia",                  "scam-deferral · pure spaced verb"]
 ];
 
 test.describe("kicia-disrespect: must-NOT-flag cases", () => {

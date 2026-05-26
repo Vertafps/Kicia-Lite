@@ -98,7 +98,11 @@ function topicHitFuzzy(text) {
     // too-long tokens (>14) are unlikely typos of any topic word
     if (token.length > 14) continue;
     for (const word of TOPIC_FUZZY_WORDS) {
-      const maxDist = word.length <= 6 ? 1 : 2;
+      // Distance tolerance scales with word length: short topics need exact-
+      // ish matches (1 edit), medium-length tolerate 2 edits, and 9+ char
+      // topics like "kiciahook" tolerate 3 edits — this catches scammer
+      // typos like "kickerhook" (lev=3) that 2-edit caps were rejecting.
+      const maxDist = word.length <= 6 ? 1 : word.length <= 8 ? 2 : 3;
       // cheap length-difference pre-check
       if (Math.abs(token.length - word.length) > maxDist) continue;
       if (levenshtein(token, word) <= maxDist) return match.index;
@@ -225,9 +229,47 @@ async function getScamHead() {
   return _head;
 }
 
-// collapses "s e l l i n g" -> "selling"; requires 4+ adjacent single-char tokens
+// Known scammer-style mid-word splits ("sel ling", "se lling", "sell ing",
+// "s elling", "sellin g") for the core commerce verbs. Limited to seller
+// vocabulary so we don't accidentally densify normal multi-word phrases.
+// Each verb gets an explicit alternation per cut-point so the regex stays
+// readable; "ing/ed/s" suffix variants ride along where natural.
+const SPACED_SELLER_VERB_RE = new RegExp(
+  "\\b(?:" + [
+    "s\\s+e\\s+l\\s+l(?:\\s+i\\s+n\\s+g|\\s+s)?", // s e l l (i n g)?
+    "s\\s+ell(?:ing|s)?",                          // s elling
+    "se\\s+ll(?:ing|s)?",                          // se lling
+    "sel\\s+l(?:ing|s)?",                          // sel ling
+    "sell\\s+ing",                                 // sell ing
+    "sellin\\s+g",                                 // sellin g
+    "s\\s+old", "so\\s+ld", "sol\\s+d",            // sold splits
+    "w\\s+ts", "wt\\s+s",                          // wts splits
+    "t\\s+rad(?:e|ing|ed|er|es)?",                 // t rade / t rading
+    "tr\\s+ad(?:e|ing|ed|er|es)?",                 // tr ade
+    "tra\\s+d(?:e|ing|ed|er|es)?",                 // tra de
+    "trad\\s+(?:e|ing|ed|er|es)",                  // trad ing
+    "tradin\\s+g",                                 // tradin g
+    "s\\s+wap(?:ping|ped|s)?",                     // s wap (ping)?
+    "sw\\s+ap(?:ping|ped|s)?",                     // sw ap (ping)?
+    "swa\\s+p(?:ping|ped|s)?",                     // swa p (ping)?
+    "swap\\s+ping",                                // swap ping
+    "swapp\\s+ing",                                // swapp ing
+    "f\\s+or\\s+sale", "fo\\s+r\\s+sale",          // f or sale
+    "for\\s+s\\s+ale", "for\\s+sa\\s+le"           // for s ale
+  ].join("|") + ")\\b",
+  "i"
+);
+
+// collapses "s e l l i n g" -> "selling" (single-char splits, ≥4 in a row)
+// AND known seller-verb multi-char splits like "sel ling" -> "selling".
+// Two passes — the single-char regex first (most aggressive scammer pattern),
+// then a targeted verb-split pass (safer than blanket multi-char collapsing).
 function densifyObfuscated(text) {
-  return String(text || "").replace(/\b\w(?:\s+\w\b){3,}/g, (match) => match.replace(/\s+/g, ""));
+  let out = String(text || "").replace(/\b\w(?:\s+\w\b){3,}/g, (match) => match.replace(/\s+/g, ""));
+  // Second pass: collapse spaced seller verbs. Replace the entire matched
+  // span (which may include internal spaces) with its space-stripped form.
+  out = out.replace(SPACED_SELLER_VERB_RE, (match) => match.replace(/\s+/g, ""));
+  return out;
 }
 
 const TOPIC_SUBSTRINGS = ["kicia", "kiciahook", "config", "license", "lifetime", "premium", "subscription", "cracked"];
@@ -468,6 +510,8 @@ function pickSeverity(H, confidence, signalsOrPriceHit, dmHitOrOptions, maybeOpt
   const newAccount = !!options.isNewAccount;
   const repeat = !!options.repeatOffender;
 
+  const obfuscated = !!signals.obfuscated;
+
   let base = null;
   if (H >= 4 && priceHit && dmHit && directionScore >= 2) {
     if (confidence >= 0.95 || newAccount) base = "severe";
@@ -481,6 +525,13 @@ function pickSeverity(H, confidence, signalsOrPriceHit, dmHitOrOptions, maybeOpt
     // corroborating signal — tight enough to auto-action at "light"
     base = "light";
   } else if ((H === 2 && priceHit && dmHit) || repeat) {
+    base = "light";
+  } else if (obfuscated && directionScore >= 2) {
+    // Obfuscation + strong direction: deliberate scammer-style evasion
+    // (e.g. "sel ling kickerhook v3"). The split/typo IS itself the second
+    // signal — someone wouldn't break "selling" into "sel ling" by accident.
+    // H can be 1 here because price/dm are typically absent in naked
+    // obfuscated posts. Light tier; severity-bumped on new-account/repeat.
     base = "light";
   }
 
@@ -783,6 +834,13 @@ async function classifyScamTrade(text, options = {}) {
     confidence = clamp(confidence + (priceHit ? 0.10 : 0.05), 0, 1);
   }
 
+  // Obfuscation is intent. Splitting "selling" into "sel ling" or fuzzying
+  // "kiciahook" to "kickerhook" is deliberate evasion — bump confidence so
+  // these don't sit at H=1, conf=0.29 in the warn bucket forever.
+  if (obfuscated) {
+    confidence = clamp(confidence + 0.15, 0, 1);
+  }
+
   const jokeMarker = detectJokeMarker(folded, dense);
 
   const signals = {
@@ -826,6 +884,12 @@ async function classifyScamTrade(text, options = {}) {
   }
   if (strongDirection && H === 2) {
     gateConf = Math.min(gateConf, 0.40);
+  }
+  // Obfuscation + strong direction: the spaced-verb or fuzzy-topic match
+  // already proved intent; lower gate so H=1 with conf ~0.44 (post +0.15
+  // bump) can auto-action via the new obfuscated branch in pickSeverity.
+  if (obfuscated && strongDirection) {
+    gateConf = Math.min(gateConf, 0.35);
   }
 
   const jokeBypassEligible = jokeMarker && !newAccount

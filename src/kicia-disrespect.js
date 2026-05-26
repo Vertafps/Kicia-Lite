@@ -106,6 +106,33 @@ const COMPARATIVE_NEG_RE = /\b(?:worse\s+than|behind|bottom\s+(?:of|tier|barrel)
 // "ue mogs kicia", "fluxus destroys kicia" — put-down verb with kicia as object
 const COMPARATIVE_PUTDOWN_RE = /\b(mogs|smokes|destroys|cooks|outclasses|beats)\b/i;
 
+// Internal version ranking. When a single clause names two Kicia versions
+// and the OLDER one is being criticized, that's pro-Kicia commentary
+// ("v2 buns compared to v3" = v3 is better), not disrespect. We use the
+// rank to figure out which one is the subject of the criticism: if it's
+// the older (lower rank), suppress the polarity. If it's the newer (higher
+// rank), let it through — that IS disrespect of the current product.
+const KICIA_VERSION_RANK = { v2: 1, v3: 2 };
+
+// True iff the clause names ≥2 ranked Kicia versions AND the subject
+// (first-appearing version) is the OLDER one (lower rank). "v2 buns
+// compared to v3" → subject=v2 (rank 1), other=v3 (rank 2) → pro-Kicia.
+// "v3 buns compared to v2" → subject=v3 (rank 2), other=v2 (rank 1) → not
+// pro-Kicia (newer being trashed in favor of older = legitimate complaint).
+function isProKiciaVersionComparison(clause) {
+  const lower = String(clause || "").toLowerCase();
+  const hits = [];
+  for (const ent of Object.keys(KICIA_VERSION_RANK)) {
+    const re = new RegExp(`\\b${ent}\\b`, "i");
+    const m = re.exec(lower);
+    if (m) hits.push({ ent, idx: m.index, rank: KICIA_VERSION_RANK[ent] });
+  }
+  if (hits.length < 2) return false;
+  hits.sort((a, b) => a.idx - b.idx);
+  const subject = hits[0];
+  return hits.slice(1).some((h) => h.rank > subject.rank);
+}
+
 // Scam-classifier-territory signals. When any of these fires, the respect
 // head's "disrespect" score is unreliable — the model was trained on respect
 // labels, but scam text shares enough embedding-space neighbours with
@@ -524,9 +551,15 @@ async function classifyKiciaDisrespect(text, options = {}) {
     const entity = attribution ? attribution.entity : null;
     const isKicia = attribution ? Boolean(attribution.isKicia) : false;
 
-    attributedClauses.push({ clause, entity, polarity, isKicia });
+    // Pro-Kicia internal version comparison: "v2 buns compared to v3" =
+    // older version being disparaged in favor of newer = not disrespect.
+    // Only fires when polarity is negative (positive polarity on the older
+    // is fine to attribute normally — that's just praising v2).
+    const isProKiciaCompare = polarity < 0 && isProKiciaVersionComparison(clause);
 
-    if (isKicia) {
+    attributedClauses.push({ clause, entity, polarity, isKicia, isProKiciaCompare });
+
+    if (isKicia && !isProKiciaCompare) {
       if (polarity < 0) kiciaNegMag += Math.abs(polarity);
       if (polarity > 0) kiciaPosMag += Math.abs(polarity);
       if (sarcasmHint) sarcasm = true;
@@ -537,7 +570,7 @@ async function classifyKiciaDisrespect(text, options = {}) {
     // toward kicia by construction, regardless of which entity the copula-based
     // attributor picked).
     const compBoost = comparativeNegBoost(clause, vocab);
-    if (compBoost > 0) kiciaNegMag += compBoost;
+    if (compBoost > 0 && !isProKiciaCompare) kiciaNegMag += compBoost;
   }
 
   const kiciaNegRatio = kiciaNegMag / (kiciaNegMag + kiciaPosMag + 1e-6);
@@ -653,17 +686,23 @@ async function classifyKiciaDisrespect(text, options = {}) {
   }
 
   // Below the timeout gate but still flag-worthy: route to warn.
+  // Pattern signal is the trustworthy anchor — every warn branch requires
+  // at least some kiciaNegMag from clause-local NEG_LEX hits or comparative
+  // boost. Head-alone and semantic-alone branches were removed because the
+  // trained head leaks high disrespect scores on benign Kicia-topical text
+  // (1v1 challenges, bug reports, bare "v3", loader code) and semantic
+  // banks can hallucinate on unusual surface forms.
   if (kiciaSig && semHigh) {
     return finalize("warn", signals, attributedClauses, usedVec, "pattern + semantic (sub-threshold)");
   }
-  if (kiciaSig || semHigh) {
-    return finalize("warn", signals, attributedClauses, usedVec, kiciaSig ? "pattern alone" : "semantic alone");
+  if (kiciaSig) {
+    return finalize("warn", signals, attributedClauses, usedVec, "pattern alone");
+  }
+  if (semHigh && kiciaNegMag >= 0.5) {
+    return finalize("warn", signals, attributedClauses, usedVec, "semantic high + some pattern");
   }
   if (semMed && kiciaNegMag >= 0.5) {
     return finalize("warn", signals, attributedClauses, usedVec, "semantic medium + some pattern");
-  }
-  if (headHigh) {
-    return finalize("warn", signals, attributedClauses, usedVec, "head says disrespect (sub-threshold)");
   }
 
   return finalize("ignore", signals, attributedClauses, usedVec, "no signals converged");

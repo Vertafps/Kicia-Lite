@@ -105,7 +105,10 @@ const MUST_FLAG_CASES = [
   ["kicia is mid honestly", "intensifier amps polarity"],
   ["kicia is broken garbage", "two neg-lex tokens"],
   ["v3 is literally ass",   "intensifier + ass"],
-  ["hook is dogshit"        , "hook alias + neg-lex"]
+  ["hook is dogshit"        , "hook alias + neg-lex"],
+  // newer-version-trashed comparisons — opposite of the pro-Kicia ignore cases
+  ["v3 is buns compared to v2",  "NEWER trashed for older · legitimate complaint"],
+  ["v3 sucks compared to v2",    "NEWER trashed for older · variant lex"]
 ];
 
 test.describe("kicia-disrespect: must-flag cases", () => {
@@ -184,7 +187,25 @@ const MUST_NOT_FLAG_CASES = [
   ["wts kicia hook lifetime",         "scam-deferral · wts + topic"],
   ["free configs dm me",              "scam-deferral · freebie giveaway"],
   ["trading kicia for fluxus",        "scam-deferral · trade verb"],
-  ["sel ling kicia",                  "scam-deferral · pure spaced verb"]
+  ["sel ling kicia",                  "scam-deferral · pure spaced verb"],
+
+  // head-alone removal — these all relied on the trained head firing
+  // on benign Kicia-topical text (no clause-local NEG_LEX hits).
+  ["1v1 kicia prem",                  "gamer challenge · no pattern signal"],
+  ["kiciahook crash's",               "bug report · no pattern signal"],
+  ["nah gta 1 gazillion out but no kicia v4 sorry",
+                                      "v4-complaint · no pattern signal"],
+  [`loadstring(game:HttpGet("https://raw.githubusercontent.com/kiciahook/kiciahook/refs/heads/main/loader.luau"))()`,
+                                      "loader code · no pattern signal"],
+  ["v3",                              "bare version · no signals"],
+  ["kiciahook",                       "bare product name · no signals"],
+  ["v2",                              "bare version · no signals"],
+
+  // pro-Kicia version comparisons — older being disparaged in favor of newer
+  ["v2 buns compared to v3",          "pro-Kicia · older trashed for newer"],
+  ["v2 is buns compared to v3",       "pro-Kicia · 'is' copula form"],
+  ["v2 is trash compared to v3",      "pro-Kicia · variant lex"],
+  ["v2 sucks compared to v3",         "pro-Kicia · variant lex"]
 ];
 
 test.describe("kicia-disrespect: must-NOT-flag cases", () => {

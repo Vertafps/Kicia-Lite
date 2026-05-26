@@ -106,7 +106,15 @@ function topicHitFuzzy(text) {
   }
   return -1;
 }
-const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal)\b/i;
+// Freebie-giveaway markers: scammers bait victims with "free X dm me" or
+// "giving away X dm me" — distribution intent without any commerce vocabulary.
+// Combined with topic + DM solicitation, this is seller-side intent.
+const FREEBIE_RE = /\b(?:free|giveaway|giving\s+away|gifting|gift(?:ed|ing)?|hand(?:ing)?\s+out|handout|drop(?:ping)?\s+free|sharing|claim|claiming|legit\s+free|100%\s+free|no\s+cost|on\s+the\s+house|for\s+free)\b/i;
+// Solicitation patterns: "anyone want X dm me", "if anyone wants X" — these
+// are offer-side invitations (someone willing to provide X). Standalone they
+// can be ambiguous, so they only fire when paired with topic + DM.
+const SOLICITATION_RE = /\b(?:if\s+anyone\s+wants?|anyone\s+who\s+wants?|whoever\s+wants?|who\s+wants?\s+(?:a|an|some|free)|dm\s+(?:me\s+)?(?:if|when|for|to\s+get|to\s+claim)\b)/i;
+const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal|free|giveaway|giving\s+away)\b/i;
 const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+serious|sarcasm|sarcastic)\b|\(jk\)|\(joking\)|\(kidding\)|\blmao\b/i;
 
 const DEFAULTS = {
@@ -283,6 +291,13 @@ function computeDirectionScore(text, denseText, rawText) {
   // Cyrillic seller-verb match — runs on the raw text to survive folding.
   const cyrillicSellerHit = CYRILLIC_SELLER_RE.exec(rawForCyrillic);
   const buyerHit = BUYER_RE.exec(text);
+  // Freebie/solicitation hits — only meaningful when paired with topic + DM,
+  // gated below. Computed up here so the buyer-veto can take them into account.
+  const freebieHit = FREEBIE_RE.exec(text)
+    || (dense !== text ? FREEBIE_RE.exec(dense) : null);
+  const solicitationHit = SOLICITATION_RE.exec(text)
+    || (dense !== text ? SOLICITATION_RE.exec(dense) : null);
+  const dmHitLocal = DM_RE.test(text) || (dense !== text && DM_RE.test(dense));
 
   // Resolve topic index: regex on text → regex on dense → dense-substring → fuzzy.
   let topicIdx = -1;
@@ -301,9 +316,15 @@ function computeDirectionScore(text, denseText, rawText) {
     if (fuzzy >= 0) topicIdx = fuzzy;
   }
 
+  const freebieGiveaway = !!(freebieHit && topicIdx >= 0 && dmHitLocal);
+  const solicitationDrop = !!(solicitationHit && topicIdx >= 0 && dmHitLocal);
+
   // Buyer veto only fires when no seller-side signal of any flavour is present
-  // (English verb, possessive offer, or Cyrillic verb).
-  if (buyerHit && !seller.hit && !possessiveHit && !cyrillicSellerHit) return -2;
+  // (English verb, possessive offer, Cyrillic verb, freebie giveaway,
+  // solicitation drop). A "free X dm me" message that also says "looking for"
+  // is still a giveaway scam — the seller-side signal wins.
+  if (buyerHit && !seller.hit && !possessiveHit && !cyrillicSellerHit
+      && !freebieGiveaway && !solicitationDrop) return -2;
 
   if (topicIdx >= 0) {
     if (seller.hit) {
@@ -326,6 +347,19 @@ function computeDirectionScore(text, denseText, rawText) {
       const rawTopic = KICIA_TOPIC_RE.exec(rawForCyrillic);
       const rawTopicIdx = rawTopic ? rawTopic.index : topicIdx;
       if (Math.abs(cyrillicSellerHit.index - rawTopicIdx) <= 40) return +2;
+      return +1;
+    }
+    // Freebie-giveaway: "free configs dm me", "giving away v3 keys dm me".
+    // Tight proximity (≤40 chars between freebie token and topic) = strong
+    // seller-side direction (+2). Looser cluster still scores +1 since the
+    // DM solicitation already corroborates the offer-side intent.
+    if (freebieGiveaway) {
+      if (Math.abs(freebieHit.index - topicIdx) <= 40) return +2;
+      return +1;
+    }
+    // Pure solicitation drop: "anyone want v3 dm me" — invitation without
+    // an explicit "free" token. Lower confidence than freebie; +1 only.
+    if (solicitationDrop) {
       return +1;
     }
     // Bare price-near-topic fallback. No explicit seller verb, but the topic
@@ -907,6 +941,8 @@ module.exports = {
     RAIL_NUM_TOPIC_RE,
     META_OR_WARNING_RE,
     JOKE_RE,
+    FREEBIE_RE,
+    SOLICITATION_RE,
     topicHitFuzzy,
     levenshtein
   }

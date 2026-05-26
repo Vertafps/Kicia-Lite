@@ -108,7 +108,33 @@ const SCAM_SELL_BANK = [
   "trade ur ue and ill add cash",
   "trading my kicia for robux + ue",
   "ill trade kicia for ur acc",
-  "who has ue and wants kicia"
+  "who has ue and wants kicia",
+  // freebie-giveaway scams — no price, no seller verb, just "free X dm me"
+  "free configs dm me",
+  "free kicia configs dm me",
+  "free v3 dm me",
+  "free kicia premium dm me",
+  "giving away v3 keys dm me",
+  "giving away free configs dm me",
+  "giving away kicia keys",
+  "dm me if anyone want free configs",
+  "dm me if u want free kicia",
+  "anyone want free configs dm me",
+  "anyone wants free v3 hmu",
+  "handing out v3 configs dm me",
+  "handing out free kicia dm me",
+  "dropping free kicia configs",
+  "dropping free v3 configs dm",
+  "claim free kicia dm me",
+  "legit free kicia dm me",
+  "legit free configs dm me",
+  "100% free configs dm me",
+  "share kicia configs dm me",
+  "sharing v3 keys dm me",
+  "got free v3 configs hmu",
+  "got free kicia premium hmu",
+  "free version of v3 dm me",
+  "free copy of kicia dm me"
 ];
 
 const SCAM_BUY_BANK = [

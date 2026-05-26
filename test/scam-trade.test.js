@@ -70,7 +70,17 @@ const MUST_FLAG_CASES = [
   ["wts configs cheap dm me",           "wts + configs + dm"],
   ["selling lifetime $10 paypal",       "selling + lifetime + price + payment"],
   ["selling my keys dm me",             "selling + keys + dm"],
-  ["selling premium configs hmu",       "selling + premium + configs + dm slang"]
+  ["selling premium configs hmu",       "selling + premium + configs + dm slang"],
+  // freebie-giveaway scams — no seller verb, no price, just "free X dm me"
+  ["dm me if anyone want free configs legit and rage like for free version of v3",
+                                        "freebie · dm + free + configs + v3 (real prod miss)"],
+  ["free configs dm me",                "freebie · free + configs + dm"],
+  ["giving away free v3 configs dm me", "freebie · giving away + v3 + dm"],
+  ["anyone want a free kicia key dm me","freebie · anyone want + free + topic + dm"],
+  ["handing out v3 keys, dm me",        "freebie · handing out + topic + dm"],
+  ["dropping free kicia configs dm me to claim",
+                                        "freebie · drop + free + topic + dm claim"],
+  ["legit free kicia premium dm me",    "freebie · legit free + topic + dm"]
 ];
 
 test.describe("scam-trade: must-flag cases", () => {
@@ -123,7 +133,14 @@ const MUST_NOT_FLAG_CASES = [
   ["is this allowed: selling kicia?",                    "meta · rules question"],
   ["people are scamming with kicia keys, be careful",    "meta · scam warning"],
   ["staff banned a user for selling kicia yesterday",    "meta · third-person report"],
-  ["report anyone selling kicia",                        "meta · explicit report"]
+  ["report anyone selling kicia",                        "meta · explicit report"],
+  ["someone is giving away free configs in dms, be careful",
+                                                         "meta · freebie warning"],
+  // freebie-related negatives — "free" word alone must not trip the gate
+  ["is kicia free or paid",                              "buyer · pricing inquiry (free word)"],
+  ["kicia is now free, just download from docs",         "info · benign free statement"],
+  ["is there a free trial of kicia",                     "buyer · trial inquiry"],
+  ["anyone want to teach me kicia",                      "buyer · learning request (no DM offer)"]
 ];
 
 test.describe("scam-trade: must-NOT-flag cases", () => {

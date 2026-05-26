@@ -123,9 +123,23 @@ function splitClauses(folded) {
     }
   }
 
+  // soft-split run-on dual-copula sentences like "kicia is good ue is dogshit".
+  // catches the no-punctuation counter-example by inserting a break before
+  // the second subject when two "is/are" verbs appear with no conjunction.
+  const dualSplit = [];
+  for (const clause of result) {
+    const m = clause.match(/^(\S+\s+(?:is|are|was|were)\s+\S+)\s+(\S+\s+(?:is|are|was|were)\s+.+)$/i);
+    if (m) {
+      dualSplit.push(m[1]);
+      dualSplit.push(m[2]);
+    } else {
+      dualSplit.push(clause);
+    }
+  }
+
   // glue short tails ("but really") onto the prior clause to avoid stray polarity
   const merged = [];
-  for (const clause of result) {
+  for (const clause of dualSplit) {
     const tokens = clause.split(/\s+/).filter(Boolean);
     if (tokens.length < 3 && merged.length > 0) {
       merged[merged.length - 1] = `${merged[merged.length - 1]} ${clause}`;
@@ -585,13 +599,15 @@ async function classifyKiciaDisrespect(text, options = {}) {
   // Ordered LAST so the more-conservative branches above still win when they
   // can; the firstOffenseConfidence gate keeps the head-only timeout path
   // honest (default 0.80 — matches the moderation-handler promotion rule).
-  // Counter-example guard: if Kicia is being praised in the same message
-  // (kiciaPosMag > kiciaNegMag), suppress head-only verdicts. The head may
-  // fire because of unrelated negativity in the text ("kicia is good ue is
-  // dogshit" — head sees "dogshit", clause attribution puts it on ue, but
-  // a pure-head branch would still flag).
+  // Counter-example guard: suppress head-only verdicts when the message is
+  // either kicia-praised OR the negativity is clearly aimed at a non-kicia
+  // entity (clause attribution put a neg-polarity clause on a third party).
   const kiciaPraised = (signals.kiciaPosMag || 0) > (signals.kiciaNegMag || 0);
-  if (!kiciaPraised) {
+  const thirdPartyNeg = attributedClauses.some(
+    (c) => c && !c.isKicia && (c.polarity || 0) < 0
+  );
+  const headSuppressed = kiciaPraised || thirdPartyNeg;
+  if (!headSuppressed) {
     if (headHigh && topical && semHigh && confidence >= firstOffenseConfidence) {
       return finalize("timeout", signals, attributedClauses, usedVec, "head + semantic high (topical)");
     }

@@ -1,8 +1,7 @@
 const {
   LINK_MODERATION_TIMEOUT_MS,
   NEW_ACCOUNT_LINK_SCRUTINY_MS,
-  NEW_MEMBER_LINK_SCRUTINY_MS,
-  BRAND
+  NEW_MEMBER_LINK_SCRUTINY_MS
 } = require("../config");
 const {
   MODLOG_REVERT_PREFIX,
@@ -40,7 +39,7 @@ const {
   recordModerationAction
 } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
-const { safeReply, safeSend } = require("../utils/respond");
+const { safeSend } = require("../utils/respond");
 const { classifyScamTrade } = require("../scam-trade");
 const { classifyKiciaDisrespect } = require("../kicia-disrespect");
 const { enqueueTrainingSample } = require("../training-feedback");
@@ -196,15 +195,35 @@ function buildScamTradeUserPayload({ message, result, durationMs }) {
   };
 }
 
-function buildRespectUserPayload({ message, durationMs, tier }) {
-  const isTier1 = tier === 1 || !durationMs;
+function buildScamTradeWarnPayload({ message, result }) {
   return {
     embeds: [
       buildPanel({
-        header: isTier1 ? "Heads-up" : "Message Flagged",
-        body: isTier1
-          ? "hey — that message got flagged for disrespect toward kicia. friendly heads-up, no timeout this time. keep it constructive."
-          : `hey — that message got flagged for disrespect toward kicia. you're muted for ${formatDuration(durationMs)}. if it was a misread, ping staff.`,
+        header: "Heads-up",
+        body: "hey — your message looked like a sale/trade so it got removed. friendly heads-up; staff is reviewing. if this was wrong, just ping staff in the server.",
+        color: WARN
+      })
+    ]
+  };
+}
+
+function buildRespectUserPayload({ message, durationMs, tier, action }) {
+  if (action === "warn") {
+    return {
+      embeds: [
+        buildPanel({
+          header: "Heads-up",
+          body: "hey — your message got flagged for disrespect toward kicia. friendly heads-up, no timeout this time. ping staff if it was a misread.",
+          color: WARN
+        })
+      ]
+    };
+  }
+  return {
+    embeds: [
+      buildPanel({
+        header: "Message Flagged",
+        body: `hey — that message got flagged for disrespect toward kicia. you're muted for ${formatDuration(durationMs)}. if it was a misread, ping staff.`,
         color: WARN
       })
     ]
@@ -266,15 +285,22 @@ function buildCommerceLogPanel({ message, result, timeoutResult, deleteResult, d
   });
 }
 
-function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs }) {
+function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs, action = "timeout" }) {
   const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const signals = result.signals || {};
   const semDelta = Number(signals.semDelta ?? 0);
   const headScore = signals.headScore;
+  const isWarn = action === "warn";
+  const title = isWarn
+    ? `Scam/Trade Warning · ${result.severity || "?"}`
+    : (timeoutResult.applied ? `Scam/Trade Timeout · ${result.severity || "?"}` : "Scam/Trade Alert");
+  const actionLine = isWarn
+    ? `warn (no timeout) · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`
+    : `${timeoutResult.applied ? "timeout " + formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`;
 
   return buildRichPanel({
-    title: timeoutResult.applied ? `Scam/Trade Timeout · ${result.severity || "?"}` : "Scam/Trade Alert",
+    title,
     author: { name: displayName, iconURL: avatar || undefined },
     fields: [
       { name: "User", value: `<@${message.author?.id}>`, inline: true },
@@ -282,13 +308,14 @@ function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, 
       { name: "Confidence", value: `${Math.round((Number(signals.confidence) || 0) * 100)}%`, inline: true },
       { name: "Severity", value: String(result.severity || "—"), inline: true },
       { name: "Direction", value: String(signals.directionScore ?? 0), inline: true },
+      { name: "Verdict", value: isWarn ? "warn" : "timeout", inline: true },
       { name: "Signals", value: "```" + [
         `price: ${signals.priceHit ? "yes" : "no"}`,
         `dm: ${signals.dmHit ? "yes" : "no"}`,
         `sem: ${semDelta.toFixed(2)}`,
         `head: ${headScore != null ? Number(headScore).toFixed(2) : "—"}`
       ].join("\n") + "```", inline: false },
-      { name: "Action", value: `${timeoutResult.applied ? "timeout " + formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`, inline: false },
+      { name: "Action", value: actionLine, inline: false },
       { name: "Reason", value: result.reasonText || "scam/trade pattern", inline: false },
       { name: "Evidence", value: trimExcerpt(message.content) }
     ],
@@ -296,28 +323,33 @@ function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, 
   });
 }
 
-function buildRespectLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs, tier }) {
+function buildRespectLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs, tier, action = "timeout" }) {
   const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const signals = result.signals || {};
   const semDelta = Number(signals.semDisrespect ?? 0);
   const kiciaNegRatio = Number(signals.kiciaNegRatio ?? 0);
+  const isWarn = action === "warn";
+  const actionLine = isWarn
+    ? `warn (no timeout) · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`
+    : `${durationMs > 0 ? "timeout " + formatDuration(durationMs) : "warn DM only"} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`;
 
   return buildRichPanel({
-    title: `Kicia Disrespect · tier ${tier}`,
+    title: `Kicia Disrespect · tier ${tier}${isWarn ? " · warn" : ""}`,
     author: { name: displayName, iconURL: avatar || undefined },
     fields: [
       { name: "User", value: `<@${message.author?.id}>`, inline: true },
       { name: "Channel", value: `<#${message.channelId}>`, inline: true },
       { name: "Tier", value: String(tier), inline: true },
       { name: "Confidence", value: `${Math.round((Number(signals.confidence) || 0) * 100)}%`, inline: true },
+      { name: "Verdict", value: isWarn ? "warn" : "timeout", inline: true },
       { name: "Signals", value: "```" + [
         `kiciaNeg: ${signals.kiciaNegMag ?? 0}`,
         `ratio: ${kiciaNegRatio.toFixed(2)}`,
         `sem: ${semDelta.toFixed(2)}`,
         `sarcasm: ${signals.sarcasm ? "yes" : "no"}`
       ].join("\n") + "```", inline: false },
-      { name: "Action", value: `${durationMs > 0 ? "timeout " + formatDuration(durationMs) : "warn DM only"} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`, inline: false },
+      { name: "Action", value: actionLine, inline: false },
       { name: "Reason", value: result.reasonText || "disrespect", inline: false },
       { name: "Evidence", value: trimExcerpt(message.content) }
     ],
@@ -486,31 +518,42 @@ async function handleProhibitedCommerceMessage(message, result, {
 
 async function handleScamTradeMessage(message, result, {
   sendLog = sendLogPanel,
-  now = Date.now()
+  now = Date.now(),
+  action = "timeout"
 } = {}) {
-  const fromResult = Number(result?.durationMs);
-  const durationMs = Number.isFinite(fromResult) && fromResult > 0 ? fromResult : (60 * 60 * 1000);
-  const timeoutResult = await tryTimeoutMessageMember(message.member, durationMs, "scam/trade pattern");
-  const dmSent = await safeSend(
-    message.author,
-    buildScamTradeUserPayload({ message, result, durationMs })
-  );
+  const isWarn = action === "warn";
+  // Always delete — user requirement: both warn and timeout remove the message.
   const deleteResult = await tryDeleteMessage(message);
 
-  if (!timeoutResult.applied) {
+  let durationMs = 0;
+  let timeoutResult = { applied: false, reason: "warn-only path" };
+  if (!isWarn) {
+    const fromResult = Number(result?.durationMs);
+    durationMs = Number.isFinite(fromResult) && fromResult > 0 ? fromResult : (60 * 60 * 1000);
+    timeoutResult = await tryTimeoutMessageMember(message.member, durationMs, "scam/trade pattern");
+  }
+
+  const dmPayload = isWarn
+    ? buildScamTradeWarnPayload({ message, result })
+    : buildScamTradeUserPayload({ message, result, durationMs });
+  const dmSent = await safeSend(message.author, dmPayload);
+
+  if (!isWarn && !timeoutResult.applied) {
     recordRuntimeEvent("warn", "scam-trade-timeout", timeoutResult.reason);
   }
   await recordModerationStat(
-    timeoutResult.applied ? "scam_trade_timeout" : "scam_trade_alert",
+    isWarn
+      ? "scam_trade_warn"
+      : (timeoutResult.applied ? "scam_trade_timeout" : "scam_trade_alert"),
     now
   );
 
   const embed = buildScamTradeLogPanel({
-    message, result, timeoutResult, deleteResult, dmSent, durationMs
+    message, result, timeoutResult, deleteResult, dmSent, durationMs, action
   });
   const review = await createReviewRecord(message, {
-    actionType: "scam_trade_timeout",
-    actionLabel: `scam ${result?.severity || "?"}`,
+    actionType: isWarn ? "scam_trade_warn" : "scam_trade_timeout",
+    actionLabel: isWarn ? `scam warn ${result?.severity || "?"}` : `scam ${result?.severity || "?"}`,
     timeoutMs: durationMs,
     timeoutApplied: timeoutResult.applied,
     deleteApplied: deleteResult.deleted,
@@ -541,10 +584,14 @@ async function handleScamTradeMessage(message, result, {
 
 async function handleKiciaDisrespectMessage(message, result, {
   sendLog = sendLogPanel,
-  now = Date.now()
+  now = Date.now(),
+  action = "timeout"
 } = {}) {
   const userId = message?.author?.id;
-  const decayMs = 7 * 24 * 60 * 60 * 1000;
+  const decayMsSetting = Number(getSetting("respect.tier.decayMs"));
+  const decayMs = Number.isFinite(decayMsSetting) && decayMsSetting > 0
+    ? decayMsSetting
+    : 7 * 24 * 60 * 60 * 1000;
 
   let tier = 1;
   try {
@@ -556,6 +603,14 @@ async function handleKiciaDisrespectMessage(message, result, {
     recordRuntimeEvent("warn", "respect-tier-bump", err?.message || err);
   }
 
+  // Second-offense rule: if classifier said "warn" but tier state says this is
+  // a repeat (tier >= 2), promote to timeout. Classifier doesn't see prior
+  // offenses, so we factor them in here.
+  let effectiveAction = action;
+  if (effectiveAction === "warn" && tier >= 2) {
+    effectiveAction = "timeout";
+  }
+
   // High-confidence first-offense bypass: tier-1 promotes to tier-2 when the
   // classifier is confident enough, so blatant disrespect mutes immediately
   // instead of only emitting a warn-DM.
@@ -564,47 +619,55 @@ async function handleKiciaDisrespectMessage(message, result, {
   let effectiveTier = tier;
   if (effectiveTier === 1 && Number.isFinite(conf) && conf >= firstOffenseThreshold) {
     effectiveTier = 2;
+    // High-confidence first offense forces timeout regardless of classifier
+    // recommendation — historically this was tier-1->tier-2 promotion.
+    if (effectiveAction === "warn") effectiveAction = "timeout";
   }
 
-  let durationMs = 0;
-  if (effectiveTier >= 2) {
-    const t2 = Number(getSetting("respect.timeout"));
-    durationMs = Number.isFinite(t2) && t2 > 0 ? t2 : 15 * 60 * 1000;
-  }
-  if (effectiveTier === 3) {
-    const t3 = Number(getSetting("respect.tier2.timeout"));
-    durationMs = Number.isFinite(t3) && t3 > 0 ? t3 : 60 * 60 * 1000;
-  }
-  if (effectiveTier >= 4) {
-    const t4 = Number(getSetting("respect.tier3.timeout"));
-    durationMs = Number.isFinite(t4) && t4 > 0 ? t4 : 24 * 60 * 60 * 1000;
-  }
+  const isWarn = effectiveAction === "warn";
 
-  const timeoutResult = durationMs > 0
-    ? await tryTimeoutMessageMember(message.member, durationMs, "disrespect toward kicia")
-    : { applied: false, reason: "tier 1 warn only" };
-  const dmSent = await safeSend(
-    message.author,
-    buildRespectUserPayload({ message, durationMs, tier: effectiveTier })
-  );
+  // Always delete (user explicitly required: both warn and timeout remove the message)
   const deleteResult = await tryDeleteMessage(message);
 
-  if (durationMs > 0 && !timeoutResult.applied) {
+  // Determine duration based on action + tier
+  let durationMs = 0;
+  let timeoutResult = { applied: false, reason: "warn-only path" };
+  if (!isWarn) {
+    if (effectiveTier === 3) {
+      const t3 = Number(getSetting("respect.tier2.timeout"));
+      durationMs = Number.isFinite(t3) && t3 > 0 ? t3 : 60 * 60 * 1000;
+    } else if (effectiveTier >= 4) {
+      const t4 = Number(getSetting("respect.tier3.timeout"));
+      durationMs = Number.isFinite(t4) && t4 > 0 ? t4 : 24 * 60 * 60 * 1000;
+    } else {
+      // tier 1 promoted to timeout, or tier 2
+      const t2 = Number(getSetting("respect.timeout"));
+      durationMs = Number.isFinite(t2) && t2 > 0 ? t2 : 15 * 60 * 1000;
+    }
+    timeoutResult = await tryTimeoutMessageMember(message.member, durationMs, "disrespect toward kicia");
+  }
+
+  const dmSent = await safeSend(
+    message.author,
+    buildRespectUserPayload({ message, durationMs, tier: effectiveTier, action: effectiveAction })
+  );
+
+  if (!isWarn && !timeoutResult.applied) {
     recordRuntimeEvent("warn", "respect-timeout", timeoutResult.reason);
   }
   await recordModerationStat(
-    durationMs > 0
-      ? (timeoutResult.applied ? "respect_disrespect_timeout" : "respect_disrespect_alert")
-      : "respect_disrespect_warn",
+    isWarn
+      ? "respect_disrespect_warn"
+      : (timeoutResult.applied ? "respect_disrespect_timeout" : "respect_disrespect_alert"),
     now
   );
 
   const embed = buildRespectLogPanel({
-    message, result, timeoutResult, deleteResult, dmSent, durationMs, tier: effectiveTier
+    message, result, timeoutResult, deleteResult, dmSent, durationMs, tier: effectiveTier, action: effectiveAction
   });
   const review = await createReviewRecord(message, {
-    actionType: "respect_disrespect",
-    actionLabel: `respect tier${effectiveTier}`,
+    actionType: isWarn ? "respect_disrespect_warn" : "respect_disrespect",
+    actionLabel: isWarn ? `respect warn tier${effectiveTier}` : `respect tier${effectiveTier}`,
     timeoutMs: durationMs,
     timeoutApplied: timeoutResult.applied,
     deleteApplied: deleteResult.deleted,
@@ -701,7 +764,12 @@ async function maybeHandleModerationWatch(message, {
   sendLog = sendLogPanel,
   now = Date.now()
 } = {}) {
-  if (!message?.inGuild?.() || message.author?.bot) return false;
+  if (!message?.inGuild?.()) return false;
+  // System messages (boosts, joins, pin) have author=null; bots are skipped.
+  // Either branch makes the downstream `bumpScamOffense(message.author.id, ...)`
+  // call unsafe, so bail before any classifier runs.
+  if (!message.author || message.author.bot) return false;
+  if (!message.guild) return false;
   if (hasBypassPermission(message)) return false;
   if (await hasManualWhitelistBypass(message)) return false;
 
@@ -761,7 +829,10 @@ async function maybeHandleModerationWatch(message, {
         try {
           const { getScamOffenseState } = require("../training-db");
           const state = await getScamOffenseState(message.author.id);
-          if (state && state.offenseCount >= 2 && (Date.now() - state.lastOffenseAt) < 24 * 3600_000) {
+          // ≥1 prior offense within the decay window flags this as repeat —
+          // the next message after a first catch counts as the second offense,
+          // which the classifier promotes to timeout regardless of confidence.
+          if (state && state.offenseCount >= 1 && (now - state.lastOffenseAt) < 24 * 3600_000) {
             repeatOffender = true;
           }
         } catch (err) {
@@ -775,11 +846,13 @@ async function maybeHandleModerationWatch(message, {
           repeatOffender
         });
         if (scamResult?.verdict === "timeout") {
-          const handled = await handleScamTradeMessage(message, scamResult, { sendLog, now });
+          const handled = await handleScamTradeMessage(message, scamResult, { sendLog, now, action: "timeout" });
           Promise.resolve(enqueueTrainingSample(message, scamResult)).catch(() => null);
           if (handled) return true;
-        } else if (scamResult?.verdict === "review") {
+        } else if (scamResult?.verdict === "warn") {
+          const handled = await handleScamTradeMessage(message, scamResult, { sendLog, now, action: "warn" });
           Promise.resolve(enqueueTrainingSample(message, scamResult)).catch(() => null);
+          if (handled) return true;
         }
       } catch (err) {
         recordRuntimeEvent("warn", "scam-classifier", err?.message || err);
@@ -796,11 +869,13 @@ async function maybeHandleModerationWatch(message, {
           kb: respectKb
         });
         if (respectResult?.verdict === "timeout") {
-          const handled = await handleKiciaDisrespectMessage(message, respectResult, { sendLog, now });
+          const handled = await handleKiciaDisrespectMessage(message, respectResult, { sendLog, now, action: "timeout" });
           Promise.resolve(enqueueTrainingSample(message, respectResult)).catch(() => null);
           if (handled) return true;
-        } else if (respectResult?.verdict === "review") {
+        } else if (respectResult?.verdict === "warn") {
+          const handled = await handleKiciaDisrespectMessage(message, respectResult, { sendLog, now, action: "warn" });
           Promise.resolve(enqueueTrainingSample(message, respectResult)).catch(() => null);
+          if (handled) return true;
         }
       } catch (err) {
         recordRuntimeEvent("warn", "respect-classifier", err?.message || err);

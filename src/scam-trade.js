@@ -110,7 +110,7 @@ const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|rep
 const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+serious|sarcasm|sarcastic)\b|\(jk\)|\(joking\)|\(kidding\)|\blmao\b/i;
 
 const DEFAULTS = {
-  firstOffenseConfidence: 0.92,
+  firstOffenseConfidence: 0.50,
   semanticDelta: 0.18,
   headThreshold: 0.78,
   newAccountBump: 0.05,
@@ -491,8 +491,8 @@ function buildReasonText({
   const parts = [];
   if (verdict === "timeout") {
     parts.push(`auto-timeout (${severity}) - H=${H} - conf=${confidence.toFixed(2)}`);
-  } else if (verdict === "review") {
-    parts.push(`review (training-channel) - H=${H} - conf=${confidence.toFixed(2)}`);
+  } else if (verdict === "warn") {
+    parts.push(`warn (sub-threshold) - H=${H} - conf=${confidence.toFixed(2)}`);
   } else {
     parts.push(`ignore - H=${H} - conf=${confidence.toFixed(2)}`);
   }
@@ -582,8 +582,8 @@ const NOOP_RESULT = Object.freeze({
 });
 
 function downgradeVerdict(verdict) {
-  if (verdict === "timeout") return "review";
-  if (verdict === "review") return "ignore";
+  if (verdict === "timeout") return "warn";
+  if (verdict === "warn") return "ignore";
   return verdict;
 }
 
@@ -721,7 +721,11 @@ async function classifyScamTrade(text, options = {}) {
   let headScore = null;
   if (vec && head) {
     try {
-      headScore = scoreLogisticHead(vec, head);
+      const raw = scoreLogisticHead(vec, head);
+      // sigmoid(NaN) → NaN; weights persisted as NaN can poison the score and
+      // leak into computeConfidence. Coerce non-finite to null so the
+      // half-credit default kicks in (consistent with kicia-disrespect).
+      headScore = Number.isFinite(raw) ? raw : null;
     } catch (err) {
       recordRuntimeEvent("warn", "scam-head-score", err?.message || err);
       headScore = null;
@@ -770,23 +774,24 @@ async function classifyScamTrade(text, options = {}) {
   ));
 
   // directionScore=+2 means seller-verb and Kicia-topic are within 40 chars —
-  // tight semantic proximity. When that's maxed out, one corroborating signal
-  // (semantic, head, price, dm) is enough — H=2 with strong direction qualifies.
-  // Weaker direction still needs the full H>=3 stack.
+  // tight semantic proximity. When that's maxed out, the lowered gate kicks in.
   const strongDirection = directionScore >= 2;
-  const minH = strongDirection ? 2 : 3;
 
-  // Gate thresholds:
-  //   - new-account + price+dm+direction: cap at 0.65 — H=3 cold-start tops
-  //     around 0.67 even with the +0.10 bump.
-  //   - H=2 + strongDirection: confidence math caps near 0.58, so use 0.40 —
-  //     comfortably reachable when sem clears its threshold, but well above
-  //     the ~0.29 ceiling for H=1.
-  let effectiveConfidenceGate = firstOffenseConfidence;
+  // Gate thresholds — single confidence check below decides timeout vs warn.
+  //   - new-account + price+dm+direction: cap at 0.65 — once banks warm, H=3
+  //     cold-start tops around 0.67 even with the +0.10 bump.
+  //   - H=2 + strongDirection: cap at 0.40 — confidence math caps near 0.58
+  //     in that band; 0.40 is comfortably reachable when sem clears, but well
+  //     above the ~0.29 ceiling for H=1.
+  // When firstOffenseConfidence is already lower than the cap, Math.min keeps
+  // the base gate (the caps are upper bounds on the special-case gates, not
+  // floors on the user-tuned setting).
+  let gateConf = firstOffenseConfidence;
   if (newAccount && priceHit && dmHit && directionScore >= 2) {
-    effectiveConfidenceGate = Math.min(firstOffenseConfidence, 0.65);
-  } else if (strongDirection && H === 2) {
-    effectiveConfidenceGate = Math.min(firstOffenseConfidence, 0.40);
+    gateConf = Math.min(gateConf, 0.65);
+  }
+  if (strongDirection && H === 2) {
+    gateConf = Math.min(gateConf, 0.40);
   }
 
   const jokeBypassEligible = jokeMarker && !newAccount
@@ -796,24 +801,33 @@ async function classifyScamTrade(text, options = {}) {
   let severity = null;
   let jokeDowngraded = false;
 
-  if (H >= minH && strongDirection && confidence >= effectiveConfidenceGate) {
+  // Repeat-offender second-offense rule: any signal at all forces timeout,
+  // regardless of confidence. Placed BEFORE the confidence-gate so a real
+  // second catch can't drop into warn just because the bar didn't clear.
+  // pickSeverity already bumps one tier when repeatOffender is set.
+  if (repeatOffender && (H >= 1 || directionScore >= 1)) {
+    const sev = pickSeverity(H, confidence, signals, { isNewAccount: newAccount, repeatOffender })
+      || "light";
+    verdict = "timeout";
+    severity = sev;
+  } else if (confidence >= gateConf) {
+    // Primary gate: confidence-first. Sub-checks fold into pickSeverity, which
+    // returns null when nothing actionable lines up — falls back to warn below.
     const sev = pickSeverity(H, confidence, signals, { isNewAccount: newAccount, repeatOffender });
     if (sev) {
       verdict = "timeout";
       severity = sev;
+    } else if (H >= 2 || (H === 1 && directionScore >= 1)) {
+      verdict = "warn";
     }
-  } else if ((H >= 2 && topicHit) || (H === 1 && directionScore >= 1)) {
-    verdict = "review";
-  }
-
-  if (verdict === "review" && repeatOffender) {
-    verdict = "timeout";
-    severity = "light";
+  } else if (H >= 2 || (H === 1 && directionScore >= 1)) {
+    // Sub-threshold: signals fired but confidence didn't clear the gate.
+    verdict = "warn";
   }
 
   if (jokeBypassEligible && verdict !== "ignore") {
     verdict = downgradeVerdict(verdict);
-    if (verdict === "ignore" || verdict === "review") severity = null;
+    if (verdict === "ignore" || verdict === "warn") severity = null;
     jokeDowngraded = true;
   }
 

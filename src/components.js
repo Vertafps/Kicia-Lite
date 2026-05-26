@@ -152,7 +152,9 @@ function buildTrainingFeedbackButtonRows(sampleId, classifier = "scam", sample =
 
   const rows = [];
 
-  if (sample.decision === "action") {
+  // "action" = auto-timeout, "warn" = auto-warn (delete + DM, no mute).
+  // Both already applied moderation, so both surface the lift/re-tier flow.
+  if (sample.decision === "action" || sample.decision === "warn") {
     const row1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${TRAIN_LIFT_PREFIX}${id}`)
         .setStyle(ButtonStyle.Danger).setLabel("Wrongful (Lift)").setDisabled(disabled),

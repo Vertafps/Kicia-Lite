@@ -390,7 +390,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.FLOAT,
     defaultValue: 0.85,
     label: "Action Threshold",
-    description: "Confidence above which scam classifier auto-acts.",
+    description: "[deprecated] Legacy three-band gate. Scam classifier now uses scam.firstoffense.confidence + per-signal thresholds instead. Kept for backwards-compat with existing $config dumps.",
     section: "scam",
     min: 0,
     max: 1
@@ -399,7 +399,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.FLOAT,
     defaultValue: 0.60,
     label: "Review Threshold",
-    description: "Confidence above which scam classifier flags for review.",
+    description: "[deprecated] Legacy three-band gate. Scam classifier now emits warn/timeout/ignore from confidence + signal H, with training queue thresholding via training.classifier.scam.threshold.",
     section: "scam",
     min: 0,
     max: 1
@@ -469,7 +469,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.FLOAT,
     defaultValue: 0.80,
     label: "Action Threshold",
-    description: "Disrespect confidence above which the bot auto-acts.",
+    description: "[deprecated] Legacy three-band gate. Respect classifier now uses respect.firstoffense.confidence to decide timeout vs warn. Kept for backwards-compat with existing $config dumps.",
     section: "respect",
     min: 0,
     max: 1
@@ -478,7 +478,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.FLOAT,
     defaultValue: 0.55,
     label: "Review Threshold",
-    description: "Disrespect confidence above which the bot pings staff for review.",
+    description: "[deprecated] Legacy three-band gate. Respect classifier now emits warn/timeout/ignore. Training queue thresholding lives under training.classifier.respect.threshold.",
     section: "respect",
     min: 0,
     max: 1
@@ -513,8 +513,8 @@ const REGISTRY_ENTRIES = [
   ["respect.tier2.timeout", {
     type: SETTING_TYPES.DURATION,
     defaultValue: HOUR_MS,
-    label: "Tier-2 Timeout",
-    description: "Repeat-offense escalation timeout (tier 2).",
+    label: "Escalation Tier 1 Timeout",
+    description: "Timeout duration for the first escalation above the default mute (applied at internal tier 3, i.e. third confirmed disrespect inside the decay window).",
     section: "respect",
     min: MINUTE_MS,
     max: 14 * DAY_MS
@@ -522,8 +522,8 @@ const REGISTRY_ENTRIES = [
   ["respect.tier3.timeout", {
     type: SETTING_TYPES.DURATION,
     defaultValue: 24 * HOUR_MS,
-    label: "Tier-3 Timeout",
-    description: "Repeat-offense escalation timeout (tier 3).",
+    label: "Escalation Tier 2 Timeout",
+    description: "Timeout duration for the highest escalation tier (applied at internal tier 4+, i.e. fourth-or-more confirmed disrespect inside the decay window).",
     section: "respect",
     min: MINUTE_MS,
     max: 28 * DAY_MS
@@ -918,7 +918,7 @@ const REGISTRY_ENTRIES = [
     type: SETTING_TYPES.BOOL,
     defaultValue: false,
     label: "Post Auto-Actions to Training Channel",
-    description: "When true, also post auto-action samples to the training channel. Default false because the moderation log channel already shows them with revert controls.",
+    description: "When true, also post auto-action samples (timeout OR warn) to the training channel. Default false because the moderation log channel already shows them with revert controls.",
     section: "training"
   }],
 

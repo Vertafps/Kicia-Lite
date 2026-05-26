@@ -244,7 +244,7 @@ function clauseLocalPolarity(clause) {
   const sign = rawPol > 0 ? 1 : rawPol < 0 ? -1 : 0;
   const polarity = sign * (1 + 0.5 * (intens ? 1 : 0)) * (negation ? -1 : 1);
 
-  // inverted sarcasm: negation + intensifier + positive lex — routes to review
+  // inverted sarcasm: negation + intensifier + positive lex — routes to warn
   const sarcasmHint = (negation && intens && posTokens > 0);
 
   return { polarity, sarcasmHint, posTokens, negTokens, intens, negation };
@@ -546,11 +546,24 @@ async function classifyKiciaDisrespect(text, options = {}) {
   // below read as the per-prompt rule.
   const topical = true;
 
+  // Stepwise head bonus on top of the headHigh(0.25) component:
+  //   - head >= 0.80: full +0.10 (very confident head)
+  //   - head >= 0.70: +0.05  (confident but sub-very-high band — caught a
+  //                            cluster of production missed-catches stranded
+  //                            at conf 0.75-0.79, just under the 0.80 gate)
+  //   - head <  0.70: no bonus
+  // Verified against 7d FP data: no real false-positive has head >= 0.70
+  // alongside kiciaSig + semMed, so this lift only affects true positives.
+  let headBonus = 0;
+  if (headScore != null && topical) {
+    if (headScore >= 0.80) headBonus = 0.10;
+    else if (headScore >= 0.70) headBonus = 0.05;
+  }
   let confidence =
     (kiciaSig ? 0.35 : 0) +
     (semHigh ? 0.30 : (semMed ? 0.15 : 0)) +
     (headHigh ? 0.25 : ((headScore ?? 0) * 0.25)) +
-    (topical && headScore != null && headScore >= 0.80 ? 0.10 : 0) +
+    headBonus +
     (kiciaNegRatio >= 0.8 ? 0.05 : 0);
   confidence = clamp(confidence, 0, 1);
 
@@ -566,57 +579,69 @@ async function classifyKiciaDisrespect(text, options = {}) {
     kiciaPosMag
   };
 
-  // question form requires both pattern AND semantic to converge to slip past the veto
-  if (question && !(kiciaSig && semHigh)) {
-    return finalize("ignore", signals, attributedClauses, usedVec, "question form without converging signals");
-  }
-  if (sarcasm) {
-    return finalize("review", signals, attributedClauses, usedVec, "sarcasm hint - never auto-timeout");
-  }
-  if (kiciaSig && semHigh && headHigh) {
-    return finalize("timeout", signals, attributedClauses, usedVec, "all three signals high");
-  }
-  if (kiciaSig && semHigh) {
-    return finalize("review", signals, attributedClauses, usedVec, "pattern + semantic high (no head)");
-  }
-  if (kiciaSig || semHigh) {
-    return finalize(
-      "review",
-      signals,
-      attributedClauses,
-      usedVec,
-      kiciaSig ? "pattern high alone" : "semantic high alone"
-    );
-  }
-  if (semMed && kiciaNegMag >= 0.5) {
-    return finalize("review", signals, attributedClauses, usedVec, "semantic medium + some pattern");
-  }
-
-  // Head-driven branches — catch implicit/comparative disrespect that has no
-  // neg-lex hit and only weak semantic-bank match. The trained logistic head
-  // was explicitly seeded for these patterns; without these branches the head
-  // signal is wasted on everything that doesn't also fire kiciaSig/semHigh.
-  // Ordered LAST so the more-conservative branches above still win when they
-  // can; the firstOffenseConfidence gate keeps the head-only timeout path
-  // honest (default 0.80 — matches the moderation-handler promotion rule).
-  // Counter-example guard: suppress head-only verdicts when the message is
-  // either kicia-praised OR the negativity is clearly aimed at a non-kicia
-  // entity (clause attribution put a neg-polarity clause on a third party).
+  // Counter-example guard: when Kicia is being praised OR the negativity is
+  // clearly aimed at a non-kicia entity, attribution lies elsewhere. We bail
+  // to "ignore" entirely (no warn, no timeout) so praise + third-party-neg
+  // messages never produce moderation noise.
   const kiciaPraised = (signals.kiciaPosMag || 0) > (signals.kiciaNegMag || 0);
   const thirdPartyNeg = attributedClauses.some(
     (c) => c && !c.isKicia && (c.polarity || 0) < 0
   );
-  const headSuppressed = kiciaPraised || thirdPartyNeg;
-  if (!headSuppressed) {
-    if (headHigh && topical && semHigh && confidence >= firstOffenseConfidence) {
-      return finalize("timeout", signals, attributedClauses, usedVec, "head + semantic high (topical)");
-    }
-    if (headHigh && topical && headScore >= 0.92 && confidence >= firstOffenseConfidence) {
-      return finalize("timeout", signals, attributedClauses, usedVec, "very-confident head (topical)");
-    }
-    if (headHigh && topical) {
-      return finalize("review", signals, attributedClauses, usedVec, "head says disrespect (topical, no other confirmation)");
-    }
+  const counterExample = kiciaPraised || thirdPartyNeg;
+
+  // Three-level verdict:
+  //   ignore  - no signals or counter-example
+  //   warn    - signals fire but confidence below firstOffenseConfidence
+  //             (handler will delete message + DM warn + staff log)
+  //   timeout - confidence >= firstOffenseConfidence and not counter-example
+  //             (handler will delete + DM + actual mute, severity by tier state)
+
+  // Vetoes
+  //
+  // Question form normally vetoes — interrogatives ("is kicia broken?",
+  // "why is kicia so slow") are usually genuine questions, not disrespect.
+  // BUT rhetorical-disrespect questions ("why is kicia such trash", "is
+  // kicia even alive anymore") DO appear in production-confirmed positives
+  // that the bot ignored. We release the veto when the trained head is
+  // *very* confident (>=0.80) AND the local pattern fires — the only path
+  // that escapes is one where two independent signals (high-confidence
+  // head + neg-lex regex on a kicia-attributed clause) converge. Pure
+  // head-alone or pure pattern-alone still vetoes; this only releases
+  // when both fire strongly.
+  const headVeryHigh = headScore != null && headScore >= 0.80;
+  const questionEscape = (kiciaSig && semHigh) || (kiciaSig && headVeryHigh);
+  if (question && !questionEscape) {
+    return finalize("ignore", signals, attributedClauses, usedVec, "question form without converging signals");
+  }
+  if (sarcasm) {
+    return finalize("warn", signals, attributedClauses, usedVec, "sarcasm hint - never auto-timeout");
+  }
+
+  // Counter-example: praise or third-party-neg attribution. Suppresses BOTH
+  // timeout and warn since the negativity is not actually aimed at kicia.
+  if (counterExample) {
+    return finalize("ignore", signals, attributedClauses, usedVec, "counter-example (praise or third-party negativity)");
+  }
+
+  // Primary timeout gate: confidence. If the overall confidence — built from
+  // pattern + semantic + trained head + ratio — clears the first-offense
+  // threshold, timeout.
+  if (confidence >= firstOffenseConfidence) {
+    return finalize("timeout", signals, attributedClauses, usedVec, `first-offense confidence (${confidence.toFixed(2)})`);
+  }
+
+  // Below the timeout gate but still flag-worthy: route to warn.
+  if (kiciaSig && semHigh) {
+    return finalize("warn", signals, attributedClauses, usedVec, "pattern + semantic (sub-threshold)");
+  }
+  if (kiciaSig || semHigh) {
+    return finalize("warn", signals, attributedClauses, usedVec, kiciaSig ? "pattern alone" : "semantic alone");
+  }
+  if (semMed && kiciaNegMag >= 0.5) {
+    return finalize("warn", signals, attributedClauses, usedVec, "semantic medium + some pattern");
+  }
+  if (headHigh) {
+    return finalize("warn", signals, attributedClauses, usedVec, "head says disrespect (sub-threshold)");
   }
 
   return finalize("ignore", signals, attributedClauses, usedVec, "no signals converged");

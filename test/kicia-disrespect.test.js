@@ -118,8 +118,8 @@ test.describe("kicia-disrespect: must-flag cases", () => {
         `expected non-ignore, got ${result.verdict} · reason=${result.reasonText}`
       );
       assert.ok(
-        result.verdict === "timeout" || result.verdict === "review",
-        `verdict must be timeout or review, got ${result.verdict}`
+        result.verdict === "timeout" || result.verdict === "warn",
+        `verdict must be timeout or warn, got ${result.verdict}`
       );
     });
   }
@@ -174,7 +174,7 @@ const MUST_NOT_FLAG_CASES = [
   // tested separately under the CRITICAL section above
 
   // soft criticism never auto-times-out
-  ["i don't like kicia",              "soft criticism · no neg-lex (review at most)"],
+  ["i don't like kicia",              "soft criticism · no neg-lex (warn at most)"],
   ["kicia could be better",           "soft criticism · no neg-lex"]
 ];
 

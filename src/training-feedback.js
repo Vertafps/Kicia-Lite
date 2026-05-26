@@ -182,10 +182,23 @@ async function enqueueTrainingSample(message, classification) {
       confidence: safeConfidence
     });
 
-    const decision = verdict === "timeout" ? "action" : "review";
+    // Distinct corpus labels:
+    //   "action" — auto-timeout was applied. Buttons offer lift/re-tier.
+    //   "warn"   — auto-warn was applied (delete + DM, no timeout). Buttons
+    //              offer the same lift/re-tier flow because the bot did act.
+    //   "review" — no auto-action; staff opinion is the only signal. Buttons
+    //              offer the plain not/light/medium/severe label set.
+    const decision =
+      verdict === "timeout" ? "action"
+        : verdict === "warn" ? "warn"
+          : "review";
 
+    // training.post.action.enabled suppresses the training-channel post for
+    // any verdict that already produced moderation action (timeout OR warn) —
+    // the moderation log channel already shows both with revert controls.
     const postActions = getSetting("training.post.action.enabled");
-    const shouldPost = verdict !== "timeout" || postActions === true;
+    const isAutoAction = verdict === "timeout" || verdict === "warn";
+    const shouldPost = !isAutoAction || postActions === true;
 
     const { sampleId, deduped } = await createTrainingSample({
       classifier: classification.classifier,
@@ -305,7 +318,9 @@ function resolveStaffPingRole(classifier) {
 
 function buildTrainingPanel(sample, classifier) {
   const signals = parseJsonSafe(sample.signalsJson || sample.signals_json);
-  const isAction = sample.decision === "action";
+  const decision = sample.decision || "review";
+  const isAction = decision === "action";
+  const isWarn = decision === "warn";
   const confidenceRaw = Number(signals.confidence ?? 0);
   const confidencePct = Math.round(Math.max(0, Math.min(1, confidenceRaw)) * 100);
 
@@ -331,7 +346,8 @@ function buildTrainingPanel(sample, classifier) {
     fields.push({ name: "Suggested", value: String(sample.severity), inline: true });
   }
   if (sample.actionActionId || sample.action_action_id) {
-    fields.push({ name: "Action", value: "auto-timeout applied", inline: true });
+    const label = isAction ? "auto-timeout applied" : isWarn ? "auto-warn applied" : "auto-action applied";
+    fields.push({ name: "Action", value: label, inline: true });
   }
   if (sample.messageUrl || sample.message_url) {
     fields.push({
@@ -355,7 +371,7 @@ function buildTrainingPanel(sample, classifier) {
   });
 
   return buildRichPanel({
-    title: `Training · ${classifier} · ${isAction ? "auto-action" : "review"}`,
+    title: `Training · ${classifier} · ${isAction ? "auto-action" : isWarn ? "auto-warn" : "review"}`,
     author: { name: sample.authorLabel || sample.author_label || "user" },
     fields,
     color: isAction ? DANGER : WARN,

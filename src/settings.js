@@ -922,6 +922,16 @@ const REGISTRY_ENTRIES = [
     section: "training"
   }],
 
+  // dm circuit breaker — auto-trips when Discord's anti-spam system flags
+  // the bot for too many failed DM attempts (users with DMs disabled).
+  ["dm.circuit.cooldownHours", {
+    type: SETTING_TYPES.FLOAT,
+    defaultValue: 4,
+    label: "DM Cooldown After Anti-Spam Flag",
+    description: "Hours to suspend DM attempts after Discord's anti-spam system flags the bot. Auto-recovers when the window elapses.",
+    section: "dm"
+  }],
+
   // ui
   ["ui.animated-heroes", {
     type: SETTING_TYPES.BOOL,

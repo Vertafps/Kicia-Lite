@@ -4,14 +4,81 @@ const { buildNormalizedTextForms } = require("./text");
 const { scoreLogisticHead } = require("./inline-probe");
 const { recordRuntimeEvent } = require("./runtime-health");
 
-const PRICE_OR_PAYMENT_RE = /\b(?:\$\s*\d+|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx)|cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|gift\s*card|steam\s*g(?:ift\s*card|c)|amazon\s*gc|roblox\s*gc|nitro|venmo|zelle|western\s*union|\bwu\b|moneygram)\b/i;
+// inline two-row Levenshtein — kept local to avoid coupling with prohibited-commerce.
+// Treats adjacent-char transposition as a single edit (restricted Damerau-Levenshtein)
+// so "kciia" vs "kicia" is distance 1 — the canonical scammer-typo case.
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const n = a.length;
+  const m = b.length;
+  // Three rows for the Damerau adjacent-transposition lookback.
+  let prev2 = new Array(m + 1).fill(0);
+  let prev = Array.from({ length: m + 1 }, (_, j) => j);
+  const cur = new Array(m + 1).fill(0);
+  for (let i = 1; i <= n; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= m; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        best = Math.min(best, prev2[j - 2] + 1);
+      }
+      cur[j] = best;
+    }
+    // shift rows: prev2 ← prev, prev ← cur
+    for (let j = 0; j <= m; j++) {
+      prev2[j] = prev[j];
+      prev[j] = cur[j];
+    }
+  }
+  return prev[m];
+}
+
+// `\b` doesn't fire before `$` (both non-word boundary characters), so the
+// dollar-sign alternatives must NOT be word-anchored. Crypto/payment-rail
+// tokens still want \b so they don't trigger inside unrelated words.
+const PRICE_OR_PAYMENT_RE = /(?:\$\s*\d+|\d+\s*\$|\b\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx|euros?|pounds?)\b|\b(?:cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|gift\s*card|steam\s*g(?:ift\s*card|c)|amazon\s*gc|roblox\s*gc|nitro|western\s+union|moneygram|wu)\b)/i;
 const CASHAPP_TAG_RE = /\bcashapp\b[\s\S]{0,20}\$\w+|\$\w+[\s\S]{0,20}\bcashapp\b/i;
 const SELLER_RE = /\b(sell(?:ing|s)?|sold|wts|for\s+sale|taking\s+offers?|vendor|plug|trade|trading|swap(?:ping)?|exchange|exchanging|lf\s*(?:trade|swap)|vouch(?:es|ed)?|going\s+first|gf\s+(?:only|rep)|tos\s+(?:first|required)|t\.?o\.?s\.?\s+first)\b/i;
+// possessive-offer-style: forward form "got X if u want", "have X who wants",
+// "got X for 10"; reverse form "who wants my X", "anyone want my X". The
+// trailing/leading intent-indicator (if u want / hmu / for sale / for $N) is
+// what makes this seller-side rather than benign "I own this".
+const POSSESSIVE_OFFER_RE = /(?:\b(?:got|have|hav|gots?|own|owning)\b[^.\n]{0,30}\b(?:if\s+(?:u|you)\s+want|who\s+wants?|anyone\s+want|lmk|let\s+me\s+know|hmu|dm\s+me|pm\s+me|msg\s+me|for\s+(?:sale|trade|cheap|\d+))|\b(?:who\s+wants?|anyone\s+want)\b[^.\n]{0,20}\bmy\b)/i;
 const TRUSTED_SELLER_RE = /\btrusted(?:\s+seller)?\b/i;
 const MIDDLEMAN_RE = /\b(?:middleman|mm)\b/i;
 const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get)))\b/i;
 const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu|slide\s+in(?:to)?\s+(?:my\s+)?dms?|msg\s+me\s+asap|pm\s+asap|dm\s+urgent|inbox\s+me)\b/i;
 const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?|cracked\s+kicia)\b/i;
+// Words to fuzzy-match against tokens >= 4 chars when KICIA_TOPIC_RE misses.
+// Intentionally excludes short tokens like "hook"/"v2"/"v3" — too many false
+// positives at 1-edit distance, and the regex already catches them.
+const TOPIC_FUZZY_WORDS = ["kicia", "kiciahook", "configs", "config", "keys", "key", "license", "lifetime", "premium"];
+
+// Returns the position of an exact OR fuzzy topic match, or -1 if no match.
+// Exact regex first; falls back to per-token Levenshtein over alpha tokens.
+function topicHitFuzzy(text) {
+  const m = KICIA_TOPIC_RE.exec(text);
+  if (m) return m.index;
+
+  const lower = String(text || "").toLowerCase();
+  const tokenRe = /[a-z]{4,}/g;
+  let match;
+  while ((match = tokenRe.exec(lower)) !== null) {
+    const token = match[0];
+    // too-long tokens (>14) are unlikely typos of any topic word
+    if (token.length > 14) continue;
+    for (const word of TOPIC_FUZZY_WORDS) {
+      const maxDist = word.length <= 6 ? 1 : 2;
+      // cheap length-difference pre-check
+      if (Math.abs(token.length - word.length) > maxDist) continue;
+      if (levenshtein(token, word) <= maxDist) return match.index;
+    }
+  }
+  return -1;
+}
 const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal)\b/i;
 const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+serious|sarcasm|sarcastic)\b|\(jk\)|\(joking\)|\(kidding\)|\blmao\b/i;
 
@@ -180,21 +247,44 @@ function isNewMember(memberAgeMs) {
 function computeDirectionScore(text, denseText) {
   const dense = denseText == null ? densifyObfuscated(text) : denseText;
   const seller = sellerSignal(text, dense);
+  const possessiveHit = POSSESSIVE_OFFER_RE.exec(text)
+    || (dense !== text ? POSSESSIVE_OFFER_RE.exec(dense) : null);
   const buyerHit = BUYER_RE.exec(text);
-  let topicHit = KICIA_TOPIC_RE.exec(text);
-  if (!topicHit && dense !== text) topicHit = KICIA_TOPIC_RE.exec(dense);
-  if (!topicHit && dense !== text && topicHitInDense(dense)) {
-    topicHit = { index: 0 };
+
+  // Resolve topic index: regex on text → regex on dense → dense-substring → fuzzy.
+  let topicIdx = -1;
+  let topicHitFromRegex = KICIA_TOPIC_RE.exec(text);
+  if (topicHitFromRegex) {
+    topicIdx = topicHitFromRegex.index;
+  } else if (dense !== text) {
+    topicHitFromRegex = KICIA_TOPIC_RE.exec(dense);
+    if (topicHitFromRegex) topicIdx = topicHitFromRegex.index;
   }
-  if (seller.hit && topicHit) {
-    const sellerRef = SELLER_RE.exec(text)
-      || (dense !== text ? SELLER_RE.exec(dense) : null)
-      || TRUSTED_SELLER_RE.exec(text)
-      || MIDDLEMAN_RE.exec(text);
-    if (sellerRef && Math.abs(sellerRef.index - topicHit.index) <= 40) return +2;
-    return +1;
+  if (topicIdx < 0 && dense !== text && topicHitInDense(dense)) {
+    topicIdx = 0;
   }
-  if (buyerHit && !seller.hit) return -2;
+  if (topicIdx < 0) {
+    const fuzzy = topicHitFuzzy(text);
+    if (fuzzy >= 0) topicIdx = fuzzy;
+  }
+
+  // Buyer veto only fires when neither seller-verb nor possessive-offer is present
+  if (buyerHit && !seller.hit && !possessiveHit) return -2;
+
+  if (topicIdx >= 0) {
+    if (seller.hit) {
+      const sellerRef = SELLER_RE.exec(text)
+        || (dense !== text ? SELLER_RE.exec(dense) : null)
+        || TRUSTED_SELLER_RE.exec(text)
+        || MIDDLEMAN_RE.exec(text);
+      if (sellerRef && Math.abs(sellerRef.index - topicIdx) <= 40) return +2;
+      return +1;
+    }
+    if (possessiveHit) {
+      if (Math.abs(possessiveHit.index - topicIdx) <= 40) return +2;
+      return +1;
+    }
+  }
   return 0;
 }
 
@@ -458,13 +548,21 @@ async function classifyScamTrade(text, options = {}) {
   const directionScore = computeDirectionScore(folded, dense);
   const priceHitFolded = PRICE_OR_PAYMENT_RE.test(folded) || CASHAPP_TAG_RE.test(folded);
   const priceHitDense = usedDense && (PRICE_OR_PAYMENT_RE.test(dense) || CASHAPP_TAG_RE.test(dense));
-  const priceHit = priceHitFolded || priceHitDense;
+  // Possessive-offer "for N" (e.g. "got configs for 10") is price intent even
+  // without an explicit currency symbol — scammer shorthand on a kicia-server.
+  // Only counts when seller-direction is already established (avoids
+  // "got home from work for 10 minutes" style false positives).
+  const possessiveForN = directionScore >= 1
+    && /\b(?:got|have|hav|gots?|own|owning)\b[^.\n]{0,30}\bfor\s+\d+\b/i.test(folded);
+  const priceHit = priceHitFolded || priceHitDense || possessiveForN;
   const dmHitFolded = DM_RE.test(folded);
   const dmHitDense = usedDense && DM_RE.test(dense);
   const dmHit = dmHitFolded || dmHitDense;
   const topicHitFolded = KICIA_TOPIC_RE.test(folded);
   const topicHitDense = usedDense && (KICIA_TOPIC_RE.test(dense) || topicHitInDense(dense));
-  const topicHit = topicHitFolded || topicHitDense;
+  // fuzzy fallback for deliberate scammer typos ("confits", "kciia", "kicha")
+  const topicHitFuzzyMatch = !topicHitFolded && !topicHitDense && topicHitFuzzy(folded) >= 0;
+  const topicHit = topicHitFolded || topicHitDense || topicHitFuzzyMatch;
   const obfuscated = usedDense && (
     (priceHitDense && !priceHitFolded)
     || (dmHitDense && !dmHitFolded)
@@ -724,11 +822,14 @@ module.exports = {
     bumpSeverity,
     DEFAULTS,
     SELLER_RE,
+    POSSESSIVE_OFFER_RE,
     BUYER_RE,
     KICIA_TOPIC_RE,
     DM_RE,
     PRICE_OR_PAYMENT_RE,
     META_OR_WARNING_RE,
-    JOKE_RE
+    JOKE_RE,
+    topicHitFuzzy,
+    levenshtein
   }
 };

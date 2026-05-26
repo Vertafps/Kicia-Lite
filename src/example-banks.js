@@ -89,7 +89,26 @@ const SCAM_SELL_BANK = [
   "trading my kicia hook for cash",
   "swapping kicia keys for ue keys",
   "anyone wanna trade kicia for v3",
-  "ill trade my kicia for fluxus"
+  "ill trade my kicia for fluxus",
+  "got kicia who wants",
+  "have v3 if anyone wants",
+  "got configs for 10",
+  "i got v3 prem if u want",
+  "who wants my kicia",
+  "got kicia hmu in dms",
+  "have my kicia for trade",
+  "yo got kicia who wants",
+  "got an extra v3 hmu",
+  "own a spare kicia lifetime",
+  "selling confgs cheap",
+  "sellin kicia dm",
+  "wts kica hmu",
+  "trading kciia for ue",
+  "trade my v3 for ur paypal",
+  "trade ur ue and ill add cash",
+  "trading my kicia for robux + ue",
+  "ill trade kicia for ur acc",
+  "who has ue and wants kicia"
 ];
 
 const SCAM_BUY_BANK = [
@@ -142,7 +161,12 @@ const SCAM_BUY_BANK = [
   "official kicia download link",
   "do i need to pay for kicia",
   "kicia trial free",
-  "free kicia configs link"
+  "free kicia configs link",
+  "anyone got a free kicia",
+  "anyone got configs to share",
+  "where do i download free configs",
+  "how do i get the cracked kicia",
+  "is there a working kicia free version"
 ];
 
 const RESPECT_DISRESPECT_BANK = [

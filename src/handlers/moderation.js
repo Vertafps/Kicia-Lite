@@ -39,7 +39,7 @@ const {
   recordModerationAction
 } = require("../restricted-emoji-db");
 const { recordRuntimeEvent } = require("../runtime-health");
-const { safeSend } = require("../utils/respond");
+const { safeSend, trySendDM } = require("../utils/respond");
 const { classifyScamTrade } = require("../scam-trade");
 const { classifyKiciaDisrespect } = require("../kicia-disrespect");
 const { enqueueTrainingSample } = require("../training-feedback");
@@ -161,10 +161,10 @@ function buildBlockedLinkUserPayload({ message, signal, durationMs }) {
   return {
     embeds: [
       buildPanel({
-        header: isTimeout ? "Message Removed" : "Heads-up",
+        header: isTimeout ? "Timeout Applied" : "Message Removed",
         body: isTimeout
-          ? `hey — that link looked high-risk so it was removed. you're muted for ${formatDuration(durationMs)}. if this was wrong, ping staff in the server.`
-          : "hey — that link looked risky so it was removed. friendly heads-up.",
+          ? `I've muted you for ${formatDuration(durationMs)} because your recent message contained a high-risk link (phishing, malware, or untrusted domain). If this was a misread, ping staff.`
+          : "I've removed your recent message because it contained a high-risk link (phishing, malware, or untrusted domain). No timeout this time. If this was a misread, ping staff.",
         color: WARN
       })
     ]
@@ -175,8 +175,8 @@ function buildCommerceUserPayload({ message, result, durationMs }) {
   return {
     embeds: [
       buildPanel({
-        header: "Message Removed",
-        body: `hey — that looked like a sale/trade of something not allowed. you're muted for ${formatDuration(durationMs)}. if this was a misread, ping staff.`,
+        header: "Timeout Applied",
+        body: `I've muted you for ${formatDuration(durationMs)} because your recent message was flagged for prohibited commerce (selling, trading, or advertising restricted items). If this was a misread, ping staff.`,
         color: WARN
       })
     ]
@@ -187,8 +187,8 @@ function buildScamTradeUserPayload({ message, result, durationMs }) {
   return {
     embeds: [
       buildPanel({
-        header: "Message Removed",
-        body: `hey — your message looked like a sale/trade, so it got removed. you're muted for ${formatDuration(durationMs)}. if this was wrong, just ping staff in the server.`,
+        header: "Timeout Applied",
+        body: `I've muted you for ${formatDuration(durationMs)} because your recent message was flagged for selling/trading Kicia products (configs, keys, premium, lifetime, etc.). If this was a misread, ping staff.`,
         color: WARN
       })
     ]
@@ -199,8 +199,8 @@ function buildScamTradeWarnPayload({ message, result }) {
   return {
     embeds: [
       buildPanel({
-        header: "Heads-up",
-        body: "hey — your message looked like a sale/trade so it got removed. friendly heads-up; staff is reviewing. if this was wrong, just ping staff in the server.",
+        header: "Message Removed",
+        body: "I've removed your recent message because it was flagged for selling/trading Kicia products (configs, keys, premium, lifetime, etc.). No timeout this time. If this was a misread, ping staff.",
         color: WARN
       })
     ]
@@ -212,8 +212,8 @@ function buildRespectUserPayload({ message, durationMs, tier, action }) {
     return {
       embeds: [
         buildPanel({
-          header: "Heads-up",
-          body: "hey — your message got flagged for disrespect toward kicia. friendly heads-up, no timeout this time. ping staff if it was a misread.",
+          header: "Message Removed",
+          body: "I've removed your recent message because it was flagged for disrespect toward Kicia (negative language directed at the product). No timeout this time. If this was a misread, ping staff.",
           color: WARN
         })
       ]
@@ -222,8 +222,8 @@ function buildRespectUserPayload({ message, durationMs, tier, action }) {
   return {
     embeds: [
       buildPanel({
-        header: "Message Flagged",
-        body: `hey — that message got flagged for disrespect toward kicia. you're muted for ${formatDuration(durationMs)}. if it was a misread, ping staff.`,
+        header: "Timeout Applied",
+        body: `I've muted you for ${formatDuration(durationMs)} because your recent message was flagged for disrespect toward Kicia (negative language directed at the product). If this was a misread, ping staff.`,
         color: WARN
       })
     ]
@@ -232,13 +232,14 @@ function buildRespectUserPayload({ message, durationMs, tier, action }) {
 
 // ─── log panels (always routed to log channel) ───────────────────────────────
 
-function buildBlockedLinkLogPanel({ message, signal, timeoutResult, deleteResult, dmSent, durationMs }) {
+function buildBlockedLinkLogPanel({ message, signal, timeoutResult, deleteResult, dmSent, dmReason, durationMs }) {
   const link = deleteResult?.deleted ? null : buildMessageUrl(message);
   const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const shownLinks = (signal.blockedLinks || []).slice(0, 5).map((e) => `- ${e.raw}`).join("\n");
   const action = signal.action || "timeout";
-  const actionText = `${action} · timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "✓" : "✗"}`;
+  const dmLabel = dmSent ? "✓" : (dmReason ? `✗ (${dmReason})` : "✗");
+  const actionText = `${action} · timeout ${timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`;
 
   return buildRichPanel({
     title: action === "timeout"
@@ -262,7 +263,7 @@ function buildBlockedLinkLogPanel({ message, signal, timeoutResult, deleteResult
   });
 }
 
-function buildCommerceLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs }) {
+function buildCommerceLogPanel({ message, result, timeoutResult, deleteResult, dmSent, dmReason, durationMs }) {
   const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
 
@@ -277,7 +278,7 @@ function buildCommerceLogPanel({ message, result, timeoutResult, deleteResult, d
       { name: "Term", value: `\`${String(result.term || "—")}\``, inline: true },
       { name: "Timeout", value: timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason, inline: true },
       { name: "Delete", value: deleteResult.deleted ? "ok" : deleteResult.reason || "skipped", inline: true },
-      { name: "DM", value: dmSent ? "sent" : "failed", inline: true },
+      { name: "DM", value: dmSent ? "sent" : (dmReason ? `failed (${dmReason})` : "failed"), inline: true },
       { name: "Reason", value: result.reason || "prohibited pattern", inline: false },
       { name: "Evidence", value: trimExcerpt(message.content) }
     ],
@@ -285,7 +286,7 @@ function buildCommerceLogPanel({ message, result, timeoutResult, deleteResult, d
   });
 }
 
-function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs, action = "timeout" }) {
+function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, dmSent, dmReason, durationMs, action = "timeout" }) {
   const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const signals = result.signals || {};
@@ -295,9 +296,10 @@ function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, 
   const title = isWarn
     ? `Scam/Trade Warning · ${result.severity || "?"}`
     : (timeoutResult.applied ? `Scam/Trade Timeout · ${result.severity || "?"}` : "Scam/Trade Alert");
+  const dmLabel = dmSent ? "ok" : (dmReason ? `✗ (${dmReason})` : "✗");
   const actionLine = isWarn
-    ? `warn (no timeout) · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`
-    : `${timeoutResult.applied ? "timeout " + formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`;
+    ? `warn (no timeout) · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`
+    : `${timeoutResult.applied ? "timeout " + formatDuration(durationMs) : timeoutResult.reason} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`;
 
   return buildRichPanel({
     title,
@@ -323,16 +325,17 @@ function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, 
   });
 }
 
-function buildRespectLogPanel({ message, result, timeoutResult, deleteResult, dmSent, durationMs, tier, action = "timeout" }) {
+function buildRespectLogPanel({ message, result, timeoutResult, deleteResult, dmSent, dmReason, durationMs, tier, action = "timeout" }) {
   const avatar = resolveAvatarURL(message.author);
   const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
   const signals = result.signals || {};
   const semDelta = Number(signals.semDisrespect ?? 0);
   const kiciaNegRatio = Number(signals.kiciaNegRatio ?? 0);
   const isWarn = action === "warn";
+  const dmLabel = dmSent ? "ok" : (dmReason ? `✗ (${dmReason})` : "✗");
   const actionLine = isWarn
-    ? `warn (no timeout) · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`
-    : `${durationMs > 0 ? "timeout " + formatDuration(durationMs) : "warn DM only"} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmSent ? "ok" : "✗"}`;
+    ? `warn (no timeout) · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`
+    : `${durationMs > 0 ? "timeout " + formatDuration(durationMs) : "warn DM only"} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`;
 
   return buildRichPanel({
     title: `Kicia Disrespect · tier ${tier}${isWarn ? " · warn" : ""}`,
@@ -434,9 +437,11 @@ async function handleBlockedLinkMessage(message, signal, {
   const timeoutResult = action === "timeout"
     ? await tryTimeoutMessageMember(message.member, timeoutMs, "high-risk link")
     : { applied: false, reason: action === "warn" ? "warning only" : "not needed" };
-  const dmSent = (action === "timeout" || action === "warn")
-    ? await safeSend(message.author, buildBlockedLinkUserPayload({ message, signal, durationMs: timeoutMs }))
-    : false;
+  const dmAttempt = (action === "timeout" || action === "warn")
+    ? await trySendDM(message.author, buildBlockedLinkUserPayload({ message, signal, durationMs: timeoutMs }))
+    : { sent: false, reason: null };
+  const dmSent = dmAttempt.sent;
+  const dmReason = dmAttempt.reason;
   const deleteResult = action !== "review"
     ? await tryDeleteMessage(message)
     : { deleted: false, reason: "review only" };
@@ -454,7 +459,7 @@ async function handleBlockedLinkMessage(message, signal, {
   );
 
   const embed = buildBlockedLinkLogPanel({
-    message, signal, timeoutResult, deleteResult, dmSent, durationMs: timeoutMs
+    message, signal, timeoutResult, deleteResult, dmSent, dmReason, durationMs: timeoutMs
   });
   const review = await createReviewRecord(message, {
     actionType: "blocked_link",
@@ -482,7 +487,9 @@ async function handleProhibitedCommerceMessage(message, result, {
 } = {}) {
   const timeoutMs = 60 * 60 * 1000; // 1 hour for commerce violations
   const timeoutResult = await tryTimeoutMessageMember(message.member, timeoutMs, "prohibited commerce");
-  const dmSent = await safeSend(message.author, buildCommerceUserPayload({ message, result, durationMs: timeoutMs }));
+  const dmResult = await trySendDM(message.author, buildCommerceUserPayload({ message, result, durationMs: timeoutMs }));
+  const dmSent = dmResult.sent;
+  const dmReason = dmResult.reason;
   const deleteResult = await tryDeleteMessage(message);
 
   if (!timeoutResult.applied) {
@@ -494,7 +501,7 @@ async function handleProhibitedCommerceMessage(message, result, {
   );
 
   const embed = buildCommerceLogPanel({
-    message, result, timeoutResult, deleteResult, dmSent, durationMs: timeoutMs
+    message, result, timeoutResult, deleteResult, dmSent, dmReason, durationMs: timeoutMs
   });
   const review = await createReviewRecord(message, {
     actionType: "prohibited_commerce",
@@ -536,7 +543,9 @@ async function handleScamTradeMessage(message, result, {
   const dmPayload = isWarn
     ? buildScamTradeWarnPayload({ message, result })
     : buildScamTradeUserPayload({ message, result, durationMs });
-  const dmSent = await safeSend(message.author, dmPayload);
+  const dmResult = await trySendDM(message.author, dmPayload);
+  const dmSent = dmResult.sent;
+  const dmReason = dmResult.reason;
 
   if (!isWarn && !timeoutResult.applied) {
     recordRuntimeEvent("warn", "scam-trade-timeout", timeoutResult.reason);
@@ -549,7 +558,7 @@ async function handleScamTradeMessage(message, result, {
   );
 
   const embed = buildScamTradeLogPanel({
-    message, result, timeoutResult, deleteResult, dmSent, durationMs, action
+    message, result, timeoutResult, deleteResult, dmSent, dmReason, durationMs, action
   });
   const review = await createReviewRecord(message, {
     actionType: isWarn ? "scam_trade_warn" : "scam_trade_timeout",
@@ -647,10 +656,12 @@ async function handleKiciaDisrespectMessage(message, result, {
     timeoutResult = await tryTimeoutMessageMember(message.member, durationMs, "disrespect toward kicia");
   }
 
-  const dmSent = await safeSend(
+  const dmResult = await trySendDM(
     message.author,
     buildRespectUserPayload({ message, durationMs, tier: effectiveTier, action: effectiveAction })
   );
+  const dmSent = dmResult.sent;
+  const dmReason = dmResult.reason;
 
   if (!isWarn && !timeoutResult.applied) {
     recordRuntimeEvent("warn", "respect-timeout", timeoutResult.reason);
@@ -663,7 +674,7 @@ async function handleKiciaDisrespectMessage(message, result, {
   );
 
   const embed = buildRespectLogPanel({
-    message, result, timeoutResult, deleteResult, dmSent, durationMs, tier: effectiveTier, action: effectiveAction
+    message, result, timeoutResult, deleteResult, dmSent, dmReason, durationMs, tier: effectiveTier, action: effectiveAction
   });
   const review = await createReviewRecord(message, {
     actionType: isWarn ? "respect_disrespect_warn" : "respect_disrespect",

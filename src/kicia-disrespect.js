@@ -585,14 +585,22 @@ async function classifyKiciaDisrespect(text, options = {}) {
   // Ordered LAST so the more-conservative branches above still win when they
   // can; the firstOffenseConfidence gate keeps the head-only timeout path
   // honest (default 0.80 — matches the moderation-handler promotion rule).
-  if (headHigh && topical && semHigh && confidence >= firstOffenseConfidence) {
-    return finalize("timeout", signals, attributedClauses, usedVec, "head + semantic high (topical)");
-  }
-  if (headHigh && topical && headScore >= 0.92 && confidence >= firstOffenseConfidence) {
-    return finalize("timeout", signals, attributedClauses, usedVec, "very-confident head (topical)");
-  }
-  if (headHigh && topical) {
-    return finalize("review", signals, attributedClauses, usedVec, "head says disrespect (topical, no other confirmation)");
+  // Counter-example guard: if Kicia is being praised in the same message
+  // (kiciaPosMag > kiciaNegMag), suppress head-only verdicts. The head may
+  // fire because of unrelated negativity in the text ("kicia is good ue is
+  // dogshit" — head sees "dogshit", clause attribution puts it on ue, but
+  // a pure-head branch would still flag).
+  const kiciaPraised = (signals.kiciaPosMag || 0) > (signals.kiciaNegMag || 0);
+  if (!kiciaPraised) {
+    if (headHigh && topical && semHigh && confidence >= firstOffenseConfidence) {
+      return finalize("timeout", signals, attributedClauses, usedVec, "head + semantic high (topical)");
+    }
+    if (headHigh && topical && headScore >= 0.92 && confidence >= firstOffenseConfidence) {
+      return finalize("timeout", signals, attributedClauses, usedVec, "very-confident head (topical)");
+    }
+    if (headHigh && topical) {
+      return finalize("review", signals, attributedClauses, usedVec, "head says disrespect (topical, no other confirmation)");
+    }
   }
 
   return finalize("ignore", signals, attributedClauses, usedVec, "no signals converged");

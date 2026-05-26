@@ -16,7 +16,7 @@
 const { GHOST_PING_RETENTION_MS } = require("../config");
 const { getSetting } = require("../settings");
 const { buildRichPanel, WARN, resolveAvatarURL } = require("../embed");
-const { sendLogPanel } = require("../log-channel");
+const { sendIgnoreLogPanel } = require("../log-channel");
 const { hasModerationBypassMessage } = require("../permissions");
 const { recordRuntimeEvent } = require("../runtime-health");
 
@@ -145,7 +145,9 @@ async function maybeHandleGhostPing(message) {
   if (!guild) return false;
 
   try {
-    await sendLogPanel(guild, buildGhostPingPanel(entry, guild));
+    // Ghost pings are noisy, ambient signal — route to ignore-logs channel
+    // (falls back to main logs if ignore-logs slot isn't configured).
+    await sendIgnoreLogPanel(guild, buildGhostPingPanel(entry, guild));
   } catch (err) {
     recordRuntimeEvent("warn", "ghost-ping-log", err?.message || err);
   }

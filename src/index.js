@@ -8,7 +8,7 @@ const { startDailyStatsScheduler, trackDailyStatsMessage } = require("./daily-st
 const { buildPanel, DANGER, INFO, WARN } = require("./embed");
 const { fetchKb } = require("./kb");
 const { refreshScamPulseFeeds } = require("./link-policy");
-const { sendLogPanel } = require("./log-channel");
+const { sendIgnoreLogPanel, sendLogPanel } = require("./log-channel");
 const { applyConfiguredPresenceState } = require("./presence-state");
 const { maybeHandleControlCommand } = require("./handlers/commands");
 const {
@@ -190,12 +190,13 @@ function isBotPing(message) {
   return !!client.user && message.mentions.users.has(client.user.id);
 }
 
-async function sendClientLogPanel(readyClient, panel) {
+async function sendClientLogPanel(readyClient, panel, { ignoreLog = false } = {}) {
   const guilds = [...(readyClient.guilds?.cache?.values?.() || [])];
+  const send = ignoreLog ? sendIgnoreLogPanel : sendLogPanel;
   let sent = false;
 
   for (const guild of guilds) {
-    const didSend = await sendLogPanel(guild, panel).catch(() => false);
+    const didSend = await send(guild, panel).catch(() => false);
     sent = sent || didSend;
   }
 
@@ -231,12 +232,16 @@ async function refreshAndReportThreatFeed(readyClient, { initial = false } = {})
   try {
     const pulse = await refreshScamPulseFeeds();
     console.log(`Threat feed ${initial ? "primed" : "refreshed"}: ${pulse.domains} domains, ${pulse.urls} URLs`);
-    await sendClientLogPanel(readyClient, buildThreatFeedRefreshPanel({ pulse, initial }));
+    // Hourly threat-feed refresh is ambient telemetry — route to ignore-logs
+    // so it doesn't crowd the moderation feed. Falls back to main logs if
+    // ignore-logs slot isn't configured.
+    await sendClientLogPanel(readyClient, buildThreatFeedRefreshPanel({ pulse, initial }), { ignoreLog: true });
     return pulse;
   } catch (err) {
     const message = err?.message || String(err);
     console.warn(`${initial ? "Initial" : "Scheduled"} threat feed refresh failed:`, message);
     recordRuntimeEvent("warn", "threat-feed-refresh", message);
+    // Failures stay on the main log channel — those need attention.
     await sendClientLogPanel(readyClient, buildThreatFeedRefreshPanel({ error: message })).catch(() => false);
     return null;
   }

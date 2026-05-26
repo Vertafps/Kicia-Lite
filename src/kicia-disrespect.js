@@ -97,7 +97,7 @@ const POS_LEX = new Set([
 
 const INTENSIFIER_RE = /\b(so+|really|literally|actually|fr|deadass|honestly|absolutely|completely)\b/i;
 const NEGATION_RE = /\b(not|isn'?t|aren'?t|wasn'?t|weren'?t|never|no|barely|hardly|scarcely)\b/i;
-const QUESTION_PATTERN_RE = /\?$|^\s*(is|are|does|do|why|how|when|what|can|could|should|will|would)\b/i;
+const QUESTION_PATTERN_RE = /\?$|^\s*(is|are|does|do|did|why|how|when|what|where|who|which|can|could|should|will|would|may|might)\b/i;
 const CONSTRUCTIVE_RE = /\b(wish|hope|should\s+add|could\s+add|would\s+be\s+nice|please\s+add|feature\s+request|suggestion|i'?d\s+love|if\s+it\s+had)\b/i;
 const COPULA_RE = /\b(is|are|was|were|feels?|feel|seems?)\b/i;
 

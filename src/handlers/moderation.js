@@ -556,16 +556,26 @@ async function handleKiciaDisrespectMessage(message, result, {
     recordRuntimeEvent("warn", "respect-tier-bump", err?.message || err);
   }
 
+  // High-confidence first-offense bypass: tier-1 promotes to tier-2 when the
+  // classifier is confident enough, so blatant disrespect mutes immediately
+  // instead of only emitting a warn-DM.
+  const conf = Number(result?.signals?.confidence ?? 0);
+  const firstOffenseThreshold = Number(getSetting("respect.firstoffense.confidence") ?? 0.85);
+  let effectiveTier = tier;
+  if (effectiveTier === 1 && Number.isFinite(conf) && conf >= firstOffenseThreshold) {
+    effectiveTier = 2;
+  }
+
   let durationMs = 0;
-  if (tier >= 2) {
+  if (effectiveTier >= 2) {
     const t2 = Number(getSetting("respect.timeout"));
     durationMs = Number.isFinite(t2) && t2 > 0 ? t2 : 15 * 60 * 1000;
   }
-  if (tier === 3) {
+  if (effectiveTier === 3) {
     const t3 = Number(getSetting("respect.tier2.timeout"));
     durationMs = Number.isFinite(t3) && t3 > 0 ? t3 : 60 * 60 * 1000;
   }
-  if (tier >= 4) {
+  if (effectiveTier >= 4) {
     const t4 = Number(getSetting("respect.tier3.timeout"));
     durationMs = Number.isFinite(t4) && t4 > 0 ? t4 : 24 * 60 * 60 * 1000;
   }
@@ -575,7 +585,7 @@ async function handleKiciaDisrespectMessage(message, result, {
     : { applied: false, reason: "tier 1 warn only" };
   const dmSent = await safeSend(
     message.author,
-    buildRespectUserPayload({ message, durationMs, tier })
+    buildRespectUserPayload({ message, durationMs, tier: effectiveTier })
   );
   const deleteResult = await tryDeleteMessage(message);
 
@@ -590,11 +600,11 @@ async function handleKiciaDisrespectMessage(message, result, {
   );
 
   const embed = buildRespectLogPanel({
-    message, result, timeoutResult, deleteResult, dmSent, durationMs, tier
+    message, result, timeoutResult, deleteResult, dmSent, durationMs, tier: effectiveTier
   });
   const review = await createReviewRecord(message, {
     actionType: "respect_disrespect",
-    actionLabel: `respect tier${tier}`,
+    actionLabel: `respect tier${effectiveTier}`,
     timeoutMs: durationMs,
     timeoutApplied: timeoutResult.applied,
     deleteApplied: deleteResult.deleted,
@@ -612,7 +622,7 @@ async function handleKiciaDisrespectMessage(message, result, {
   if (result && typeof result === "object") {
     result.actionActionId = review.actionId;
     result.durationMs = durationMs;
-    result.severity = `tier${tier}`;
+    result.severity = `tier${effectiveTier}`;
   }
 
   return true;

@@ -293,6 +293,10 @@ function pickSeverity(H, confidence, signalsOrPriceHit, dmHitOrOptions, maybeOpt
     base = "medium";
   } else if (H >= 3) {
     base = "light";
+  } else if (H === 2 && directionScore >= 2) {
+    // strong direction (seller-verb within 40 chars of kicia-topic) + one
+    // corroborating signal — tight enough to auto-action at "light"
+    base = "light";
   } else if ((H === 2 && priceHit && dmHit) || repeat) {
     base = "light";
   }
@@ -607,11 +611,26 @@ async function classifyScamTrade(text, options = {}) {
     "scam.firstoffense.confidence",
     DEFAULTS.firstOffenseConfidence
   ));
-  // new-account + price+dm+direction caps the gate at 0.65 — H=3 cold-start
-  // tops out around 0.67 even with the +0.10 bump.
-  const effectiveConfidenceGate = (newAccount && priceHit && dmHit && directionScore >= 2)
-    ? Math.min(firstOffenseConfidence, 0.65)
-    : firstOffenseConfidence;
+
+  // directionScore=+2 means seller-verb and Kicia-topic are within 40 chars —
+  // tight semantic proximity. When that's maxed out, one corroborating signal
+  // (semantic, head, price, dm) is enough — H=2 with strong direction qualifies.
+  // Weaker direction still needs the full H>=3 stack.
+  const strongDirection = directionScore >= 2;
+  const minH = strongDirection ? 2 : 3;
+
+  // Gate thresholds:
+  //   - new-account + price+dm+direction: cap at 0.65 — H=3 cold-start tops
+  //     around 0.67 even with the +0.10 bump.
+  //   - H=2 + strongDirection: confidence math caps near 0.58, so use 0.40 —
+  //     comfortably reachable when sem clears its threshold, but well above
+  //     the ~0.29 ceiling for H=1.
+  let effectiveConfidenceGate = firstOffenseConfidence;
+  if (newAccount && priceHit && dmHit && directionScore >= 2) {
+    effectiveConfidenceGate = Math.min(firstOffenseConfidence, 0.65);
+  } else if (strongDirection && H === 2) {
+    effectiveConfidenceGate = Math.min(firstOffenseConfidence, 0.40);
+  }
 
   const jokeBypassEligible = jokeMarker && !newAccount
     && (options.hasBypass === true || (Number.isFinite(options.memberAgeMs) && options.memberAgeMs > 7 * 86_400_000));
@@ -620,7 +639,7 @@ async function classifyScamTrade(text, options = {}) {
   let severity = null;
   let jokeDowngraded = false;
 
-  if (H >= 3 && directionScore >= 2 && confidence >= effectiveConfidenceGate) {
+  if (H >= minH && strongDirection && confidence >= effectiveConfidenceGate) {
     const sev = pickSeverity(H, confidence, signals, { isNewAccount: newAccount, repeatOffender });
     if (sev) {
       verdict = "timeout";

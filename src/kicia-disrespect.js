@@ -84,8 +84,7 @@ const NEG_LEX = new Set([
   "trash", "dogshit", "mid", "ass", "buns", "garbage", "bad", "sucks", "sucked",
   "suck", "shit", "awful", "terrible", "horrible", "broken", "useless", "dead",
   "dying", "cooked", "scam", "fraud", "ripoff", "overrated", "slow", "laggy",
-  "buggy", "unstable", "unreliable", "lame", "weak", "aids", "ratio", "fucked",
-  "fuckin"
+  "buggy", "unstable", "unreliable", "lame", "weak", "fucked", "fuckin"
 ]);
 
 const POS_LEX = new Set([

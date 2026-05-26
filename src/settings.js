@@ -456,6 +456,15 @@ const REGISTRY_ENTRIES = [
     min: MINUTE_MS,
     max: 7 * DAY_MS
   }],
+  ["respect.firstoffense.confidence", {
+    type: SETTING_TYPES.FLOAT,
+    defaultValue: 0.80,
+    label: "Respect First-Offense Confidence",
+    description: "When confidence is at or above this, skip the tier-1 warn-only path and timeout on first offense.",
+    section: "respect",
+    min: 0,
+    max: 1
+  }],
   ["respect.threshold.action", {
     type: SETTING_TYPES.FLOAT,
     defaultValue: 0.80,

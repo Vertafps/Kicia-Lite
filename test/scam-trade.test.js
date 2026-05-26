@@ -720,7 +720,10 @@ test.describe("account-age severity bump", () => {
 // ============================================================================
 
 test.describe("repeat offender bump", () => {
-  const MSG = "selling kicia dm me";  // baseline → review (H=2 with direction+dm+topic)
+  // "selling kicia" alone → baseline review (H=1 with direction-only, no
+  // corroborating signal). H=2+strongDirection now auto-actions, so we need a
+  // genuinely review-tier baseline to exercise the review→timeout promotion.
+  const MSG = "selling kicia";
 
   test("repeatOffender=true surfaces signals.repeatOffender", async () => {
     const result = await classifyScamTrade(MSG, { repeatOffender: true });

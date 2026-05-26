@@ -81,7 +81,15 @@ const SCAM_SELL_BANK = [
   "got premium kicia configs dm",
   "have v3 lifetime hmu",
   "selling kicia method",
-  "kicia method dm me"
+  "kicia method dm me",
+  "anyone wanna swap kicia for ue",
+  "wanna trade kicia for ue",
+  "trade ue for kicia",
+  "ill swap my kicia for ur ue",
+  "trading my kicia hook for cash",
+  "swapping kicia keys for ue keys",
+  "anyone wanna trade kicia for v3",
+  "ill trade my kicia for fluxus"
 ];
 
 const SCAM_BUY_BANK = [

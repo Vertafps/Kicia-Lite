@@ -503,7 +503,7 @@ const REGISTRY_ENTRIES = [
   }],
   ["respect.head.threshold", {
     type: SETTING_TYPES.FLOAT,
-    defaultValue: 0.78,
+    defaultValue: 0.65,
     label: "Head Threshold",
     description: "Trained-head sigmoid score above which the disrespect head signal counts.",
     section: "respect",

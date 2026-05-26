@@ -38,8 +38,9 @@ test.beforeEach(() => {
 test("getSetting returns descriptor default when nothing is cached or persisted", () => {
   // scam.guard.enabled defaults to true per registry
   assert.equal(getSetting("scam.guard.enabled"), true);
-  // respect.head.threshold defaults to 0.78
-  assert.equal(getSetting("respect.head.threshold"), 0.78);
+  // respect.head.threshold defaults to 0.65 — dropped so the trained head can
+  // drive verdicts on implicit/comparative disrespect that has no neg-lex hit.
+  assert.equal(getSetting("respect.head.threshold"), 0.65);
   // scam.timeout is not a key — scam.severity.light.timeout defaults to 1h
   assert.equal(getSetting("scam.severity.light.timeout"), 3_600_000);
 });
@@ -152,7 +153,7 @@ test("setSetting persists value; hydrateSettingsCache loads it; getSetting retur
 
   // Clear the cache, then re-hydrate from db.
   __resetForTests();
-  assert.equal(getSetting("respect.head.threshold"), 0.78, "should return default after cache clear");
+  assert.equal(getSetting("respect.head.threshold"), 0.65, "should return default after cache clear");
 
   await hydrateSettingsCache(db);
   assert.equal(getSetting("respect.head.threshold"), 0.90, "should return persisted value after hydrate");

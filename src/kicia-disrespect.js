@@ -101,6 +101,11 @@ const QUESTION_PATTERN_RE = /\?$|^\s*(is|are|does|do|why|how|when|what|can|could
 const CONSTRUCTIVE_RE = /\b(wish|hope|should\s+add|could\s+add|would\s+be\s+nice|please\s+add|feature\s+request|suggestion|i'?d\s+love|if\s+it\s+had)\b/i;
 const COPULA_RE = /\b(is|are|was|were|feels?|feel|seems?)\b/i;
 
+// "v3 worse than v2", "kicia behind every exec", "v3 is bottom barrel"
+const COMPARATIVE_NEG_RE = /\b(?:worse\s+than|behind|bottom\s+(?:of|tier|barrel)|worst|lowest)\b/i;
+// "ue mogs kicia", "fluxus destroys kicia" — put-down verb with kicia as object
+const COMPARATIVE_PUTDOWN_RE = /\b(mogs|smokes|destroys|cooks|outclasses|beats)\b/i;
+
 function splitClauses(folded) {
   const source = String(folded || "").trim();
   if (!source) return [];
@@ -229,6 +234,39 @@ function clauseLocalPolarity(clause) {
   const sarcasmHint = (negation && intens && posTokens > 0);
 
   return { polarity, sarcasmHint, posTokens, negTokens, intens, negation };
+}
+
+// Detects implicit comparative disrespect:
+//  - "v3 worse than v2", "kicia behind every exec"  → kicia placed under something
+//  - "ue mogs kicia", "fluxus destroys kicia"        → non-kicia subject mogging kicia
+// Returns the magnitude (0 if nothing fired) to bump kiciaNegMag.
+function comparativeNegBoost(clause, vocab) {
+  const lower = String(clause || "").toLowerCase();
+  if (!lower) return 0;
+
+  let boost = 0;
+  const kiciaHit = firstEntityIndex(lower, vocab.kiciaEntities);
+
+  // COMPARATIVE_NEG: requires a kicia entity within ~30 chars of the match
+  const negMatch = lower.match(COMPARATIVE_NEG_RE);
+  if (negMatch && kiciaHit.index !== -1) {
+    const matchIdx = negMatch.index ?? lower.indexOf(negMatch[0]);
+    if (matchIdx !== -1 && Math.abs(matchIdx - kiciaHit.index) <= 30) {
+      boost += 0.5;
+    }
+  }
+
+  // COMPARATIVE_PUTDOWN: kicia must be the OBJECT of the verb (verb appears
+  // before the kicia entity in the clause). "kicia mogs ue" → no boost.
+  const putdownMatch = lower.match(COMPARATIVE_PUTDOWN_RE);
+  if (putdownMatch && kiciaHit.index !== -1) {
+    const verbIdx = putdownMatch.index ?? lower.indexOf(putdownMatch[0]);
+    if (verbIdx !== -1 && verbIdx < kiciaHit.index) {
+      boost += 1;
+    }
+  }
+
+  return boost;
 }
 
 function maxCos(vec, bankEntries) {
@@ -457,6 +495,13 @@ async function classifyKiciaDisrespect(text, options = {}) {
       if (polarity > 0) kiciaPosMag += Math.abs(polarity);
       if (sarcasmHint) sarcasm = true;
     }
+
+    // Implicit comparative disrespect — fires even when the clause has no
+    // direct neg-lex hit. Always feeds kiciaNegMag (these phrases are negative
+    // toward kicia by construction, regardless of which entity the copula-based
+    // attributor picked).
+    const compBoost = comparativeNegBoost(clause, vocab);
+    if (compBoost > 0) kiciaNegMag += compBoost;
   }
 
   const kiciaNegRatio = kiciaNegMag / (kiciaNegMag + kiciaPosMag + 1e-6);
@@ -472,18 +517,27 @@ async function classifyKiciaDisrespect(text, options = {}) {
 
   const semHighThreshold = numberOrDefault(getSettingOrDefault("respect.semantic.high", 0.20), 0.20);
   const semMedThreshold = numberOrDefault(getSettingOrDefault("respect.semantic.med", 0.10), 0.10);
-  const headThreshold = numberOrDefault(getSettingOrDefault("respect.head.threshold", 0.78), 0.78);
+  const headThreshold = numberOrDefault(getSettingOrDefault("respect.head.threshold", 0.65), 0.65);
+  const firstOffenseConfidence = numberOrDefault(
+    getSettingOrDefault("respect.firstoffense.confidence", 0.80),
+    0.80
+  );
 
   const kiciaSig = (kiciaNegMag >= 1) && (kiciaNegRatio >= 0.7);
   const semHigh = semDelta >= semHighThreshold;
   const semMed = semDelta >= semMedThreshold && semDelta < semHighThreshold;
   const headHigh = headScore !== null && headScore >= headThreshold;
+  // We only reach this point past hasAnyKiciaEntityInText — so the text is
+  // topical by construction. Named explicitly here so the head-driven branches
+  // below read as the per-prompt rule.
+  const topical = true;
 
   let confidence =
-    (kiciaSig ? 0.4 : 0) +
-    (semHigh ? 0.3 : (semMed ? 0.15 : 0)) +
-    (headHigh ? 0.2 : ((headScore ?? 0) * 0.2)) +
-    (kiciaNegRatio >= 0.8 ? 0.1 : 0);
+    (kiciaSig ? 0.35 : 0) +
+    (semHigh ? 0.30 : (semMed ? 0.15 : 0)) +
+    (headHigh ? 0.25 : ((headScore ?? 0) * 0.25)) +
+    (topical && headScore != null && headScore >= 0.80 ? 0.10 : 0) +
+    (kiciaNegRatio >= 0.8 ? 0.05 : 0);
   confidence = clamp(confidence, 0, 1);
 
   const signals = {
@@ -523,6 +577,24 @@ async function classifyKiciaDisrespect(text, options = {}) {
   if (semMed && kiciaNegMag >= 0.5) {
     return finalize("review", signals, attributedClauses, usedVec, "semantic medium + some pattern");
   }
+
+  // Head-driven branches — catch implicit/comparative disrespect that has no
+  // neg-lex hit and only weak semantic-bank match. The trained logistic head
+  // was explicitly seeded for these patterns; without these branches the head
+  // signal is wasted on everything that doesn't also fire kiciaSig/semHigh.
+  // Ordered LAST so the more-conservative branches above still win when they
+  // can; the firstOffenseConfidence gate keeps the head-only timeout path
+  // honest (default 0.80 — matches the moderation-handler promotion rule).
+  if (headHigh && topical && semHigh && confidence >= firstOffenseConfidence) {
+    return finalize("timeout", signals, attributedClauses, usedVec, "head + semantic high (topical)");
+  }
+  if (headHigh && topical && headScore >= 0.92 && confidence >= firstOffenseConfidence) {
+    return finalize("timeout", signals, attributedClauses, usedVec, "very-confident head (topical)");
+  }
+  if (headHigh && topical) {
+    return finalize("review", signals, attributedClauses, usedVec, "head says disrespect (topical, no other confirmation)");
+  }
+
   return finalize("ignore", signals, attributedClauses, usedVec, "no signals converged");
 }
 
@@ -556,6 +628,9 @@ module.exports = {
     QUESTION_PATTERN_RE,
     CONSTRUCTIVE_RE,
     COPULA_RE,
+    COMPARATIVE_NEG_RE,
+    COMPARATIVE_PUTDOWN_RE,
+    comparativeNegBoost,
     FALLBACK_KICIA_ENTITIES,
     KICIA_ALIAS_RE
   }

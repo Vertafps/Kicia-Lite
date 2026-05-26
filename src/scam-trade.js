@@ -41,7 +41,20 @@ function levenshtein(a, b) {
 // tokens still want \b so they don't trigger inside unrelated words.
 const PRICE_OR_PAYMENT_RE = /(?:\$\s*\d+|\d+\s*\$|\b\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx|euros?|pounds?)\b|\b(?:cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|gift\s*card|steam\s*g(?:ift\s*card|c)|amazon\s*gc|roblox\s*gc|nitro|western\s+union|moneygram|wu)\b)/i;
 const CASHAPP_TAG_RE = /\bcashapp\b[\s\S]{0,20}\$\w+|\$\w+[\s\S]{0,20}\bcashapp\b/i;
-const SELLER_RE = /\b(sell(?:ing|s)?|sold|wts|for\s+sale|taking\s+offers?|vendor|plug|trade|trading|swap(?:ping)?|exchange|exchanging|lf\s*(?:trade|swap)|vouch(?:es|ed)?|going\s+first|gf\s+(?:only|rep)|tos\s+(?:first|required)|t\.?o\.?s\.?\s+first)\b/i;
+// Includes:
+//   - English seller verbs (selling/sold/wts/trade/swap/vouches/etc)
+//   - Restocking verbs (restocked/stocked/back open/back in business/in stock) —
+//     these signal "I'm resuming/continuing my sales business", a strong
+//     seller-side cue scammers use to ride the loosening of cooldown logic.
+//   - Spanish/Portuguese sellers (vendo/vende/vendendo/vendiendo/venta/venda)
+//     so non-English scammers don't slip through the ASCII gate.
+// Cyrillic sellers live in a separate CYRILLIC_SELLER_RE (Unicode-flag regex)
+// to keep this one ASCII-only and avoid /u flag side-effects across the file.
+const SELLER_RE = /\b(sell(?:ing|s)?|sold|wts|for\s+sale|taking\s+offers?|vendor|plug|trade|trading|swap(?:ping)?|exchange|exchanging|lf\s*(?:trade|swap)|vouch(?:es|ed)?|going\s+first|gf\s+(?:only|rep)|tos\s+(?:first|required)|t\.?o\.?s\.?\s+first|restock(?:ed|ing|s)?|stocked(?:\s+up)?|back\s+open|back\s+in\s+business|in\s+stock|vendo|vende|vendiendo|vendendo|venta|venda|verkaufe|verkaufen)\b/i;
+// Cyrillic seller-side verbs only (no "купить" = "to buy"). Uses /u flag so
+// the engine treats characters as Unicode code points, which lets the verbs
+// match anywhere in the input regardless of surrounding language.
+const CYRILLIC_SELLER_RE = /(?:продаю|продам|продается|продаётся|продать)/iu;
 // possessive-offer-style: forward form "got X if u want", "have X who wants",
 // "got X for 10"; reverse form "who wants my X", "anyone want my X". The
 // trailing/leading intent-indicator (if u want / hmu / for sale / for $N) is
@@ -52,6 +65,20 @@ const MIDDLEMAN_RE = /\b(?:middleman|mm)\b/i;
 const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get)))\b/i;
 const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu|slide\s+in(?:to)?\s+(?:my\s+)?dms?|msg\s+me\s+asap|pm\s+asap|dm\s+urgent|inbox\s+me)\b/i;
 const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?|cracked\s+kicia)\b/i;
+// "kicia 30 usd" / "v3 30usd dm" style — topic + explicit currency within 30
+// chars with no seller verb present. Captures implicit seller intent: someone
+// quoting a Kicia product alongside a price IS the sales pitch, even without
+// "selling". Buyer phrasing still vetoes via BUYER_RE before this is consulted.
+const PRICE_NEAR_TOPIC_RE = /(?:\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b)[^.\n]{0,30}(?:\$\s*\d+|\d+\s*\$|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx))/i;
+const TOPIC_NEAR_PRICE_RE = /(?:\$\s*\d+|\d+\s*\$|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx))[^.\n]{0,30}(?:\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b)/i;
+// "kicia for 10 paypal only" / "v3 30 cashapp only" — topic + bare number +
+// payment rail clustered within ~30 chars each. Distinct from the currency-
+// suffix forms above because the dollar amount is implicit ("paypal" carries
+// the rail-name signal, the number carries the price). Three-way proximity:
+// topic ↔ number ↔ rail. Either ordering qualifies. Stays gated by topic
+// being present somewhere in the cluster.
+const TOPIC_NUM_RAIL_RE = /\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b[^.\n]{0,30}\b\d+\b[^.\n]{0,15}\b(?:cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|nitro|robux|rbx)\b/i;
+const RAIL_NUM_TOPIC_RE = /\b(?:cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|nitro|robux|rbx)\b[^.\n]{0,15}\b\d+\b[^.\n]{0,30}\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b/i;
 // Words to fuzzy-match against tokens >= 4 chars when KICIA_TOPIC_RE misses.
 // Intentionally excludes short tokens like "hook"/"v2"/"v3" — too many false
 // positives at 1-edit distance, and the regex already catches them.
@@ -244,11 +271,17 @@ function isNewMember(memberAgeMs) {
   return Number.isFinite(memberAgeMs) && memberAgeMs >= 0 && memberAgeMs < NEW_MEMBER_MS;
 }
 
-function computeDirectionScore(text, denseText) {
+function computeDirectionScore(text, denseText, rawText) {
   const dense = denseText == null ? densifyObfuscated(text) : denseText;
+  // Folding latinizes Cyrillic (e.g. "продаю" → "npoдaю"), so the raw text
+  // is the only place Cyrillic verbs survive. Fall back to `text` when raw
+  // isn't supplied (legacy single-arg callers, including tests).
+  const rawForCyrillic = rawText == null ? text : rawText;
   const seller = sellerSignal(text, dense);
   const possessiveHit = POSSESSIVE_OFFER_RE.exec(text)
     || (dense !== text ? POSSESSIVE_OFFER_RE.exec(dense) : null);
+  // Cyrillic seller-verb match — runs on the raw text to survive folding.
+  const cyrillicSellerHit = CYRILLIC_SELLER_RE.exec(rawForCyrillic);
   const buyerHit = BUYER_RE.exec(text);
 
   // Resolve topic index: regex on text → regex on dense → dense-substring → fuzzy.
@@ -268,8 +301,9 @@ function computeDirectionScore(text, denseText) {
     if (fuzzy >= 0) topicIdx = fuzzy;
   }
 
-  // Buyer veto only fires when neither seller-verb nor possessive-offer is present
-  if (buyerHit && !seller.hit && !possessiveHit) return -2;
+  // Buyer veto only fires when no seller-side signal of any flavour is present
+  // (English verb, possessive offer, or Cyrillic verb).
+  if (buyerHit && !seller.hit && !possessiveHit && !cyrillicSellerHit) return -2;
 
   if (topicIdx >= 0) {
     if (seller.hit) {
@@ -283,6 +317,31 @@ function computeDirectionScore(text, denseText) {
     if (possessiveHit) {
       if (Math.abs(possessiveHit.index - topicIdx) <= 40) return +2;
       return +1;
+    }
+    if (cyrillicSellerHit) {
+      // cyrillicSellerHit.index references raw text — resolve topic in raw
+      // text too so the proximity math compares apples to apples. Falls back
+      // to the folded topicIdx if raw doesn't hit (shouldn't happen, but
+      // keeps the call safe).
+      const rawTopic = KICIA_TOPIC_RE.exec(rawForCyrillic);
+      const rawTopicIdx = rawTopic ? rawTopic.index : topicIdx;
+      if (Math.abs(cyrillicSellerHit.index - rawTopicIdx) <= 40) return +2;
+      return +1;
+    }
+    // Bare price-near-topic fallback. No explicit seller verb, but the topic
+    // is quoted within 30 chars of a price/currency/payment-rail token —
+    // strong implicit seller intent (the only person who quotes "kicia 30 usd"
+    // or "v3 30 cashapp only" is the seller). Already past the buyer-veto
+    // check above, so buyers don't end up here.
+    const priceProximityHit =
+      PRICE_NEAR_TOPIC_RE.test(text) || TOPIC_NEAR_PRICE_RE.test(text)
+      || TOPIC_NUM_RAIL_RE.test(text) || RAIL_NUM_TOPIC_RE.test(text)
+      || (dense !== text && (
+        PRICE_NEAR_TOPIC_RE.test(dense) || TOPIC_NEAR_PRICE_RE.test(dense)
+        || TOPIC_NUM_RAIL_RE.test(dense) || RAIL_NUM_TOPIC_RE.test(dense)
+      ));
+    if (priceProximityHit) {
+      return +2;
     }
   }
   return 0;
@@ -545,7 +604,7 @@ async function classifyScamTrade(text, options = {}) {
     });
   }
 
-  const directionScore = computeDirectionScore(folded, dense);
+  const directionScore = computeDirectionScore(folded, dense, raw);
   const priceHitFolded = PRICE_OR_PAYMENT_RE.test(folded) || CASHAPP_TAG_RE.test(folded);
   const priceHitDense = usedDense && (PRICE_OR_PAYMENT_RE.test(dense) || CASHAPP_TAG_RE.test(dense));
   // Possessive-offer "for N" (e.g. "got configs for 10") is price intent even
@@ -822,11 +881,16 @@ module.exports = {
     bumpSeverity,
     DEFAULTS,
     SELLER_RE,
+    CYRILLIC_SELLER_RE,
     POSSESSIVE_OFFER_RE,
     BUYER_RE,
     KICIA_TOPIC_RE,
     DM_RE,
     PRICE_OR_PAYMENT_RE,
+    PRICE_NEAR_TOPIC_RE,
+    TOPIC_NEAR_PRICE_RE,
+    TOPIC_NUM_RAIL_RE,
+    RAIL_NUM_TOPIC_RE,
     META_OR_WARNING_RE,
     JOKE_RE,
     topicHitFuzzy,

@@ -252,6 +252,7 @@ function buildBlockedLinkLogPanel({ message, signal, timeoutResult, deleteResult
       { name: "User", value: `<@${message.author?.id}>`, inline: true },
       { name: "Channel", value: `<#${message.channelId}>`, inline: true },
       { name: "Threat", value: `${signal.threatLevel || "elevated"} (${signal.confidence || 0}%)`, inline: true },
+      { name: "User DMed", value: dmSent ? "✓ sent" : `✗ ${dmReason || "not sent"}`, inline: true },
       { name: "Action", value: actionText, inline: false },
       { name: "Blocked Count", value: String(signal.blockedCount || (signal.blockedLinks || []).length || 1), inline: true },
       link ? { name: "Jump", value: `[→ Open](${link})`, inline: true } : null,
@@ -311,6 +312,7 @@ function buildScamTradeLogPanel({ message, result, timeoutResult, deleteResult, 
       { name: "Severity", value: String(result.severity || "—"), inline: true },
       { name: "Direction", value: String(signals.directionScore ?? 0), inline: true },
       { name: "Verdict", value: isWarn ? "warn" : "timeout", inline: true },
+      { name: "User DMed", value: dmSent ? "✓ sent" : `✗ ${dmReason || "not sent"}`, inline: true },
       { name: "Signals", value: "```" + [
         `price: ${signals.priceHit ? "yes" : "no"}`,
         `dm: ${signals.dmHit ? "yes" : "no"}`,
@@ -346,6 +348,7 @@ function buildRespectLogPanel({ message, result, timeoutResult, deleteResult, dm
       { name: "Tier", value: String(tier), inline: true },
       { name: "Confidence", value: `${Math.round((Number(signals.confidence) || 0) * 100)}%`, inline: true },
       { name: "Verdict", value: isWarn ? "warn" : "timeout", inline: true },
+      { name: "User DMed", value: dmSent ? "✓ sent" : `✗ ${dmReason || "not sent"}`, inline: true },
       { name: "Signals", value: "```" + [
         `kiciaNeg: ${signals.kiciaNegMag ?? 0}`,
         `ratio: ${kiciaNegRatio.toFixed(2)}`,
@@ -716,6 +719,18 @@ async function handleCustomPatternMessage(message, match, {
   );
   const deleteResult = await tryDeleteMessage(message);
 
+  const dmResult = await trySendDM(message.author, {
+    embeds: [
+      buildPanel({
+        header: "Timeout Applied",
+        body: `I've muted you for ${formatDuration(durationMs)} because your recent message matched a moderation pattern (#${match.patternId}). If this was a misread, ping staff.`,
+        color: WARN
+      })
+    ]
+  });
+  const dmSent = dmResult.sent;
+  const dmReason = dmResult.reason;
+
   if (!timeoutResult.applied) {
     recordRuntimeEvent("warn", "custom-pattern-timeout", timeoutResult.reason);
   }
@@ -730,7 +745,7 @@ async function handleCustomPatternMessage(message, match, {
     timeoutMs: durationMs,
     timeoutApplied: timeoutResult.applied,
     deleteApplied: deleteResult.deleted,
-    dmSent: false,
+    dmSent,
     reasons: [`matched custom pattern #${match.patternId}: "${String(match.pattern.phrase || "").slice(0, 80)}"`],
     now
   });
@@ -751,6 +766,7 @@ async function handleCustomPatternMessage(message, match, {
       { name: "Threshold", value: Number(match.pattern.threshold || 0).toFixed(2), inline: true },
       { name: "Timeout", value: timeoutResult.applied ? formatDuration(durationMs) : timeoutResult.reason, inline: true },
       { name: "Delete", value: deleteResult.deleted ? "ok" : (deleteResult.reason || "skipped"), inline: true },
+      { name: "User DMed", value: dmSent ? "✓ sent" : `✗ ${dmReason || "not sent"}`, inline: true },
       { name: "Pattern", value: `"${String(match.pattern.phrase || "").slice(0, 200)}"`, inline: false },
       { name: "Evidence", value: trimExcerpt(message.content) }
     ],

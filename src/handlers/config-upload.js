@@ -283,8 +283,15 @@ async function maybeHandleConfigChannelMessage(message) {
 function buildConfigStickyPanel() {
   const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
   return _buildRichPanel({
-    title: "configs only",
-    description: "use `/upload config`",
+    title: "⚙️ Config Submissions",
+    description: [
+      "Drop your configs here using `/upload config` — the bot walks you through the fields.",
+      "",
+      "> **Rules**",
+      "> • configs only, no chatting",
+      "> • showcase video required (file or link — YouTube, Twitch, Streamable, TikTok, etc.)",
+      "> • no GIFs or images"
+    ].join("\n"),
     color: _INFO
   });
 }

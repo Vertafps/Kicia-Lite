@@ -146,8 +146,14 @@ async function maybeHandleClipsMessage(message) {
 function buildClipsStickyPanel() {
   const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
   return _buildRichPanel({
-    title: "clips only",
-    description: "drop your clips here. most reactions wins clip of the day.",
+    title: "🎬 Clips",
+    description: [
+      "Drop your kicia clips here — top reactions of the day wins **Clip of the Day**.",
+      "",
+      "> **Rules**",
+      "> • video clips only (files or links — YouTube, Twitch, Streamable, TikTok, etc.)",
+      "> • no GIFs, images, or chat"
+    ].join("\n"),
     color: _INFO
   });
 }

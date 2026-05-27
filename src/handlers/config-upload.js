@@ -285,7 +285,7 @@ function buildConfigStickyPanel() {
   return _buildRichPanel({
     title: "⚙️ Config Submissions",
     description: [
-      "Drop your configs here using `/upload config` — the bot walks you through the fields.",
+      "Drop your configs here using `/upload config` — I'll talk you through the fields.",
       "",
       "> **Rules**",
       "> • configs only, no chatting",

@@ -148,7 +148,7 @@ function buildClipsStickyPanel() {
   return _buildRichPanel({
     title: "🎬 Clips",
     description: [
-      "Drop your kicia clips here — top reactions of the day wins **Clip of the Day**.",
+      "Drop your clips here :d — top reactions of the day wins **Clip of the Day**.",
       "",
       "> **Rules**",
       "> • video clips only (files or links — YouTube, Twitch, Streamable, TikTok, etc.)",

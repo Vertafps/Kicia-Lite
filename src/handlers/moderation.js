@@ -616,10 +616,15 @@ async function handleKiciaDisrespectMessage(message, result, {
   }
 
   // Second-offense rule: if classifier said "warn" but tier state says this is
-  // a repeat (tier >= 2), promote to timeout. Classifier doesn't see prior
-  // offenses, so we factor them in here.
+  // a repeat (tier >= 2), promote to timeout ONLY when the current message has
+  // a strong pattern signal (kiciaNegMag >= 1 AND kiciaNegRatio >= 0.7). This
+  // prevents benign Kicia-topical messages from being auto-muted solely because
+  // the user has a prior infraction on record.
+  const sig = result && typeof result === "object" ? (result.signals || {}) : {};
+  const hasStrongPattern = (Number(sig.kiciaNegMag) || 0) >= 1
+    && (Number(sig.kiciaNegRatio) || 0) >= 0.7;
   let effectiveAction = action;
-  if (effectiveAction === "warn" && tier >= 2) {
+  if (effectiveAction === "warn" && tier >= 2 && hasStrongPattern) {
     effectiveAction = "timeout";
   }
 

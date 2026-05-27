@@ -42,10 +42,19 @@ const FALLBACK_KICIA_ENTITIES = [
   "v3",
   "kicia hook",
   "kicia v2",
-  "kicia v3"
+  "kicia v3",
+  "premium",
+  "prem",
+  "kicia premium",
+  "kicia prem"
 ];
 
-const KICIA_ALIAS_RE = /kicia|kiciahook|hook|^v[23]$/i;
+const KICIA_ALIAS_RE = /kicia|kiciahook|hook|^v[23]$|^prem(?:ium)?$|kicia\s+prem(?:ium)?/i;
+
+// Tokens that are only considered kicia-entity hits when paired with a broader
+// kicia context. "premium subscription", "prem deal" etc. should not trigger
+// entity detection in isolation.
+const PREMIUM_ONLY_TOKENS = new Set(["premium", "prem"]);
 
 function buildEntityVocabularyFromKb(kb) {
   const kicia = new Set();
@@ -105,6 +114,10 @@ const COPULA_RE = /\b(is|are|was|were|feels?|feel|seems?)\b/i;
 const COMPARATIVE_NEG_RE = /\b(?:worse\s+than|behind|bottom\s+(?:of|tier|barrel)|worst|lowest)\b/i;
 // "ue mogs kicia", "fluxus destroys kicia" — put-down verb with kicia as object
 const COMPARATIVE_PUTDOWN_RE = /\b(mogs|smokes|destroys|cooks|outclasses|beats)\b/i;
+// Negated comparative: "cant even beat ue", "doesn't beat fluxus" — kicia
+// implicitly placed below the named third-party. Contributes +0.5 to kiciaNegMag
+// when a third-party entity appears within 30 chars after the match.
+const NEGATED_COMPARATIVE_RE = /\b(?:can(?:'|no)?t\s+(?:even\s+)?beat|doesn'?t\s+(?:even\s+)?beat|fails?\s+to\s+beat|loses?\s+to)\b/i;
 
 // Internal version ranking. When a single clause names two Kicia versions
 // and the OLDER one is being criticized, that's pro-Kicia commentary
@@ -319,6 +332,20 @@ function comparativeNegBoost(clause, vocab) {
     }
   }
 
+  // NEGATED_COMPARATIVE: "cant even beat ue", "doesn't beat fluxus" —
+  // kicia implicitly falls below the named entity. Requires a non-whitespace
+  // token within 30 chars after the negated verb (the rival being named).
+  // Boost of +1.0 ensures kiciaSig fires (mag >= 1) so the warn branch triggers.
+  const negCompMatch = lower.match(NEGATED_COMPARATIVE_RE);
+  if (negCompMatch) {
+    const verbIdx = negCompMatch.index ?? lower.indexOf(negCompMatch[0]);
+    const afterVerb = lower.slice(verbIdx + negCompMatch[0].length).trimStart();
+    const hasSubjectAfter = afterVerb.length > 0 && /\S/.test(afterVerb.slice(0, 30));
+    if (hasSubjectAfter) {
+      boost += 1.0;
+    }
+  }
+
   return boost;
 }
 
@@ -505,6 +532,34 @@ async function classifyKiciaDisrespect(text, options = {}) {
     return ignoreResult("no kicia entity in text", null);
   }
 
+  // Premium-only guard: "premium" and "prem" are in the entity set because
+  // "kicia premium" / "kicia prem" are real product names. But a bare mention
+  // of "premium" with no other kicia identifier (kicia/v2/v3/hook/kiciahook)
+  // in the text is too ambiguous to act on without extra context.
+  // We require at least one of: a comparative signal (COMPARATIVE_NEG_RE or
+  // NEGATED_COMPARATIVE_RE) OR a third-party entity hit.
+  const CORE_KICIA_RE = /\b(?:kicia|kiciahook|hook|v[23])\b/i;
+  const premiumOnlyMatch = !CORE_KICIA_RE.test(folded)
+    && /\b(?:premium|prem)\b/i.test(folded);
+  if (premiumOnlyMatch) {
+    const hasComparativeContext = COMPARATIVE_NEG_RE.test(folded)
+      || NEGATED_COMPARATIVE_RE.test(folded)
+      || COMPARATIVE_PUTDOWN_RE.test(folded);
+    const thirdPartyInText = (() => {
+      if (!vocab.thirdPartyEntities.size) return false;
+      const lower = folded;
+      for (const ent of vocab.thirdPartyEntities) {
+        if (!ent) continue;
+        if (ent.includes(" ")) { if (lower.indexOf(ent) !== -1) return true; }
+        else { const re = new RegExp(`\\b${escapeReg(ent)}\\b`, "i"); if (re.test(lower)) return true; }
+      }
+      return false;
+    })();
+    if (!hasComparativeContext && !thirdPartyInText) {
+      return ignoreResult("premium-only mention without comparative context", null);
+    }
+  }
+
   const userId = providedUserId || member?.id || member?.user?.id || null;
   const permissions = lazyMod("./permissions");
   if (permissions && typeof permissions.hasModerationBypassMember === "function") {
@@ -543,6 +598,11 @@ async function classifyKiciaDisrespect(text, options = {}) {
   let kiciaNegMag = 0;
   let kiciaPosMag = 0;
   let sarcasm = false;
+  // Track comparative boost separately so a warn branch can fire on pure-
+  // comparative evidence even when clause-level pos-lex raises kiciaPosMag
+  // (e.g. "kicia premium cant even beat ue" — "premium" in POS_LEX inflates
+  // kiciaPosMag, suppressing kiciaNegRatio below the 0.7 threshold).
+  let comparativeBoostTotal = 0;
 
   for (const clause of clauses) {
     const attribution = attributeClause(clause, vocab);
@@ -570,7 +630,10 @@ async function classifyKiciaDisrespect(text, options = {}) {
     // toward kicia by construction, regardless of which entity the copula-based
     // attributor picked).
     const compBoost = comparativeNegBoost(clause, vocab);
-    if (compBoost > 0 && !isProKiciaCompare) kiciaNegMag += compBoost;
+    if (compBoost > 0 && !isProKiciaCompare) {
+      kiciaNegMag += compBoost;
+      comparativeBoostTotal += compBoost;
+    }
   }
 
   const kiciaNegRatio = kiciaNegMag / (kiciaNegMag + kiciaPosMag + 1e-6);
@@ -703,6 +766,13 @@ async function classifyKiciaDisrespect(text, options = {}) {
   }
   if (semMed && kiciaNegMag >= 0.5) {
     return finalize("warn", signals, attributedClauses, usedVec, "semantic medium + some pattern");
+  }
+  // Comparative-only warn: negated comparative boost (e.g. "cant even beat X")
+  // fired but kiciaNegRatio fell below 0.7 due to positive lex in the same
+  // clause. When the comparative boost alone is strong enough (>= 1.0), treat
+  // this as a reliable negative signal and warn.
+  if (comparativeBoostTotal >= 1.0 && kiciaNegMag >= 1.0) {
+    return finalize("warn", signals, attributedClauses, usedVec, "comparative neg boost alone");
   }
 
   return finalize("ignore", signals, attributedClauses, usedVec, "no signals converged");

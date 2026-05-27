@@ -57,6 +57,7 @@ const { computeDirectionScore, pickSeverity, normalizeSemDelta, computeConfidenc
 
 const MUST_FLAG_CASES = [
   // [text, label]
+  ["v3 25 dollars dm me",               "price + dm · still flags"],
   ["selling kicia for ue dm me",        "explicit sale + dm solicitation"],
   ["wts kicia hook lifetime $10",       "wts + topic + price"],
   ["trading kicia for fluxus, hmu",     "trading verb + topic + dm slang (hmu)"],
@@ -147,7 +148,15 @@ const MUST_NOT_FLAG_CASES = [
   ["is kicia free or paid",                              "buyer · pricing inquiry (free word)"],
   ["kicia is now free, just download from docs",         "info · benign free statement"],
   ["is there a free trial of kicia",                     "buyer · trial inquiry"],
-  ["anyone want to teach me kicia",                      "buyer · learning request (no DM offer)"]
+  ["anyone want to teach me kicia",                      "buyer · learning request (no DM offer)"],
+  // fact statements — informational price quotes with no seller intent
+  ["v3 is 25 dollars",                                   "fact statement · no commerce intent"],
+  ["kicia v3 is 25 dollars",                             "fact statement · variant"],
+  // hypotheticals — entire sentence framed as what-if
+  ["what if i trade my sling for kicia prem",            "hypothetical · what if"],
+  ["what if I sold kicia configs",                       "hypothetical · what if + seller verb"],
+  ["if i were to trade kicia",                           "hypothetical · if i were to"],
+  ["imagine if i sold kicia",                            "hypothetical · imagine"]
 ];
 
 test.describe("scam-trade: must-NOT-flag cases", () => {

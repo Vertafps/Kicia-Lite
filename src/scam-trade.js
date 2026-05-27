@@ -120,6 +120,13 @@ const FREEBIE_RE = /\b(?:free|giveaway|giving\s+away|gifting|gift(?:ed|ing)?|han
 const SOLICITATION_RE = /\b(?:if\s+anyone\s+wants?|anyone\s+who\s+wants?|whoever\s+wants?|who\s+wants?\s+(?:a|an|some|free)|dm\s+(?:me\s+)?(?:if|when|for|to\s+get|to\s+claim)\b)/i;
 const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal|free|giveaway|giving\s+away)\b/i;
 const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+serious|sarcasm|sarcastic)\b|\(jk\)|\(joking\)|\(kidding\)|\blmao\b/i;
+// Fact-statement gate: "X is 25 dollars", "v3 costs 10", "kicia priced at 30" —
+// these are informational price-statements, NOT seller pitches. Used to suppress
+// the priceProximityHit fallback when no other seller-side signal corroborates.
+const FACT_STATEMENT_RE = /\b(?:is|are|was|were|costs?|priced\s+at|priced)\s+(?:about\s+|around\s+|like\s+|just\s+|only\s+)?\$?\d+/i;
+// Hypothetical frame: "what if i trade", "if i were to sell", "imagine if i" —
+// suppresses all commerce signals when the entire sentence is framed as hypothetical.
+const HYPOTHETICAL_RE = /\b(?:what\s+if|what\s+would|if\s+i\s+(?:were\s+to|wanted\s+to|wanna|could)|imagine\s+(?:if|i)|hypothetically|suppose\s+i|say\s+i)\b/i;
 
 const DEFAULTS = {
   firstOffenseConfidence: 0.50,
@@ -417,6 +424,14 @@ function computeDirectionScore(text, denseText, rawText) {
         || TOPIC_NUM_RAIL_RE.test(dense) || RAIL_NUM_TOPIC_RE.test(dense)
       ));
     if (priceProximityHit) {
+      // Suppress the fallback when the price is stated as a fact ("X is N dollars",
+      // "X costs N") with no DM solicitation and no seller/possessive signal.
+      // A bare "v3 is 25 dollars" is an informational statement, not a sales pitch.
+      const isFactStatement = FACT_STATEMENT_RE.test(text)
+        && !dmHitLocal
+        && !seller.hit
+        && !possessiveHit;
+      if (isFactStatement) return 0;
       return +2;
     }
   }
@@ -689,6 +704,14 @@ async function classifyScamTrade(text, options = {}) {
     });
   }
 
+  if (HYPOTHETICAL_RE.test(folded)) {
+    return buildIgnore({
+      reasonText: "ignore - hypothetical/what-if",
+      signals: emptySignals(),
+      embedding: options.embedding || null
+    });
+  }
+
   const directionScore = computeDirectionScore(folded, dense, raw);
   const priceHitFolded = PRICE_OR_PAYMENT_RE.test(folded) || CASHAPP_TAG_RE.test(folded);
   const priceHitDense = usedDense && (PRICE_OR_PAYMENT_RE.test(dense) || CASHAPP_TAG_RE.test(dense));
@@ -899,11 +922,13 @@ async function classifyScamTrade(text, options = {}) {
   let severity = null;
   let jokeDowngraded = false;
 
-  // Repeat-offender second-offense rule: any signal at all forces timeout,
-  // regardless of confidence. Placed BEFORE the confidence-gate so a real
-  // second catch can't drop into warn just because the bar didn't clear.
+  // Repeat-offender second-offense rule: a STRONG seller signal forces timeout,
+  // regardless of confidence. Requires directionScore >= 2 (seller-verb within
+  // 40 chars of topic) OR H >= 3 (three independent corroborating signals).
+  // Weak/incidental signals (bare topic hit, lone price mention) no longer promote
+  // to timeout — this prevents benign follow-up messages from being auto-muted.
   // pickSeverity already bumps one tier when repeatOffender is set.
-  if (repeatOffender && (H >= 1 || directionScore >= 1)) {
+  if (repeatOffender && (directionScore >= 2 || H >= 3)) {
     const sev = pickSeverity(H, confidence, signals, { isNewAccount: newAccount, repeatOffender })
       || "light";
     verdict = "timeout";
@@ -1007,6 +1032,8 @@ module.exports = {
     JOKE_RE,
     FREEBIE_RE,
     SOLICITATION_RE,
+    FACT_STATEMENT_RE,
+    HYPOTHETICAL_RE,
     topicHitFuzzy,
     levenshtein
   }

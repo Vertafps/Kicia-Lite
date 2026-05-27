@@ -98,6 +98,7 @@ test.describe("kicia-disrespect: THE CRITICAL COUNTER-EXAMPLE", () => {
 // ============================================================================
 
 const MUST_FLAG_CASES = [
+  ["kicia premium cant even beat ue",  "premium + negated comparative + third party"],
   ["v3 is buns",            "direct insult · v3 + neg lexicon"],
   ["kicia is trash",        "direct insult · kicia + neg lexicon"],
   ["kiciahook sucks ass",   "two neg-lex tokens"],
@@ -205,7 +206,10 @@ const MUST_NOT_FLAG_CASES = [
   ["v2 buns compared to v3",          "pro-Kicia · older trashed for newer"],
   ["v2 is buns compared to v3",       "pro-Kicia · 'is' copula form"],
   ["v2 is trash compared to v3",      "pro-Kicia · variant lex"],
-  ["v2 sucks compared to v3",         "pro-Kicia · variant lex"]
+  ["v2 sucks compared to v3",         "pro-Kicia · variant lex"],
+  // bare premium mentions with no comparative context
+  ["premium subscription",            "bare premium mention · no comparative"],
+  ["premium costs 25 bucks",          "premium price · no comparative"]
 ];
 
 test.describe("kicia-disrespect: must-NOT-flag cases", () => {

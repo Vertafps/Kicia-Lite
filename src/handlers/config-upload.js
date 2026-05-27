@@ -12,7 +12,18 @@ const {
   bumpConfigWarning,
   resetConfigWarning
 } = require("../restricted-emoji-db");
-const { registerSticky, ensureSticky } = require("./sticky-messages");
+const { registerSticky, ensureSticky, bumpSticky } = require("./sticky-messages");
+
+// Video validation — same rule the clips channel uses. Owner now requires
+// every config submission to be paired with a video showcase.
+const VIDEO_EXT_RE = /\.(?:mp4|mov|webm|mkv|avi|flv|m4v)(?:\?|#|$)/i;
+function attachmentIsVideo(att) {
+  if (!att) return false;
+  const ct = String(att.contentType || "").toLowerCase();
+  if (ct.startsWith("video/")) return true;
+  const name = String(att.name || "").toLowerCase();
+  return VIDEO_EXT_RE.test(name);
+}
 
 async function handleUploadConfigInteraction(interaction) {
   if (interaction.options.getSubcommand?.() !== "config") return false;
@@ -20,7 +31,18 @@ async function handleUploadConfigInteraction(interaction) {
   const name = interaction.options.getString("name", true);
   const type = interaction.options.getString("type", true);
   const file = interaction.options.getAttachment("file", true);
+  const video = interaction.options.getAttachment("video", true);
   const comments = interaction.options.getString("comments") || "";
+
+  // Reject non-video attachments early so the user gets a clear error before
+  // anything posts.
+  if (!attachmentIsVideo(video)) {
+    await interaction.reply({
+      content: "The `video` attachment must be an actual video file (mp4 / mov / webm / mkv / avi / flv / m4v). Re-run `/upload config` with a real showcase video.",
+      ephemeral: true
+    });
+    return true;
+  }
 
   // Resolve config channel
   const channelId = getConfigChannelId();
@@ -59,7 +81,8 @@ async function handleUploadConfigInteraction(interaction) {
   if (comments.trim()) {
     fields.push({ name: "additional comments", value: String(comments).slice(0, 1000), inline: false });
   }
-  fields.push({ name: "attachment", value: `[${file.name}](${file.url})`, inline: false });
+  fields.push({ name: "config file", value: `[${file.name}](${file.url})`, inline: false });
+  fields.push({ name: "showcase video", value: `[${video.name}](${video.url})`, inline: false });
 
   const panel = buildRichPanel({
     title: `Config Submission · ${name}`,
@@ -68,11 +91,19 @@ async function handleUploadConfigInteraction(interaction) {
     color: INFO
   });
 
+  // Separator above the new submission so adjacent configs are visually
+  // distinct. Discord renders the content above the embed.
+  const SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+
   let posted;
   try {
     posted = await channel.send({
+      content: SEPARATOR,
       embeds: [panel],
-      files: [{ attachment: file.url, name: file.name }],
+      files: [
+        { attachment: file.url, name: file.name },
+        { attachment: video.url, name: video.name }
+      ],
       allowedMentions: { parse: [] }
     });
   } catch (err) {
@@ -86,6 +117,11 @@ async function handleUploadConfigInteraction(interaction) {
 
   // Auto-react with check mark
   posted.react("✅").catch(() => null);
+
+  // Re-bump the sticky so it sits BELOW the new submission. /upload config
+  // posts as the bot, so the normal non-bot-message bump hook in index.js
+  // doesn't fire — we trigger it explicitly here.
+  try { bumpSticky(channel); } catch {}
 
   await interaction.reply({
     content: `Submitted! View: ${posted.url}`,
@@ -198,6 +234,7 @@ function buildConfigStickyPanel() {
       "• `name` — your config's name",
       "• `type` — rage / semi-rage / legit / semi-legit",
       "• `file` — the config file attachment",
+      "• `video` — showcase video (mp4/mov/webm/etc), **required**",
       "• `comments` — optional notes (recommendations, etc.)"
     ].join("\n"),
     color: _INFO

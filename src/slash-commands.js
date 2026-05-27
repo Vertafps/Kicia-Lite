@@ -218,6 +218,7 @@ function buildDefinitions() {
             { name: "semi-legit", value: "semi-legit" }
           ))
         .addAttachmentOption(o => o.setName("file").setDescription("The config file").setRequired(true))
+        .addAttachmentOption(o => o.setName("video").setDescription("Showcase video (mp4/mov/webm/etc) — required").setRequired(true))
         .addStringOption(o => o.setName("comments").setDescription("Optional notes/recommendations").setRequired(false)))
       .toJSON()
   ];

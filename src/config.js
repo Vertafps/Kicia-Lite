@@ -60,12 +60,14 @@ const MOD_ROLE_IDS = ["1484221162647978016"];
 const STAFF_ROLE_IDS = ["1298767464678559794", "1495349698360508546"];
 const DAILY_STATS_CHANNEL_ID = "1484218637060407418";
 const LOG_CHANNEL_ID = "1497949003617140858";
-const NO_RESPONSE_CHANNEL_IDS = ["1498745066339045406"];
+// No-response and lock-target channels are now sourced from the DB-configured
+// `general` and `support` slots at runtime (see channel-config.js). These
+// arrays are kept as empty exports for backward compatibility with callers
+// that may still import them — runtime callers should use
+// getNoResponseChannelIds() / getChannelLockTargets() instead.
+const NO_RESPONSE_CHANNEL_IDS = [];
 const CHANNEL_LOCK_ROLE_ID = "1484218498262765789";
-const CHANNEL_LOCK_TARGETS = [
-  { id: "1498745066339045406", label: "general chat" },
-  { id: "1489747706980339773", label: "community support chat" }
-];
+const CHANNEL_LOCK_TARGETS = [];
 const CHANNEL_LOCK_OPERATOR_ROLE_IDS = [...OWNER_ROLE_IDS];
 const CHANNEL_LOCK_OPERATOR_USER_IDS = [...OWNER_USER_IDS];
 const EMOJI_MANAGER_ROLE_IDS = [...OWNER_ROLE_IDS, ...ADMIN_ROLE_IDS, ...MOD_ROLE_IDS, ...STAFF_ROLE_IDS];

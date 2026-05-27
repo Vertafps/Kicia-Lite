@@ -1,9 +1,7 @@
 const {
   BRAND,
-  CHANNEL_LOCK_TARGETS,
   DAILY_STATS_CHANNEL_ID,
-  LOG_CHANNEL_ID,
-  NO_RESPONSE_CHANNEL_IDS
+  LOG_CHANNEL_ID
 } = require("./config");
 
 const CHANNEL_ID_RE = /^\d{15,25}$/;
@@ -26,11 +24,6 @@ function extractGuildIdFromJumpUrl(url) {
   return extractJumpParts(url)?.guildId || "";
 }
 
-function findLockTargetId(pattern) {
-  const target = (CHANNEL_LOCK_TARGETS || []).find((entry) => pattern.test(entry?.label || ""));
-  return target?.id || "";
-}
-
 const DEFAULT_GUILD_ID =
   extractGuildIdFromJumpUrl(BRAND.STATUS_JUMP_URL) ||
   extractGuildIdFromJumpUrl(BRAND.TICKET_JUMP_URL) ||
@@ -41,7 +34,7 @@ const CHANNEL_CONFIG_SLOTS = [
     key: "general",
     aliases: ["gen", "generalchat", "main"],
     label: "General Chat",
-    defaultId: findLockTargetId(/general/i) || NO_RESPONSE_CHANNEL_IDS[0] || "",
+    defaultId: "",
     required: true,
     uses: ["no-response guard", "lockdown target"]
   },
@@ -49,7 +42,7 @@ const CHANNEL_CONFIG_SLOTS = [
     key: "support",
     aliases: ["supportchat", "community", "help"],
     label: "Support Chat",
-    defaultId: findLockTargetId(/support/i),
+    defaultId: "",
     required: true,
     uses: ["lockdown target"]
   },
@@ -335,27 +328,20 @@ function getDailyStatsChannelId() {
 }
 
 function getNoResponseChannelIds() {
+  // Single source of truth: the configured `general` slot. Empty slot = empty list.
   const general = getConfiguredChannelId("general");
-  const defaultGeneral = getChannelSlotDefinition("general")?.defaultId || "";
-  const ids = new Set();
-  if (general) ids.add(general);
-  for (const id of NO_RESPONSE_CHANNEL_IDS || []) {
-    if (id && id !== defaultGeneral) ids.add(id);
-  }
-  return [...ids];
+  return general ? [general] : [];
 }
 
 function getChannelLockTargets() {
-  return [
-    {
-      id: getConfiguredChannelId("general"),
-      label: "general chat"
-    },
-    {
-      id: getConfiguredChannelId("support"),
-      label: "community support chat"
-    }
-  ];
+  // Both targets sourced from configured slots at runtime; skip any slot that
+  // hasn't been set yet so $jarvis doesn't flag "missing" on an empty target.
+  const targets = [];
+  const generalId = getConfiguredChannelId("general");
+  if (generalId) targets.push({ id: generalId, label: "general chat" });
+  const supportId = getConfiguredChannelId("support");
+  if (supportId) targets.push({ id: supportId, label: "community support chat" });
+  return targets;
 }
 
 function listChannelConfigSlots(guildId = DEFAULT_GUILD_ID) {

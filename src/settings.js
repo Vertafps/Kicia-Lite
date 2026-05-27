@@ -982,6 +982,57 @@ const REGISTRY_ENTRIES = [
     label: "Daily Stats",
     description: "Master toggle for the daily-stats summary report.",
     section: "daily-stats"
+  }],
+
+  // clips
+  ["clips.guard.enabled", {
+    type: SETTING_TYPES.BOOL,
+    defaultValue: true,
+    label: "Clips Channel Guard",
+    description: "When true, text-only messages in the clips channel are removed and the sender is warned.",
+    section: "clips"
+  }],
+  ["clips.warning.threshold", {
+    type: SETTING_TYPES.INT,
+    defaultValue: 2,
+    label: "Clips Warning Threshold",
+    description: "Number of warnings before a clips-channel text offender is timed out.",
+    section: "clips"
+  }],
+  ["clips.warning.decayMs", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: 24 * 60 * 60 * 1000,
+    label: "Clips Warning Decay",
+    description: "How long since the last clips warning before the counter resets.",
+    section: "clips"
+  }],
+  ["clips.timeout.ms", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: 24 * 60 * 60 * 1000,
+    label: "Clips Timeout Duration",
+    description: "Timeout length applied after threshold warnings in the clips channel.",
+    section: "clips"
+  }],
+  ["clipoftheday.enabled", {
+    type: SETTING_TYPES.BOOL,
+    defaultValue: true,
+    label: "Clip of the Day",
+    description: "Daily picks the most-reacted clip and posts it to the clip-of-the-day channel.",
+    section: "clips"
+  }],
+  ["clipoftheday.utc_hour", {
+    type: SETTING_TYPES.INT,
+    defaultValue: 15,
+    label: "Clip of the Day UTC Hour",
+    description: "Hour (UTC, 0-23) when clip-of-the-day runs. Default 15 = 9pm UTC+5:30.",
+    section: "clips"
+  }],
+  ["clipoftheday.utc_minute", {
+    type: SETTING_TYPES.INT,
+    defaultValue: 30,
+    label: "Clip of the Day UTC Minute",
+    description: "Minute (0-59) when clip-of-the-day runs. Default 30 with hour 15 = 9pm UTC+5:30.",
+    section: "clips"
   }]
 ];
 

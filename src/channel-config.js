@@ -140,6 +140,30 @@ const CHANNEL_CONFIG_SLOTS = [
     defaultId: "",
     required: false,
     uses: ["classifier label collection", "scam/disrespect review pings", "retrain audits"]
+  },
+  {
+    key: "config",
+    aliases: ["configs", "configsubmissions", "config-submissions"],
+    label: "Config Submissions Channel",
+    defaultId: "",
+    required: false,
+    uses: ["/upload config destination", "config submission sticky"]
+  },
+  {
+    key: "clips",
+    aliases: ["clip", "clipchannel", "clip-channel"],
+    label: "Clips Channel",
+    defaultId: "",
+    required: false,
+    uses: ["clip uploads", "auto-react ✅", "clip-of-the-day source"]
+  },
+  {
+    key: "clipoftheday",
+    aliases: ["cotd", "clip-of-the-day", "clipotd"],
+    label: "Clip of the Day Channel",
+    defaultId: "",
+    required: false,
+    uses: ["daily clip-of-the-day announcement (9pm UTC+5:30 = 15:30 UTC)"]
   }
 ];
 
@@ -282,6 +306,18 @@ function getStatusWidgetChannelId() {
   return getConfiguredChannelId("statuswidget");
 }
 
+function getConfigChannelId() {
+  return getConfiguredChannelId("config");
+}
+
+function getClipsChannelId() {
+  return getConfiguredChannelId("clips");
+}
+
+function getClipOfTheDayChannelId() {
+  return getConfiguredChannelId("clipoftheday");
+}
+
 function getDailyStatsChannelId() {
   return getConfiguredChannelId("daily") || DAILY_STATS_CHANNEL_ID;
 }
@@ -345,6 +381,9 @@ module.exports = {
   getStaffChannelId,
   getStatusJumpUrl,
   getStatusWidgetChannelId,
+  getConfigChannelId,
+  getClipsChannelId,
+  getClipOfTheDayChannelId,
   getStoredChannelConfigKey,
   getTicketJumpUrl,
   hydrateChannelConfigCache,

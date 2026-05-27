@@ -60,6 +60,9 @@ const { maybeHandleTrainingFeedbackInteraction } = require("./handlers/training-
 const { maybeHandleConfigListInteraction } = require("./handlers/commands");
 const { registerSlashCommands, maybeHandleSlashCommandInteraction } = require("./slash-commands");
 const { flushAllQueues: flushAllLogQueues } = require("./log-channel-queue");
+const { ensureConfigChannelSticky } = require("./handlers/config-upload");
+const { maybeHandleClipsMessage, ensureClipsChannelSticky } = require("./handlers/clips-channel");
+const { startClipOfTheDayScheduler } = require("./clip-of-day");
 
 enableStatusPersistence({
   recordStatusTransition,
@@ -372,6 +375,18 @@ client.once(Events.ClientReady, async (readyClient) => {
   } catch (err) {
     recordRuntimeEvent("warn", "slash-register", err?.message || err);
   }
+
+  // Ensure config and clips channel stickies are posted/pinned
+  for (const guild of readyClient.guilds.cache.values()) {
+    ensureConfigChannelSticky(guild).catch(() => null);
+    ensureClipsChannelSticky(guild).catch(() => null);
+  }
+
+  try {
+    startClipOfTheDayScheduler(readyClient);
+  } catch (err) {
+    recordRuntimeEvent("warn", "cotd-scheduler", err?.message || err);
+  }
 });
 
 client.on(Events.Error, (err) => {
@@ -445,6 +460,16 @@ async function runGuarded(scope, task, { message = null, replyWithDocsError = fa
 client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
+  // Config channel is upload-only — delete any non-bot message immediately
+  try {
+    const { getConfigChannelId } = require("./channel-config");
+    const configId = getConfigChannelId();
+    if (configId && message.channelId === configId) {
+      await message.delete().catch(() => null);
+      return;
+    }
+  } catch {}
+
   await runGuarded("message-handler", async () => {
     try {
       await trackDailyStatsMessage(message);
@@ -454,6 +479,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
     await maybeEnforceNicknameOnMessage(message).catch(() => null);
     recordGhostPingCandidate(message);
+
+    // Clips channel guard — must run before moderation watcher
+    if (await maybeHandleClipsMessage(message)) return;
 
     if (await maybeHandleLockCommand(message)) return;
     if (await maybeHandleControlCommand(message)) return;

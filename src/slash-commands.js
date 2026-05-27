@@ -202,6 +202,23 @@ function buildDefinitions() {
       .addSubcommand(s => s.setName("purge")
         .setDescription("Wipe samples from a user (owner only)")
         .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)))
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("upload")
+      .setDescription("Submit content")
+      .addSubcommand(s => s.setName("config")
+        .setDescription("Submit a config for the configs channel")
+        .addStringOption(o => o.setName("name").setDescription("Config name").setRequired(true))
+        .addStringOption(o => o.setName("type").setDescription("Config type").setRequired(true)
+          .addChoices(
+            { name: "rage", value: "rage" },
+            { name: "semi-rage", value: "semi-rage" },
+            { name: "legit", value: "legit" },
+            { name: "semi-legit", value: "semi-legit" }
+          ))
+        .addAttachmentOption(o => o.setName("file").setDescription("The config file").setRequired(true))
+        .addStringOption(o => o.setName("comments").setDescription("Optional notes/recommendations").setRequired(false)))
       .toJSON()
   ];
 }
@@ -388,6 +405,10 @@ async function handleAutocomplete(interaction) {
 async function maybeHandleSlashCommandInteraction(interaction) {
   try {
     if (interaction.isChatInputCommand?.()) {
+      if (interaction.commandName === "upload") {
+        const { handleUploadConfigInteraction } = require("./handlers/config-upload");
+        return await handleUploadConfigInteraction(interaction);
+      }
       return await handleSlashCommand(interaction);
     }
     if (interaction.isAutocomplete?.()) {

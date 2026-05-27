@@ -407,6 +407,12 @@ function createSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS scam_offense_state_recent_idx
       ON scam_offense_state (last_offense_at DESC);
+
+    CREATE TABLE IF NOT EXISTS clip_channel_warnings (
+      user_id TEXT PRIMARY KEY,
+      warning_count INTEGER NOT NULL DEFAULT 0,
+      last_warned_at INTEGER NOT NULL
+    );
   `);
 }
 
@@ -2057,6 +2063,48 @@ async function resetRestrictedEmojiDatabaseForTests(filePath = DEFAULT_DATABASE_
   } catch {}
 }
 
+// ── Clips channel warning state ───────────────────────────────────────────────
+
+async function getClipsWarningState(userId, { now = Date.now(), decayMs = 24 * 60 * 60 * 1000 } = {}) {
+  const db = await getDatabase();
+  if (!db) return null;
+  const stmt = db.prepare("SELECT user_id, warning_count, last_warned_at FROM clip_channel_warnings WHERE user_id = ?");
+  try {
+    stmt.bind([String(userId)]);
+    if (!stmt.step()) return { userId: String(userId), count: 0, lastWarnedAt: 0 };
+    const row = stmt.get();
+    const lastAt = Number(row[2]) || 0;
+    // decay: if last warning is older than decayMs, treat as fresh
+    if (now - lastAt > decayMs) return { userId: String(userId), count: 0, lastWarnedAt: lastAt };
+    return { userId: String(row[0]), count: Number(row[1]) || 0, lastWarnedAt: lastAt };
+  } finally {
+    stmt.free();
+  }
+}
+
+async function bumpClipsWarning(userId, { now = Date.now() } = {}) {
+  const db = await getDatabase();
+  if (!db) return null;
+  // decay check first
+  const state = await getClipsWarningState(userId, { now });
+  const newCount = (state?.count || 0) + 1;
+  db.run(
+    `INSERT INTO clip_channel_warnings (user_id, warning_count, last_warned_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET warning_count = excluded.warning_count, last_warned_at = excluded.last_warned_at`,
+    [String(userId), newCount, now]
+  );
+  schedulePersist(db);
+  return { userId: String(userId), count: newCount, lastWarnedAt: now };
+}
+
+async function resetClipsWarning(userId) {
+  const db = await getDatabase();
+  if (!db) return;
+  db.run("DELETE FROM clip_channel_warnings WHERE user_id = ?", [String(userId)]);
+  schedulePersist(db);
+}
+
 module.exports = {
   DEFAULT_DATABASE_PATH,
   DAILY_STATS_WINDOW_KEY,
@@ -2121,5 +2169,8 @@ module.exports = {
   flushRestrictedEmojiDatabaseNow,
   resetRestrictedEmojiDatabaseForTests,
   getDatabase,
-  schedulePersist
+  schedulePersist,
+  getClipsWarningState,
+  bumpClipsWarning,
+  resetClipsWarning
 };

@@ -460,13 +460,19 @@ async function runGuarded(scope, task, { message = null, replyWithDocsError = fa
 client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
-  // Config channel is upload-only — delete any non-bot message immediately
+  // Config channel is upload-only — delete any non-bot message immediately,
+  // EXCEPT for staff/owner who can chat there freely (announcements, pinning,
+  // troubleshooting). The moderation-bypass check covers owner + staff role
+  // + manual whitelist.
   try {
     const { getConfigChannelId } = require("./channel-config");
     const configId = getConfigChannelId();
     if (configId && message.channelId === configId) {
-      await message.delete().catch(() => null);
-      return;
+      const { hasModerationBypassMessage } = require("./permissions");
+      if (!hasModerationBypassMessage(message)) {
+        await message.delete().catch(() => null);
+        return;
+      }
     }
   } catch {}
 

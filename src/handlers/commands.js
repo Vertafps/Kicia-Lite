@@ -1103,6 +1103,20 @@ async function handleSetChannelCommand(message, command, {
   });
 
   await sendLog(message.guild, buildChannelAuditPanel({ message, entry, action: "set" })).catch(() => null);
+
+  // Post the sticky info message for slots that ship one. Best-effort — if
+  // it fails the channel is still configured; staff can re-trigger via
+  // resetting + re-setting the slot.
+  try {
+    if (command.slot === "config") {
+      const { ensureConfigChannelSticky } = require("./config-upload");
+      await ensureConfigChannelSticky(message.guild).catch(() => null);
+    } else if (command.slot === "clips") {
+      const { ensureClipsChannelSticky } = require("./clips-channel");
+      await ensureClipsChannelSticky(message.guild).catch(() => null);
+    }
+  } catch {}
+
   return true;
 }
 

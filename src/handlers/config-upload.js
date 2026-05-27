@@ -283,20 +283,8 @@ async function maybeHandleConfigChannelMessage(message) {
 function buildConfigStickyPanel() {
   const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
   return _buildRichPanel({
-    title: "📌 config submissions — read before posting",
-    description: [
-      "this channel is for config submissions only",
-      "**do not chat here**",
-      "",
-      "**how to submit:**",
-      "use `/upload config` and fill in the fields:",
-      "• `name` — your config's name",
-      "• `type` — rage / semi-rage / legit / semi-legit",
-      "• `script` — free / premium",
-      "• `file` — the config file",
-      "• `video` or `video_link` — showcase video (upload a file OR paste a YouTube / Streamable / TikTok / Twitch / Medal / Vimeo / Kick URL). GIFs are not accepted.",
-      "• `comments` — optional notes (recommendations, etc.)"
-    ].join("\n"),
+    title: "configs only",
+    description: "drop yours with `/upload config`. chatting = warn → warn → 24h timeout.",
     color: _INFO
   });
 }

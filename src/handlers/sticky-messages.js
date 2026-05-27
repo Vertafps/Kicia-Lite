@@ -64,21 +64,38 @@ async function ensureSticky(channel) {
     entry.currentMessageId = null;
   }
 
-  // Try to recover an existing bot-authored sticky from recent history
-  // (matches by embed title prefix) so we don't double-post on bot restarts.
+  // Scan recent history for any prior bot stickies and clean them up.
+  // Heuristic: a sticky is a bot-authored message with at least one embed
+  // and NO attachments. Real submission posts in the config channel always
+  // have attachments (config + video files), so this won't match those.
+  // The clips channel has no other bot posts that fit this shape.
+  // - If we find one whose title matches the CURRENT builder's title → adopt.
+  // - Any other bot stickies in scope (stale formats from earlier deploys)
+  //   → delete so we never end up with multiple stickies stacked.
   try {
     const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
     if (recent) {
       const me = channel.guild?.members?.me?.id || channel.client?.user?.id;
-      const candidate = entry.buildPanel().data?.title || "";
-      const titleNeedle = candidate.split(" ")[0] || ""; // emoji or first word
+      const wantTitle = String(entry.buildPanel().data?.title || "").trim();
+      let adopted = null;
+      const stale = [];
       for (const m of recent.values()) {
         if (m.author?.id !== me) continue;
-        const t = m.embeds?.[0]?.title || "";
-        if (titleNeedle && t.startsWith(titleNeedle)) {
-          entry.currentMessageId = m.id;
-          return m;
+        if (m.attachments?.size > 0) continue;
+        if (!m.embeds?.length) continue;
+        const t = String(m.embeds[0]?.title || "").trim();
+        if (!adopted && t === wantTitle) {
+          adopted = m;
+        } else {
+          stale.push(m);
         }
+      }
+      for (const m of stale) {
+        await m.delete().catch(() => null);
+      }
+      if (adopted) {
+        entry.currentMessageId = adopted.id;
+        return adopted;
       }
     }
   } catch {}

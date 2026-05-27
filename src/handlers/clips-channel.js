@@ -146,21 +146,8 @@ async function maybeHandleClipsMessage(message) {
 function buildClipsStickyPanel() {
   const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
   return _buildRichPanel({
-    title: "🎬 clips channel",
-    description: [
-      "**hii, you can upload your video clips here**",
-      "",
-      "post clips as **video attachments** or **video links** (YouTube, Twitch, Streamable, etc.).",
-      "refrain from typing in this channel — **video clips only**.",
-      "",
-      "**rules:**",
-      "• images, GIFs, and text-only messages get auto-removed and warned",
-      "• 2 warnings, then a 24h timeout on the third",
-      "• the bot reacts ✅ to valid video clip uploads",
-      "",
-      "the post with the most reactions at the end of the day gets posted as **clip of the day**.",
-      "good luck!"
-    ].join("\n"),
+    title: "clips only",
+    description: "video files or links (yt / twitch / streamable / tiktok / etc). no images, no gifs, no chat — warn → warn → 24h timeout.\nmost reactions today wins clip of the day.",
     color: _INFO
   });
 }

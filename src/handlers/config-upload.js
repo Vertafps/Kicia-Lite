@@ -44,8 +44,9 @@ async function handleUploadConfigInteraction(interaction) {
 
   const name = interaction.options.getString("name", true);
   const type = interaction.options.getString("type", true);
+  const script = interaction.options.getString("script", true);
   const file = interaction.options.getAttachment("file", true);
-  const video = interaction.options.getAttachment("video"); // now optional
+  const video = interaction.options.getAttachment("video"); // optional
   const videoLink = (interaction.options.getString("video_link") || "").trim();
   const comments = interaction.options.getString("comments") || "";
 
@@ -117,6 +118,7 @@ async function handleUploadConfigInteraction(interaction) {
   const fields = [
     { name: "name", value: String(name).slice(0, 256), inline: true },
     { name: "type", value: String(type), inline: true },
+    { name: "script", value: String(script), inline: true },
     { name: "submitted by", value: `<@${interaction.user.id}>`, inline: true }
   ];
   if (comments.trim()) {
@@ -137,18 +139,15 @@ async function handleUploadConfigInteraction(interaction) {
     color: INFO
   });
 
-  // Triple-line separator above the new submission so adjacent configs are
-  // clearly distinct in the channel.
-  const SEPARATOR = [
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  ].join("\n");
+  // Submission header — Discord-native H2 heading + a thin underline so
+  // adjacent configs are clearly distinct without looking like ASCII art.
+  // Stays well under the 2000-char content limit.
+  const HEADER = `## ⚙️ new config — ${String(name).slice(0, 80)}\n-# ────────────────────────────────`;
 
   // Compose the post. Video link goes in content (Discord auto-embeds it
   // as a playable widget for supported hosts); attachment goes via files[].
   const sendPayload = {
-    content: videoLink ? `${SEPARATOR}\n${videoLink}` : SEPARATOR,
+    content: videoLink ? `${HEADER}\n${videoLink}` : HEADER,
     embeds: [panel],
     files: [{ attachment: file.url, name: file.name }],
     allowedMentions: { parse: [] }
@@ -293,8 +292,9 @@ function buildConfigStickyPanel() {
       "use `/upload config` and fill in the fields:",
       "• `name` — your config's name",
       "• `type` — rage / semi-rage / legit / semi-legit",
-      "• `file` — the config file attachment",
-      "• **video required** — either upload via `video` (mp4/mov/webm/etc.) OR paste a URL via `video_link` (YouTube / Streamable / TikTok / Twitch / Medal / Vimeo / Kick). GIFs are not accepted.",
+      "• `script` — free / premium",
+      "• `file` — the config file",
+      "• `video` or `video_link` — showcase video (upload a file OR paste a YouTube / Streamable / TikTok / Twitch / Medal / Vimeo / Kick URL). GIFs are not accepted.",
       "• `comments` — optional notes (recommendations, etc.)"
     ].join("\n"),
     color: _INFO

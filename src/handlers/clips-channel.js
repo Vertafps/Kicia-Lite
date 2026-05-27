@@ -147,7 +147,7 @@ function buildClipsStickyPanel() {
   const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
   return _buildRichPanel({
     title: "clips only",
-    description: "video files or links (yt / twitch / streamable / tiktok / etc). no images, no gifs, no chat — warn → warn → 24h timeout.\nmost reactions today wins clip of the day.",
+    description: "drop your clips here. most reactions wins clip of the day.",
     color: _INFO
   });
 }

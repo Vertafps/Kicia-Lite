@@ -284,7 +284,7 @@ function buildConfigStickyPanel() {
   const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
   return _buildRichPanel({
     title: "configs only",
-    description: "drop yours with `/upload config`. chatting = warn → warn → 24h timeout.",
+    description: "use `/upload config`",
     color: _INFO
   });
 }

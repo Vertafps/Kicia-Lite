@@ -984,6 +984,36 @@ const REGISTRY_ENTRIES = [
     section: "daily-stats"
   }],
 
+  // config channel
+  ["config.guard.enabled", {
+    type: SETTING_TYPES.BOOL,
+    defaultValue: true,
+    label: "Config Channel Guard",
+    description: "When true, non-upload messages in the config channel are removed and the sender is warned.",
+    section: "config"
+  }],
+  ["config.warning.threshold", {
+    type: SETTING_TYPES.INT,
+    defaultValue: 2,
+    label: "Config Warning Threshold",
+    description: "Number of warnings before a config-channel offender is timed out.",
+    section: "config"
+  }],
+  ["config.warning.decayMs", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: 24 * 60 * 60 * 1000,
+    label: "Config Warning Decay",
+    description: "How long since the last config warning before the counter resets.",
+    section: "config"
+  }],
+  ["config.timeout.ms", {
+    type: SETTING_TYPES.DURATION,
+    defaultValue: 24 * 60 * 60 * 1000,
+    label: "Config Timeout Duration",
+    description: "Timeout length applied after threshold warnings in the config channel.",
+    section: "config"
+  }],
+
   // clips
   ["clips.guard.enabled", {
     type: SETTING_TYPES.BOOL,

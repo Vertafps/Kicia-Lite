@@ -11,13 +11,34 @@ const {
   bumpClipsWarning,
   resetClipsWarning
 } = require("../restricted-emoji-db");
+const { registerSticky, ensureSticky } = require("./sticky-messages");
 
-const URL_RE = /https?:\/\/\S+|www\.\S+/i;
+const VIDEO_HOST_RE = /\b(?:youtube\.com|youtu\.be|twitch\.tv|streamable\.com|medal\.tv|clips\.twitch\.tv|kick\.com|tiktok\.com|x\.com|twitter\.com|vimeo\.com|dailymotion\.com|reddit\.com\/r\/\S+\/comments)\b/i;
+const VIDEO_EXT_RE = /\.(?:mp4|mov|webm|mkv|avi|flv|m4v)(?:\?|#|$)/i;
 
-function hasMedia(message) {
-  if (message.attachments?.size > 0) return true;
-  if (message.embeds?.length > 0) return true;
-  if (URL_RE.test(message.content || "")) return true;
+function hasVideoClip(message) {
+  // Attachments: must be video content type, or video file extension
+  if (message.attachments?.size > 0) {
+    for (const att of message.attachments.values()) {
+      const ct = String(att.contentType || "").toLowerCase();
+      if (ct.startsWith("video/")) return true;
+      const name = String(att.name || "").toLowerCase();
+      if (VIDEO_EXT_RE.test(name)) return true;
+    }
+  }
+  // Embeds: only those with a video field, NOT gifv (which is animated GIF)
+  if (message.embeds?.length > 0) {
+    for (const em of message.embeds) {
+      if (em.type === "gifv") continue;   // GIFs are not clips
+      if (em.video?.url) return true;
+      if (em.url && (VIDEO_HOST_RE.test(em.url) || VIDEO_EXT_RE.test(em.url))) return true;
+    }
+  }
+  // Raw URLs in content
+  const urls = String(message.content || "").match(/https?:\/\/\S+/gi) || [];
+  for (const url of urls) {
+    if (VIDEO_HOST_RE.test(url) || VIDEO_EXT_RE.test(url)) return true;
+  }
   return false;
 }
 
@@ -28,20 +49,20 @@ async function maybeHandleClipsMessage(message) {
   const clipsId = getClipsChannelId();
   if (!clipsId || message.channelId !== clipsId) return false;
   if (hasModerationBypassMessage(message)) {
-    // bypass users still get the ✅ auto-react if they post media
-    if (hasMedia(message)) {
+    // bypass users still get the ✅ auto-react if they post a video clip
+    if (hasVideoClip(message)) {
       message.react("✅").catch(() => null);
     }
     return false;
   }
 
-  if (hasMedia(message)) {
+  if (hasVideoClip(message)) {
     // valid clip — react and exit
     message.react("✅").catch(() => null);
     return true;
   }
 
-  // text-only message in clips channel - warn or escalate
+  // non-video message in clips channel - warn or escalate
   const userId = message.author.id;
   const now = Date.now();
   const decayMs = Number(getSetting("clips.warning.decayMs")) || 24 * 60 * 60 * 1000;
@@ -67,7 +88,7 @@ async function maybeHandleClipsMessage(message) {
   if (willTimeout) {
     try {
       if (message.member?.timeout) {
-        await message.member.timeout(timeoutMs, "clips channel: text-only repeat offense");
+        await message.member.timeout(timeoutMs, "clips channel: non-video repeat offense");
         timeoutResult = { applied: true };
       }
     } catch (err) {
@@ -79,7 +100,7 @@ async function maybeHandleClipsMessage(message) {
     dmResult = await trySendDM(message.author, {
       embeds: [buildPanel({
         header: "Timeout Applied",
-        body: `I've muted you for ${Math.round(timeoutMs / 3600000)}h because you kept sending non-clip messages in the clips channel after warnings. That channel is for clips only.`,
+        body: `I've muted you for ${Math.round(timeoutMs / 3600000)}h because you kept sending non-clip messages in the clips channel after warnings. That channel is for videos only.`,
         color: WARN
       })]
     });
@@ -93,7 +114,7 @@ async function maybeHandleClipsMessage(message) {
     dmResult = await trySendDM(message.author, {
       embeds: [buildPanel({
         header: "Heads-up — clips channel",
-        body: `The clips channel is for clip uploads only (attachments, video links, embeds). Your text-only message was removed. ${remaining > 0 ? `${remaining} warning${remaining === 1 ? "" : "s"} left before a 24h timeout.` : "Next text-only message will timeout you."}`,
+        body: `The clips channel is for video clips only (video attachments, YouTube/Twitch/Streamable links, etc). Images, GIFs, and text get auto-removed. Your message was deleted. ${remaining > 0 ? `${remaining} warning${remaining === 1 ? "" : "s"} left before a 24h timeout.` : "Next offense will timeout you."}`,
         color: INFO
       })]
     });
@@ -122,6 +143,28 @@ async function maybeHandleClipsMessage(message) {
   return true;
 }
 
+function buildClipsStickyPanel() {
+  const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
+  return _buildRichPanel({
+    title: "🎬 clips channel",
+    description: [
+      "**hii, you can upload your video clips here**",
+      "",
+      "post clips as **video attachments** or **video links** (YouTube, Twitch, Streamable, etc.).",
+      "refrain from typing in this channel — **video clips only**.",
+      "",
+      "**rules:**",
+      "• images, GIFs, and text-only messages get auto-removed and warned",
+      "• 2 warnings, then a 24h timeout on the third",
+      "• the bot reacts ✅ to valid video clip uploads",
+      "",
+      "the post with the most reactions at the end of the day gets posted as **clip of the day**.",
+      "good luck!"
+    ].join("\n"),
+    color: _INFO
+  });
+}
+
 async function ensureClipsChannelSticky(guild) {
   const channelId = getClipsChannelId();
   if (!channelId || !guild) return false;
@@ -129,43 +172,9 @@ async function ensureClipsChannelSticky(guild) {
     || await guild.channels.fetch(channelId).catch(() => null);
   if (!channel?.send) return false;
 
+  registerSticky(channelId, buildClipsStickyPanel);
   try {
-    const fetcher = typeof channel.messages.fetchPins === "function"
-      ? channel.messages.fetchPins()
-      : channel.messages.fetchPinned();
-    const pins = await fetcher.catch(() => null);
-    if (pins) {
-      for (const m of pins.values()) {
-        if (m.author?.id === guild.client.user.id
-          && m.embeds?.[0]?.title?.includes("clips channel")) {
-          return false;
-        }
-      }
-    }
-  } catch {}
-
-  const sticky = buildRichPanel({
-    title: "🎬 clips channel",
-    description: [
-      "**hii, you can upload your clips here**",
-      "",
-      "post clips as **attachments**, **video links**, or **embeds**.",
-      "refrain from typing in this channel — **clips only**.",
-      "",
-      "**rules:**",
-      "• text-only messages get auto-removed and warned",
-      "• 2 warnings, then a 24h timeout on the third",
-      "• the bot reacts ✅ to valid clip uploads",
-      "",
-      "the post with the most reactions at the end of the day gets posted as **clip of the day**.",
-      "good luck!"
-    ].join("\n"),
-    color: INFO
-  });
-
-  try {
-    const msg = await channel.send({ embeds: [sticky], allowedMentions: { parse: [] } });
-    await msg.pin().catch(() => null);
+    await ensureSticky(channel);
     return true;
   } catch (err) {
     recordRuntimeEvent("warn", "clips-sticky", err?.message || err);

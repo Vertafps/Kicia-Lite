@@ -413,6 +413,12 @@ function createSchema(db) {
       warning_count INTEGER NOT NULL DEFAULT 0,
       last_warned_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS config_channel_warnings (
+      user_id TEXT PRIMARY KEY,
+      warning_count INTEGER NOT NULL DEFAULT 0,
+      last_warned_at INTEGER NOT NULL
+    );
   `);
 }
 
@@ -2105,6 +2111,48 @@ async function resetClipsWarning(userId) {
   schedulePersist(db);
 }
 
+// ── Config channel warning state ──────────────────────────────────────────────
+
+async function getConfigWarningState(userId, { now = Date.now(), decayMs = 24 * 60 * 60 * 1000 } = {}) {
+  const db = await getDatabase();
+  if (!db) return null;
+  const stmt = db.prepare("SELECT user_id, warning_count, last_warned_at FROM config_channel_warnings WHERE user_id = ?");
+  try {
+    stmt.bind([String(userId)]);
+    if (!stmt.step()) return { userId: String(userId), count: 0, lastWarnedAt: 0 };
+    const row = stmt.get();
+    const lastAt = Number(row[2]) || 0;
+    // decay: if last warning is older than decayMs, treat as fresh
+    if (now - lastAt > decayMs) return { userId: String(userId), count: 0, lastWarnedAt: lastAt };
+    return { userId: String(row[0]), count: Number(row[1]) || 0, lastWarnedAt: lastAt };
+  } finally {
+    stmt.free();
+  }
+}
+
+async function bumpConfigWarning(userId, { now = Date.now() } = {}) {
+  const db = await getDatabase();
+  if (!db) return null;
+  // decay check first
+  const state = await getConfigWarningState(userId, { now });
+  const newCount = (state?.count || 0) + 1;
+  db.run(
+    `INSERT INTO config_channel_warnings (user_id, warning_count, last_warned_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET warning_count = excluded.warning_count, last_warned_at = excluded.last_warned_at`,
+    [String(userId), newCount, now]
+  );
+  schedulePersist(db);
+  return { userId: String(userId), count: newCount, lastWarnedAt: now };
+}
+
+async function resetConfigWarning(userId) {
+  const db = await getDatabase();
+  if (!db) return;
+  db.run("DELETE FROM config_channel_warnings WHERE user_id = ?", [String(userId)]);
+  schedulePersist(db);
+}
+
 module.exports = {
   DEFAULT_DATABASE_PATH,
   DAILY_STATS_WINDOW_KEY,
@@ -2172,5 +2220,8 @@ module.exports = {
   schedulePersist,
   getClipsWarningState,
   bumpClipsWarning,
-  resetClipsWarning
+  resetClipsWarning,
+  getConfigWarningState,
+  bumpConfigWarning,
+  resetConfigWarning
 };

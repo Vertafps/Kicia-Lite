@@ -60,8 +60,9 @@ const { maybeHandleTrainingFeedbackInteraction } = require("./handlers/training-
 const { maybeHandleConfigListInteraction } = require("./handlers/commands");
 const { registerSlashCommands, maybeHandleSlashCommandInteraction } = require("./slash-commands");
 const { flushAllQueues: flushAllLogQueues } = require("./log-channel-queue");
-const { ensureConfigChannelSticky } = require("./handlers/config-upload");
+const { ensureConfigChannelSticky, maybeHandleConfigChannelMessage } = require("./handlers/config-upload");
 const { maybeHandleClipsMessage, ensureClipsChannelSticky } = require("./handlers/clips-channel");
+const { maybeBumpForChannel } = require("./handlers/sticky-messages");
 const { startClipOfTheDayScheduler } = require("./clip-of-day");
 
 enableStatusPersistence({
@@ -460,21 +461,15 @@ async function runGuarded(scope, task, { message = null, replyWithDocsError = fa
 client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
 
-  // Config channel is upload-only — delete any non-bot message immediately,
-  // EXCEPT for staff/owner who can chat there freely (announcements, pinning,
-  // troubleshooting). The moderation-bypass check covers owner + staff role
-  // + manual whitelist.
-  try {
-    const { getConfigChannelId } = require("./channel-config");
-    const configId = getConfigChannelId();
-    if (configId && message.channelId === configId) {
-      const { hasModerationBypassMessage } = require("./permissions");
-      if (!hasModerationBypassMessage(message)) {
-        await message.delete().catch(() => null);
-        return;
-      }
-    }
-  } catch {}
+  // Config channel: warn-then-timeout system (replaces the old silent delete).
+  // Staff/owner bypass is handled inside maybeHandleConfigChannelMessage.
+  if (await maybeHandleConfigChannelMessage(message).catch(() => false)) {
+    maybeBumpForChannel(message).catch(() => null);
+    return;
+  }
+
+  // Bump sticky for any non-bot message (covers staff posts too)
+  maybeBumpForChannel(message).catch(() => null);
 
   await runGuarded("message-handler", async () => {
     try {

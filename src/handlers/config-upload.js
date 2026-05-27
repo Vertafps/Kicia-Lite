@@ -1,8 +1,18 @@
 "use strict";
-const { buildRichPanel, INFO } = require("../embed");
+const { buildPanel, buildRichPanel, WARN, DANGER, INFO, resolveAvatarURL } = require("../embed");
 const { getConfigChannelId } = require("../channel-config");
 const { recordRuntimeEvent } = require("../runtime-health");
 const { safeReply } = require("../utils/respond");
+const { sendIgnoreLogPanel } = require("../log-channel");
+const { trySendDM } = require("../utils/respond");
+const { getSetting } = require("../settings");
+const { hasModerationBypassMessage } = require("../permissions");
+const {
+  getConfigWarningState,
+  bumpConfigWarning,
+  resetConfigWarning
+} = require("../restricted-emoji-db");
+const { registerSticky, ensureSticky } = require("./sticky-messages");
 
 async function handleUploadConfigInteraction(interaction) {
   if (interaction.options.getSubcommand?.() !== "config") return false;
@@ -85,32 +95,99 @@ async function handleUploadConfigInteraction(interaction) {
   return true;
 }
 
-async function ensureConfigChannelSticky(guild) {
-  const channelId = getConfigChannelId();
-  if (!channelId || !guild) return false;
-  const channel = guild.channels.cache.get(channelId)
-    || await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel?.send) return false;
+async function maybeHandleConfigChannelMessage(message) {
+  if (getSetting("config.guard.enabled") === false) return false;
+  if (!message?.inGuild?.()) return false;
+  if (message.author?.bot) return false;
+  const configId = getConfigChannelId();
+  if (!configId || message.channelId !== configId) return false;
+  if (hasModerationBypassMessage(message)) {
+    return false;
+  }
 
-  // Check existing pins for our sticky (by title match)
+  const userId = message.author.id;
+  const now = Date.now();
+  const decayMs = Number(getSetting("config.warning.decayMs")) || 24 * 60 * 60 * 1000;
+  const threshold = Number(getSetting("config.warning.threshold")) || 2;
+  const timeoutMs = Number(getSetting("config.timeout.ms")) || 24 * 60 * 60 * 1000;
+
+  let state = { count: 0 };
   try {
-    // fetchPins() is the discord.js v15 replacement; fall back to fetchPinned()
-    // for older versions in case nodemon is mid-rolling-upgrade.
-    const fetcher = typeof channel.messages.fetchPins === "function"
-      ? channel.messages.fetchPins()
-      : channel.messages.fetchPinned();
-    const pins = await fetcher.catch(() => null);
-    if (pins) {
-      for (const m of pins.values()) {
-        if (m.author?.id === guild.client.user.id
-          && m.embeds?.[0]?.title?.includes("config submissions")) {
-          return false; // already pinned, nothing to do
-        }
-      }
-    }
-  } catch {}
+    state = await getConfigWarningState(userId, { now, decayMs }) || { count: 0 };
+  } catch (err) {
+    recordRuntimeEvent("warn", "config-state-read", err?.message || err);
+  }
 
-  const sticky = buildRichPanel({
+  // delete the offending message regardless of action
+  const deleteResult = await message.delete()
+    .then(() => ({ deleted: true }))
+    .catch((err) => ({ deleted: false, reason: err?.message || "delete failed" }));
+
+  const willTimeout = state.count >= threshold;
+  let timeoutResult = { applied: false, reason: "warn-only" };
+  let dmResult = { sent: false, reason: null };
+
+  if (willTimeout) {
+    try {
+      if (message.member?.timeout) {
+        await message.member.timeout(timeoutMs, "config channel: chatting repeat offense");
+        timeoutResult = { applied: true };
+      }
+    } catch (err) {
+      timeoutResult = { applied: false, reason: err?.message || "timeout failed" };
+    }
+    try {
+      await resetConfigWarning(userId);
+    } catch {}
+    dmResult = await trySendDM(message.author, {
+      embeds: [buildPanel({
+        header: "Timeout Applied",
+        body: `I've muted you for ${Math.round(timeoutMs / 3600000)}h because you kept chatting in the config submissions channel after warnings. That channel is upload-only — use \`/upload config\` to submit.`,
+        color: WARN
+      })]
+    });
+  } else {
+    try {
+      await bumpConfigWarning(userId, { now });
+    } catch (err) {
+      recordRuntimeEvent("warn", "config-warn-bump", err?.message || err);
+    }
+    const remaining = threshold - (state.count + 1) + 1;
+    dmResult = await trySendDM(message.author, {
+      embeds: [buildPanel({
+        header: "Heads-up — config submissions channel",
+        body: `The config submissions channel is for \`/upload config\` submissions only — no chatting. Your text message was removed. ${remaining > 0 ? `${remaining} warning${remaining === 1 ? "" : "s"} left before a 24h timeout.` : "Next offense will timeout you."}`,
+        color: INFO
+      })]
+    });
+  }
+
+  // log to ignore-logs
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+  const dmLabel = dmResult.sent ? "✓ sent" : `✗ ${dmResult.reason || "not sent"}`;
+  const logPanel = buildRichPanel({
+    title: willTimeout ? "Config Channel · Timeout" : "Config Channel · Warning",
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields: [
+      { name: "User", value: `<@${message.author.id}>`, inline: true },
+      { name: "Warning count", value: String(state.count + 1), inline: true },
+      { name: "Action", value: willTimeout
+          ? `timeout ${Math.round(timeoutMs / 3600000)}h · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`
+          : `warn · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`,
+        inline: false },
+      { name: "Removed text", value: String(message.content || "").slice(0, 500) || "—" }
+    ],
+    color: willTimeout ? DANGER : WARN
+  });
+  await sendIgnoreLogPanel(message.guild, logPanel).catch(() => null);
+
+  return true;
+}
+
+function buildConfigStickyPanel() {
+  const { buildRichPanel: _buildRichPanel, INFO: _INFO } = require("../embed");
+  return _buildRichPanel({
     title: "📌 config submissions — read before posting",
     description: [
       "this channel is for config submissions only",
@@ -121,17 +198,22 @@ async function ensureConfigChannelSticky(guild) {
       "• `name` — your config's name",
       "• `type` — rage / semi-rage / legit / semi-legit",
       "• `file` — the config file attachment",
-      "• `comments` — optional notes (recommendations, etc.)",
-      "",
-      "the bot reacts ✅ when your submission goes through",
-      "no chatting — this channel is upload-only"
+      "• `comments` — optional notes (recommendations, etc.)"
     ].join("\n"),
-    color: INFO
+    color: _INFO
   });
+}
 
+async function ensureConfigChannelSticky(guild) {
+  const channelId = getConfigChannelId();
+  if (!channelId || !guild) return false;
+  const channel = guild.channels.cache.get(channelId)
+    || await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel?.send) return false;
+
+  registerSticky(channelId, buildConfigStickyPanel);
   try {
-    const msg = await channel.send({ embeds: [sticky], allowedMentions: { parse: [] } });
-    await msg.pin().catch(() => null);
+    await ensureSticky(channel);
     return true;
   } catch (err) {
     recordRuntimeEvent("warn", "config-sticky", err?.message || err);
@@ -139,4 +221,4 @@ async function ensureConfigChannelSticky(guild) {
   }
 }
 
-module.exports = { handleUploadConfigInteraction, ensureConfigChannelSticky };
+module.exports = { handleUploadConfigInteraction, maybeHandleConfigChannelMessage, ensureConfigChannelSticky };

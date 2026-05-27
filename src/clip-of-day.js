@@ -3,10 +3,19 @@ const { buildRichPanel, INFO, resolveAvatarURL } = require("./embed");
 const { getClipsChannelId, getClipOfTheDayChannelId } = require("./channel-config");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { getSetting } = require("./settings");
+const { trySendDM } = require("./utils/respond");
 
 // 9pm UTC+5:30 = 15:30 UTC
 const DEFAULT_UTC_HOUR = 15;
 const DEFAULT_UTC_MINUTE = 30;
+
+// Direct-DM recipients for the daily clip-of-the-day result. Each entry maps
+// a Discord user ID to the salutation name used in the DM body. Hardcoded
+// per owner spec; add more here if the audience grows.
+const COTD_DM_RECIPIENTS = [
+  { userId: "847703912932311091", name: "kernal" },
+  { userId: "919357737257795645", name: "dcad" }
+];
 
 function msUntilNext(utcHour, utcMinute) {
   const now = new Date();
@@ -91,6 +100,22 @@ async function runClipOfTheDay(client) {
         color: INFO
       });
       await cotdChannel.send({ embeds: [panel], allowedMentions: { parse: [] } });
+
+      // Also DM the configured recipients with a friendly one-liner so they
+      // see the daily winner even if they aren't in the channel.
+      const dmBodyFor = (name) => `hiii ${name}, the clip of the day tdy was this: ${winner.message.url} with ${winner.reactionCount} reaction${winner.reactionCount === 1 ? "" : "s"}`;
+      for (const recipient of COTD_DM_RECIPIENTS) {
+        try {
+          const user = await client.users.fetch(recipient.userId).catch(() => null);
+          if (!user) continue;
+          const dmResult = await trySendDM(user, { content: dmBodyFor(recipient.name) });
+          if (!dmResult.sent) {
+            recordRuntimeEvent("warn", "cotd-dm", `${recipient.name} (${recipient.userId}): ${dmResult.reason || "send failed"}`);
+          }
+        } catch (err) {
+          recordRuntimeEvent("warn", "cotd-dm", `${recipient.name}: ${err?.message || err}`);
+        }
+      }
     } catch (err) {
       recordRuntimeEvent("warn", "cotd-run", err?.message || err);
     }

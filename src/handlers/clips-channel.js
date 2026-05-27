@@ -130,7 +130,10 @@ async function ensureClipsChannelSticky(guild) {
   if (!channel?.send) return false;
 
   try {
-    const pins = await channel.messages.fetchPinned().catch(() => null);
+    const fetcher = typeof channel.messages.fetchPins === "function"
+      ? channel.messages.fetchPins()
+      : channel.messages.fetchPinned();
+    const pins = await fetcher.catch(() => null);
     if (pins) {
       for (const m of pins.values()) {
         if (m.author?.id === guild.client.user.id

@@ -94,7 +94,12 @@ async function ensureConfigChannelSticky(guild) {
 
   // Check existing pins for our sticky (by title match)
   try {
-    const pins = await channel.messages.fetchPinned().catch(() => null);
+    // fetchPins() is the discord.js v15 replacement; fall back to fetchPinned()
+    // for older versions in case nodemon is mid-rolling-upgrade.
+    const fetcher = typeof channel.messages.fetchPins === "function"
+      ? channel.messages.fetchPins()
+      : channel.messages.fetchPinned();
+    const pins = await fetcher.catch(() => null);
     if (pins) {
       for (const m of pins.values()) {
         if (m.author?.id === guild.client.user.id

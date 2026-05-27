@@ -62,6 +62,7 @@ const { registerSlashCommands, maybeHandleSlashCommandInteraction } = require(".
 const { flushAllQueues: flushAllLogQueues } = require("./log-channel-queue");
 const { ensureConfigChannelSticky, maybeHandleConfigChannelMessage } = require("./handlers/config-upload");
 const { maybeHandleClipsMessage, ensureClipsChannelSticky } = require("./handlers/clips-channel");
+const { ensureBugsChannelSticky } = require("./handlers/bugs-channel");
 const { maybeBumpForChannel } = require("./handlers/sticky-messages");
 const { startClipOfTheDayScheduler } = require("./clip-of-day");
 
@@ -381,6 +382,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   for (const guild of readyClient.guilds.cache.values()) {
     ensureConfigChannelSticky(guild).catch(() => null);
     ensureClipsChannelSticky(guild).catch(() => null);
+    ensureBugsChannelSticky(guild).catch(() => null);
   }
 
   try {

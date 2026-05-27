@@ -164,6 +164,14 @@ const CHANNEL_CONFIG_SLOTS = [
     defaultId: "",
     required: false,
     uses: ["daily clip-of-the-day announcement (9pm UTC+5:30 = 15:30 UTC)"]
+  },
+  {
+    key: "bugs",
+    aliases: ["bugs-reports", "bug-reports", "bugreports", "bug-report", "bugreport"],
+    label: "Bug Reports Channel",
+    defaultId: "",
+    required: false,
+    uses: ["bug-report reminder sticky (reposts every 5 messages)"]
   }
 ];
 
@@ -318,6 +326,10 @@ function getClipOfTheDayChannelId() {
   return getConfiguredChannelId("clipoftheday");
 }
 
+function getBugsChannelId() {
+  return getConfiguredChannelId("bugs");
+}
+
 function getDailyStatsChannelId() {
   return getConfiguredChannelId("daily") || DAILY_STATS_CHANNEL_ID;
 }
@@ -384,6 +396,7 @@ module.exports = {
   getConfigChannelId,
   getClipsChannelId,
   getClipOfTheDayChannelId,
+  getBugsChannelId,
   getStoredChannelConfigKey,
   getTicketJumpUrl,
   hydrateChannelConfigCache,

@@ -5,7 +5,9 @@ const { recordRuntimeEvent } = require("../runtime-health");
 const REGISTRY = new Map();
 const REPOST_DEBOUNCE_MS = 5000;
 
-function registerSticky(channelId, buildPanelFn) {
+// options.everyN — bump the sticky once per N non-bot messages instead of
+// once per message (with the 5s debounce). Default 1 = bump on every msg.
+function registerSticky(channelId, buildPanelFn, { everyN = 1 } = {}) {
   if (!channelId || typeof buildPanelFn !== "function") return;
   const existing = REGISTRY.get(channelId) || {};
   REGISTRY.set(channelId, {
@@ -13,7 +15,9 @@ function registerSticky(channelId, buildPanelFn) {
     buildPanel: buildPanelFn,
     currentMessageId: existing.currentMessageId || null,
     lastRepostAt: existing.lastRepostAt || 0,
-    pendingTimer: existing.pendingTimer || null
+    pendingTimer: existing.pendingTimer || null,
+    everyN: Math.max(1, Number(everyN) || 1),
+    messageCount: existing.messageCount || 0
   });
 }
 
@@ -146,9 +150,11 @@ function bumpSticky(channel) {
 async function maybeBumpForChannel(message) {
   if (!message?.channel?.id) return;
   if (message.author?.bot) return;
-  if (REGISTRY.has(message.channel.id)) {
-    bumpSticky(message.channel);
-  }
+  const entry = REGISTRY.get(message.channel.id);
+  if (!entry) return;
+  entry.messageCount = (entry.messageCount || 0) + 1;
+  if (entry.messageCount % entry.everyN !== 0) return;
+  bumpSticky(message.channel);
 }
 
 module.exports = { registerSticky, unregisterSticky, ensureSticky, bumpSticky, maybeBumpForChannel };

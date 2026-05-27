@@ -1114,6 +1114,9 @@ async function handleSetChannelCommand(message, command, {
     } else if (command.slot === "clips") {
       const { ensureClipsChannelSticky } = require("./clips-channel");
       await ensureClipsChannelSticky(message.guild).catch(() => null);
+    } else if (command.slot === "bugs") {
+      const { ensureBugsChannelSticky } = require("./bugs-channel");
+      await ensureBugsChannelSticky(message.guild).catch(() => null);
     }
   } catch {}
 

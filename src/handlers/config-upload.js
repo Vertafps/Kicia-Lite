@@ -14,15 +14,29 @@ const {
 } = require("../restricted-emoji-db");
 const { registerSticky, ensureSticky, bumpSticky } = require("./sticky-messages");
 
-// Video validation — same rule the clips channel uses. Owner now requires
-// every config submission to be paired with a video showcase.
+// Video validation — file form (attachment) and URL form (hosted). GIFs are
+// explicitly rejected in both. Owner requires every config submission to be
+// paired with a video showcase, but accepts either an uploaded video file
+// or a link to a major video host (YouTube, Streamable, TikTok, Twitch, etc.)
 const VIDEO_EXT_RE = /\.(?:mp4|mov|webm|mkv|avi|flv|m4v)(?:\?|#|$)/i;
+const VIDEO_HOST_RE = /\b(?:youtube\.com|youtu\.be|twitch\.tv|streamable\.com|medal\.tv|clips\.twitch\.tv|kick\.com|tiktok\.com|x\.com|twitter\.com|vimeo\.com|dailymotion\.com)\b/i;
+const GIF_HOST_OR_EXT_RE = /(?:\.gif(?:\?|#|$)|tenor\.com|giphy\.com)/i;
+
 function attachmentIsVideo(att) {
   if (!att) return false;
   const ct = String(att.contentType || "").toLowerCase();
+  if (ct.startsWith("image/")) return false; // GIFs and PNGs land here
   if (ct.startsWith("video/")) return true;
   const name = String(att.name || "").toLowerCase();
+  if (/\.gif(?:\?|#|$)/i.test(name)) return false;
   return VIDEO_EXT_RE.test(name);
+}
+
+function videoUrlLooksValid(url) {
+  const u = String(url || "").trim();
+  if (!/^https?:\/\//i.test(u)) return false;
+  if (GIF_HOST_OR_EXT_RE.test(u)) return false;
+  return VIDEO_HOST_RE.test(u) || VIDEO_EXT_RE.test(u);
 }
 
 async function handleUploadConfigInteraction(interaction) {
@@ -31,14 +45,28 @@ async function handleUploadConfigInteraction(interaction) {
   const name = interaction.options.getString("name", true);
   const type = interaction.options.getString("type", true);
   const file = interaction.options.getAttachment("file", true);
-  const video = interaction.options.getAttachment("video", true);
+  const video = interaction.options.getAttachment("video"); // now optional
+  const videoLink = (interaction.options.getString("video_link") || "").trim();
   const comments = interaction.options.getString("comments") || "";
 
-  // Reject non-video attachments early so the user gets a clear error before
-  // anything posts.
-  if (!attachmentIsVideo(video)) {
+  // Caller must supply EITHER a video file OR a video URL.
+  if (!video && !videoLink) {
     await interaction.reply({
-      content: "The `video` attachment must be an actual video file (mp4 / mov / webm / mkv / avi / flv / m4v). Re-run `/upload config` with a real showcase video.",
+      content: "You must include a showcase video — either upload it via the `video` option or paste a link via `video_link` (YouTube / Streamable / TikTok / Twitch / etc).",
+      ephemeral: true
+    });
+    return true;
+  }
+  if (video && !attachmentIsVideo(video)) {
+    await interaction.reply({
+      content: "The `video` attachment must be an actual video file (mp4 / mov / webm / mkv / avi / flv / m4v). GIFs and images aren't accepted — use `video_link` for hosted videos.",
+      ephemeral: true
+    });
+    return true;
+  }
+  if (videoLink && !videoUrlLooksValid(videoLink)) {
+    await interaction.reply({
+      content: "The `video_link` must point to a real video — YouTube, Streamable, TikTok, Twitch, Medal, Vimeo, Kick, or a direct .mp4/.mov/.webm/.mkv URL. GIFs (Tenor/Giphy) aren't accepted.",
       ephemeral: true
     });
     return true;
@@ -68,6 +96,19 @@ async function handleUploadConfigInteraction(interaction) {
     return true;
   }
 
+  // Acknowledge immediately so Discord doesn't show "application didn't
+  // respond" — the channel.send below can take several seconds when Discord
+  // re-uploads the video file. After this reply we use followUp/editReply
+  // (15 min window) for the final submission link.
+  try {
+    await interaction.reply({
+      content: "ok will upload in a little bit 👍",
+      ephemeral: true
+    });
+  } catch {
+    // already acknowledged somehow — fall through and rely on followUp later
+  }
+
   // Build the submission embed
   const author = {
     name: interaction.member?.displayName || interaction.user?.globalName || interaction.user?.username || "user",
@@ -82,7 +123,12 @@ async function handleUploadConfigInteraction(interaction) {
     fields.push({ name: "additional comments", value: String(comments).slice(0, 1000), inline: false });
   }
   fields.push({ name: "config file", value: `[${file.name}](${file.url})`, inline: false });
-  fields.push({ name: "showcase video", value: `[${video.name}](${video.url})`, inline: false });
+  if (video) {
+    fields.push({ name: "showcase video", value: `[${video.name}](${video.url})`, inline: false });
+  }
+  if (videoLink) {
+    fields.push({ name: "video link", value: videoLink.slice(0, 1000), inline: false });
+  }
 
   const panel = buildRichPanel({
     title: `Config Submission · ${name}`,
@@ -91,27 +137,37 @@ async function handleUploadConfigInteraction(interaction) {
     color: INFO
   });
 
-  // Separator above the new submission so adjacent configs are visually
-  // distinct. Discord renders the content above the embed.
-  const SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+  // Triple-line separator above the new submission so adjacent configs are
+  // clearly distinct in the channel.
+  const SEPARATOR = [
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
+
+  // Compose the post. Video link goes in content (Discord auto-embeds it
+  // as a playable widget for supported hosts); attachment goes via files[].
+  const sendPayload = {
+    content: videoLink ? `${SEPARATOR}\n${videoLink}` : SEPARATOR,
+    embeds: [panel],
+    files: [{ attachment: file.url, name: file.name }],
+    allowedMentions: { parse: [] }
+  };
+  if (video) {
+    sendPayload.files.push({ attachment: video.url, name: video.name });
+  }
 
   let posted;
   try {
-    posted = await channel.send({
-      content: SEPARATOR,
-      embeds: [panel],
-      files: [
-        { attachment: file.url, name: file.name },
-        { attachment: video.url, name: video.name }
-      ],
-      allowedMentions: { parse: [] }
-    });
+    posted = await channel.send(sendPayload);
   } catch (err) {
     recordRuntimeEvent("warn", "config-upload-send", err?.message || err);
-    await interaction.reply({
-      content: "Failed to post the submission. Ping staff.",
-      ephemeral: true
-    });
+    try {
+      await interaction.followUp({
+        content: "Failed to post the submission. Ping staff.",
+        ephemeral: true
+      });
+    } catch {}
     return true;
   }
 
@@ -123,10 +179,14 @@ async function handleUploadConfigInteraction(interaction) {
   // doesn't fire — we trigger it explicitly here.
   try { bumpSticky(channel); } catch {}
 
-  await interaction.reply({
-    content: `Submitted! View: ${posted.url}`,
-    ephemeral: true
-  });
+  try {
+    await interaction.followUp({
+      content: `Submitted! View: ${posted.url}`,
+      ephemeral: true
+    });
+  } catch {
+    // followUp can fail if the interaction token expired; not fatal
+  }
 
   return true;
 }
@@ -234,7 +294,7 @@ function buildConfigStickyPanel() {
       "• `name` — your config's name",
       "• `type` — rage / semi-rage / legit / semi-legit",
       "• `file` — the config file attachment",
-      "• `video` — showcase video (mp4/mov/webm/etc), **required**",
+      "• **video required** — either upload via `video` (mp4/mov/webm/etc.) OR paste a URL via `video_link` (YouTube / Streamable / TikTok / Twitch / Medal / Vimeo / Kick). GIFs are not accepted.",
       "• `comments` — optional notes (recommendations, etc.)"
     ].join("\n"),
     color: _INFO

@@ -127,10 +127,119 @@ const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+se
 const FACT_STATEMENT_RE = /\b(?:is|are|was|were|costs?|priced\s+at|priced)\s+(?:about\s+|around\s+|like\s+|just\s+|only\s+)?\$?\d+/i;
 // Hypothetical frame: "what if i trade", "if i were to sell", "imagine if i" —
 // suppresses all commerce signals when the entire sentence is framed as hypothetical.
-const HYPOTHETICAL_RE = /\b(?:what\s+if|what\s+would|if\s+i\s+(?:were\s+to|wanted\s+to|wanna|could)|imagine\s+(?:if|i)|hypothetically|suppose\s+i|say\s+i)\b/i;
+// Also: "would be cool if X" / "wish X was cheaper" — pure conditional wish frames
+// with no commerce intent. "if i could trade my account for kicia" — counterfactual.
+const HYPOTHETICAL_RE = /\b(?:what\s+if|what\s+would|if\s+i\s+(?:were\s+to|wanted\s+to|wanna|could)|imagine\s+(?:if|i)|hypothetically|suppose\s+i|say\s+i|would\s+be\s+(?:cool|nice|great|awesome)\s+if|wish\s+(?:kicia|v[23]|hook|kiciahook|i|it|they|premium|prem|configs?)\s+(?:was|were)|wish\s+(?:i|it)\s+(?:was|were)\s+(?:cheaper|free))\b/i;
 // Question-form veto: messages that start with or end with a question word/mark
 // and have no seller-side signal are buyer/info questions — not seller intent.
-const QUESTION_VETO_RE = /\?\s*$|^\s*(?:is|are|does|do|did|why|how|when|what|where|who|which|can|could|should|will|would|may|might)\b/i;
+const QUESTION_VETO_RE = /\?\s*$|^\s*(?:is|are|does|do|did|why|how|when|what|where|who|which|can|could|should|will|would|may|might|whats|what's|wheres|where's)\b/i;
+// Rules-question expansion: explicit "rule on X" / "rules about X" / "ok to do X"
+// patterns that read as inquiries about server rules, not commerce intent.
+// Combines with META_OR_WARNING_RE / RULES_QUESTION_RE to widen the veto.
+const RULES_INQUIRY_RE = /\b(?:rules?|rule\s+on|policy|policies)\s+(?:on|about|for|regarding|re)\b|\b(?:ok|okay|fine|cool)\s+to\s+(?:sell|buy|trade|swap|discuss|share|talk\s+about|mention)\b|\b(?:share|sharing)\s+(?:kicia|configs?|v[23]|hook|kiciahook)\s+(?:with|to)\s+(?:friends?|others?|someone)\b/i;
+// Discord support / info request patterns. "how do i install X", "where do i
+// find Y", "anyone got the download link" — never seller intent, always
+// asking for help. Combined with topic, these are unambiguously support.
+const SUPPORT_INQUIRY_RE = /\b(?:how\s+do\s+i|how\s+can\s+i|how\s+to|where\s+do\s+i|where\s+can\s+i|where\s+to|do\s+i\s+need|need\s+(?:to|help)|anyone\s+(?:got|have|know)|got\s+(?:the\s+)?(?:download|invite|link|tutorial)|reset\s+(?:my\s+)?hwid|not\s+loading|stuck\s+on|won'?t\s+(?:load|open|launch|run|start)|keeps\s+(?:disconnecting|crashing|failing)|disable\s+defender|disable\s+antivirus|tutorial|guide|install(?:ed|ing)?|import(?:ing)?\s+(?:a\s+)?config|find\s+(?:the\s+)?configs?\s+folder)\b/i;
+// Pro-Kicia ecosystem chat: "kicia gang", "kicia stays winning", "ftw",
+// "kicia carrying me" — pure praise. Never commerce.
+const KICIA_PRAISE_RE = /\b(?:kicia\s+(?:gang|stays|wins?|won|ftw|ftl|on\s+top)|stays\s+winning|carrying\s+me|carries\s+me|got\s+me\s+to\s+(?:mythic|gold|silver|plat|diamond|master)|update\s+was\s+(?:crazy|fire|great|good|insane|sick|peak)|worth\s+every\s+penny|best\s+executor|goated\s+fr)\b/i;
+
+// ============================================================================
+// INNOCENCE GATE — "innocent until proven guilty" architecture
+// ----------------------------------------------------------------------------
+// Every classification starts at IGNORE. The classifier only escalates when
+// EXPLICIT guilt signals are present: a seller verb (SELLER_RE), a
+// possessive offer (POSSESSIVE_OFFER_RE), a Cyrillic seller verb, a freebie+
+// DM+topic cluster, or a strong price+payment+DM combination.
+//
+// Before any scoring runs, the innocence gate checks for unambiguously benign
+// patterns and short-circuits to ignore. The semantic head and trained head
+// can only AMPLIFY a verdict; they can never CREATE one from these patterns.
+//
+// Branches (in evaluation order):
+//   1. meta-or-warning  - "someone is selling X" / "don't buy from Y" / "warn"
+//   2. rules-question   - "is selling allowed", "can i sell", "rule on trading"
+//   3. hypothetical     - "what if I sold X", "imagine if v3 went free"
+//   4. support-inquiry  - "how do I install v3", "v3 not loading"  (no DM/seller)
+//   5. praise           - "kicia stays winning", "v3 worth every penny btw"
+//   6. question-no-seller - starts with question word + no SELLER_RE + no DM
+//   7. buyer-veto       - directionScore <= -1 (wtb/looking-for/where-to-buy)
+//
+// A branch returns { innocent: true, reason: "<short tag>" }.
+// When nothing matches, returns { innocent: false }.
+// ============================================================================
+function checkInnocenceGate({ folded, dense, raw, directionScore, dmHit, topicHit }) {
+  // 1. Meta / warning / third-person discussion of selling.
+  if (META_OR_WARNING_RE.test(folded)) {
+    return { innocent: true, reason: "meta/warning" };
+  }
+  // 2a. Explicit rules-question ("is selling allowed", "rule on trading").
+  if (RULES_QUESTION_RE.test(folded)) {
+    return { innocent: true, reason: "meta/warning" };
+  }
+  // 2b. Rules-inquiry expansion ("what's the rule on X", "rules about trading",
+  // "ok to sell here", "share kicia with friends").
+  if (RULES_INQUIRY_RE.test(folded)) {
+    return { innocent: true, reason: "meta/warning" };
+  }
+  // 3. Hypothetical framing - what-if / imagine / would be cool if.
+  if (HYPOTHETICAL_RE.test(folded)) {
+    return { innocent: true, reason: "hypothetical/what-if" };
+  }
+
+  // The remaining branches need topic + direction context. If topic+direction
+  // haven't been resolved yet, skip them — they'll be enforced after scoring.
+  if (typeof directionScore !== "number" || typeof topicHit !== "boolean") {
+    return { innocent: false };
+  }
+
+  // 4. Support / info request: "how do i install v3", "v3 not loading"
+  //    + topic + no DM solicitation + no seller-side signal. The user is
+  //    asking for help, not pitching a sale.
+  if (topicHit && SUPPORT_INQUIRY_RE.test(folded) && !dmHit) {
+    const hasSeller = SELLER_RE.test(folded)
+      || (dense && dense !== folded && SELLER_RE.test(dense))
+      || POSSESSIVE_OFFER_RE.test(folded)
+      || (dense && dense !== folded && POSSESSIVE_OFFER_RE.test(dense))
+      || CYRILLIC_SELLER_RE.test(raw || folded);
+    if (!hasSeller) return { innocent: true, reason: "support inquiry" };
+  }
+
+  // 5. Pure-praise message: pro-Kicia talk with no commerce vocabulary.
+  //    "kicia stays winning", "v3 update was crazy good", "best executor honestly".
+  if (topicHit && KICIA_PRAISE_RE.test(folded) && !dmHit) {
+    const hasSeller = SELLER_RE.test(folded)
+      || (dense && dense !== folded && SELLER_RE.test(dense))
+      || POSSESSIVE_OFFER_RE.test(folded)
+      || (dense && dense !== folded && POSSESSIVE_OFFER_RE.test(dense))
+      || CYRILLIC_SELLER_RE.test(raw || folded);
+    const hasPrice = PRICE_OR_PAYMENT_RE.test(folded)
+      || (dense && dense !== folded && PRICE_OR_PAYMENT_RE.test(dense));
+    if (!hasSeller && !hasPrice) return { innocent: true, reason: "praise / casual mention" };
+  }
+
+  // 6. Question-form veto: starts with question word OR ends with `?` AND has
+  //    no seller-side signal AND no DM solicitation. Buyer/info questions
+  //    ("how much is v3?", "is kicia worth it") fall through here.
+  const isQuestionForm = QUESTION_VETO_RE.test(folded);
+  if (isQuestionForm && !dmHit) {
+    const hasSeller = SELLER_RE.test(folded)
+      || (dense && dense !== folded && SELLER_RE.test(dense))
+      || POSSESSIVE_OFFER_RE.test(folded)
+      || (dense && dense !== folded && POSSESSIVE_OFFER_RE.test(dense))
+      || CYRILLIC_SELLER_RE.test(raw || folded);
+    if (!hasSeller) return { innocent: true, reason: "question form, no seller signal" };
+  }
+
+  // 7. Buyer veto: explicit purchase intent ("wtb", "looking to buy",
+  //    "where can i buy") with no seller signal of any flavour.
+  if (directionScore <= -1) {
+    return { innocent: true, reason: "buyer veto" };
+  }
+
+  return { innocent: false };
+}
 
 const DEFAULTS = {
   firstOffenseConfidence: 0.50,
@@ -710,17 +819,15 @@ async function classifyScamTrade(text, options = {}) {
   const dense = densifyObfuscated(folded);
   const usedDense = dense !== folded;
 
-  if (META_OR_WARNING_RE.test(folded) || RULES_QUESTION_RE.test(folded)) {
+  // -------------------------------------------------------------------------
+  // PHASE 1 of the innocence gate — pre-scoring checks (META/RULES/HYPO).
+  // These short-circuit before any scoring runs, so we never look at signals
+  // for these classes of messages.
+  // -------------------------------------------------------------------------
+  const earlyGate = checkInnocenceGate({ folded, dense, raw });
+  if (earlyGate.innocent) {
     return buildIgnore({
-      reasonText: "ignore - meta/warning",
-      signals: emptySignals(),
-      embedding: options.embedding || null
-    });
-  }
-
-  if (HYPOTHETICAL_RE.test(folded)) {
-    return buildIgnore({
-      reasonText: "ignore - hypothetical/what-if",
+      reasonText: `ignore - ${earlyGate.reason}`,
       signals: emptySignals(),
       embedding: options.embedding || null
     });
@@ -750,7 +857,6 @@ async function classifyScamTrade(text, options = {}) {
     || (topicHitDense && !topicHitFolded)
     || (SELLER_RE.test(dense) && !SELLER_RE.test(folded))
   );
-  const buyerVeto = directionScore <= -1;
 
   const newAccount = isNewAccount(options.accountAgeMs);
   const newMember = isNewMember(options.memberAgeMs);
@@ -779,9 +885,15 @@ async function classifyScamTrade(text, options = {}) {
     });
   }
 
-  if (buyerVeto) {
+  // -------------------------------------------------------------------------
+  // PHASE 2 of the innocence gate — post-scoring checks that need the resolved
+  // direction/dm/topic state to decide. Buyer-veto, question-form, support-
+  // inquiry and praise all live here. A branch hit short-circuits to ignore.
+  // -------------------------------------------------------------------------
+  const lateGate = checkInnocenceGate({ folded, dense, raw, directionScore, dmHit, topicHit });
+  if (lateGate.innocent) {
     return buildIgnore({
-      reasonText: "ignore - buyer veto",
+      reasonText: `ignore - ${lateGate.reason}`,
       signals: {
         directionScore,
         patternScore: 0,
@@ -798,24 +910,6 @@ async function classifyScamTrade(text, options = {}) {
         obfuscated,
         jokeMarker: false
       },
-      embedding: options.embedding || null
-    });
-  }
-
-  // Fix E: defense-in-depth question-form guard. If the message looks like a
-  // question AND has no seller-side signal, force ignore regardless of how
-  // computeDirectionScore landed (e.g. if priceProximity scored it +2 on cold
-  // paths before question veto was added).
-  const isQuestionForm = QUESTION_VETO_RE.test(folded);
-  const hasAnySellerSignal = SELLER_RE.test(folded)
-    || (usedDense && SELLER_RE.test(dense))
-    || POSSESSIVE_OFFER_RE.test(folded)
-    || (usedDense && POSSESSIVE_OFFER_RE.test(dense))
-    || CYRILLIC_SELLER_RE.test(raw);
-  if (isQuestionForm && !hasAnySellerSignal && !dmHit) {
-    return buildIgnore({
-      reasonText: "ignore - question form, no seller signal",
-      signals: { ...emptySignals(), topicHit, directionScore: 0 },
       embedding: options.embedding || null
     });
   }
@@ -1037,6 +1131,7 @@ module.exports = {
   resetHeadCache,
   __resetForTests,
   __internals: {
+    checkInnocenceGate,
     computeDirectionScore,
     computeSemDelta,
     computeConfidence,
@@ -1064,6 +1159,9 @@ module.exports = {
     RAIL_NUM_TOPIC_RE,
     META_OR_WARNING_RE,
     RULES_QUESTION_RE,
+    RULES_INQUIRY_RE,
+    SUPPORT_INQUIRY_RE,
+    KICIA_PRAISE_RE,
     QUESTION_VETO_RE,
     JOKE_RE,
     FREEBIE_RE,

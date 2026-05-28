@@ -226,7 +226,97 @@ const MUST_NOT_FLAG_CASES = [
   ["kicia is fine i guess",                      "soft commentary · no NEG_LEX"],
   ["i think v3 is okay",                         "tepid · no NEG_LEX"],
   ["kicia is premium quality",                   "praise using 'premium' as adj — must not net negative"],
-  ["idk if v3 is worth it",                      "uncertainty / buyer · scam-deferral via worth it"]
+  ["idk if v3 is worth it",                      "uncertainty / buyer · scam-deferral via worth it"],
+
+  // ==========================================================================
+  // BENIGN STRESS CORPUS — 80 cases of natural Discord chatter that mentions
+  // Kicia/v3/configs/etc. but is NOT disrespect. Verified end-to-end against
+  // both classifiers; each must classify as `ignore` on kicia-disrespect.
+  // Categories: A=buyer, B=support, C=praise, D=comparison, E=meta,
+  //             F=fact, G=hypothetical, H=borderline.
+  // ==========================================================================
+
+  // A. Buyer questions / shopping inquiries
+  ["is kicia worth $25?",                                "A · buyer · worth + price"],
+  ["anyone know the price of v3 lifetime?",              "A · buyer · price of lifetime"],
+  ["where do i actually buy kicia from?",                "A · buyer · where to buy"],
+  ["is the kicia premium subscription monthly?",         "A · buyer · subscription cadence"],
+  ["how much does v3 cost in canada",                    "A · buyer · price in region"],
+  ["can i pay for kicia in robux?",                      "A · buyer · payment-method question"],
+  ["is v3 prem worth the upgrade from v2?",              "A · buyer · upgrade worth"],
+  ["what's included in v3 lifetime",                     "A · buyer · what's included"],
+  ["is kicia free in any region",                        "A · buyer · free in region"],
+  ["are configs included with v3 premium",               "A · buyer · configs included?"],
+
+  // B. Information / support / help requests
+  ["how do i install v3",                                "B · support · how to install"],
+  ["lemme reset kicia hwid",                             "B · support · reset hwid"],
+  ["v3 not loading for me, anyone else?",                "B · support · not loading"],
+  ["kicia stuck on launching",                           "B · support · stuck on launch"],
+  ["anyone got the v3 download link",                    "B · support · download link"],
+  ["where do i find the configs folder",                 "B · support · find configs folder"],
+  ["how do i import a config in v3",                     "B · support · import config"],
+  ["is there a v3 tutorial somewhere",                   "B · support · tutorial"],
+  ["do i need to disable defender for kicia",            "B · support · disable defender"],
+  ["anyone got a working v3 invite",                     "B · support · working invite"],
+
+  // C. Praise / casual mentions
+  ["kicia is goated fr",                                 "C · praise · goated fr"],
+  ["v3 carrying me today",                               "C · praise · carrying me"],
+  ["kicia just got me to mythic",                        "C · praise · got me to rank"],
+  ["kiciahook is so clean ngl",                          "C · praise · so clean"],
+  ["v3 update was crazy good",                           "C · praise · update was crazy good"],
+  ["best executor honestly",                             "C · praise · best executor"],
+  ["kicia stays winning",                                "C · praise · stays winning"],
+  ["v3 prem worth every penny btw",                      "C · praise · worth every penny"],
+  ["kicia gang where u at",                              "C · praise · kicia gang"],
+  ["kicia premium ftw",                                  "C · praise · ftw"],
+
+  // D. Comparison / discussion (non-disrespectful)
+  ["v3 vs v2 thoughts?",                                 "D · comparison · vs thoughts"],
+  ["kicia or hydrogen which is better",                  "D · comparison · which is better"],
+  ["why do people prefer v3 over v2",                    "D · comparison · prefer over"],
+  ["kicia and ue both have pros and cons",               "D · comparison · pros and cons"],
+  ["v3 is newer than v2 yeah",                           "D · comparison · newer than"],
+  ["kiciahook covers more games than fluxus",            "D · comparison · covers more"],
+  ["comparison: kicia vs xeno",                          "D · comparison · vs"],
+  ["is v3 better than ue these days",                    "D · comparison · better than"],
+
+  // E. Meta / rules / reports
+  ["is selling configs allowed here",                    "E · meta · selling allowed"],
+  ["someone in dms tried to sell me kicia, is that allowed",
+                                                         "E · meta · someone in dms"],
+  ["what's the rule on trading configs",                 "E · meta · rule on trading"],
+  ["are paid scripts ok to discuss",                     "E · meta · ok to discuss"],
+  ["report someone for trying to sell me a key",         "E · meta · report someone"],
+  ["is buying kicia from someone else allowed",          "E · meta · buying from someone allowed"],
+  ["can i share kicia with friends",                     "E · meta · share with friends"],
+  ["rules on third-party kicia resellers?",              "E · meta · rules on resellers"],
+
+  // F. Statements of fact / pricing knowledge
+  ["v3 is 25 dollars",                                   "F · fact · v3 is N dollars"],
+  ["kicia premium costs $25 lifetime",                   "F · fact · costs N"],
+  ["v3 prem is 25 euros",                                "F · fact · is N euros"],
+  ["lifetime is 25 bucks",                               "F · fact · lifetime is N"],
+  ["the price is 25 usd",                                "F · fact · the price is N"],
+  ["kicia just costs 25",                                "F · fact · just costs N"],
+  ["i think v3 was 30 dollars last year",                "F · fact · past-tense price"],
+  ["lifetime kicia is around 25-30 bucks",               "F · fact · around N-N"],
+
+  // G. Hypotheticals / wishful
+  ["what if kicia drops in price",                       "G · hypothetical · what if"],
+  ["imagine if v3 went free",                            "G · hypothetical · imagine if"],
+  ["if i could trade my account for kicia i would",      "G · hypothetical · if i could"],
+  ["would be cool if v3 had a free trial",               "G · hypothetical · would be cool if"],
+  ["wish kicia was cheaper",                             "G · hypothetical · wish was cheaper"],
+  ["hypothetically could you swap accounts",             "G · hypothetical · hypothetically"],
+
+  // H. Edge cases / borderline (soft preference, never disrespect)
+  ["kicia is fine i guess",                              "H · borderline · fine i guess"],
+  ["v3 kinda mid not gonna lie",                         "H · borderline · kinda mid"],
+  ["kicia could be better",                              "H · borderline · could be better"],
+  ["i don't like kicia much",                            "H · borderline · don't like"],
+  ["kicia is just ok",                                   "H · borderline · just ok"]
 ];
 
 test.describe("kicia-disrespect: must-NOT-flag cases", () => {

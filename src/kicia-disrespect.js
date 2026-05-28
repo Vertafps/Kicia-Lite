@@ -160,6 +160,24 @@ const SCAM_LIKE_RE = /\b(?:sell(?:ing|s)?|sold|wts|wtb|for\s+sale|trade|trading|
 // defer even when the scam verb hasn't been reassembled yet.
 const SCAM_LIKE_SPACED_RE = /\b(?:s\s+e\s+l\s+l(?:\s+i\s+n\s+g|\s+s)?|s\s+elling|se\s+lling|sel\s+ling|sell\s+ing|sellin\s+g|s\s+old|so\s+ld|w\s+ts|t\s+rade|tr\s+ade|tra\s+de|s\s+wap)\b/i;
 
+// Softener phrases — colloquial hedges that signal mild personal opinion
+// rather than disrespect: "ngl" / "not gonna lie", "kinda", "imo", "i guess",
+// "tbh just my opinion". When a softener is present AND the only
+// negative-lex token is in the "soft criticism" tier (mid/ok/fine/just-ok),
+// the message reads as personal preference, not directed disrespect.
+//
+// Note: "honestly" is INTENTIONALLY excluded — it sits in INTENSIFIER_RE and
+// amps polarity ("kicia is mid honestly" is a stronger complaint, not a
+// softer one). Same with "literally", "fr", "deadass", "actually".
+const SOFTENER_RE = /\b(?:ngl|not\s+gonna\s+lie|kinda|kind\s+of|sorta|sort\s+of|imo|imho|i\s+guess|i\s+think|i\s+feel|just\s+my\s+opinion|to\s+be\s+fair|tbf|tbh|tho|though|i\s+suppose)\b/i;
+// Soft / preference-only negative lex — words that express tepid opinion
+// but not disrespect. "mid" is the canonical example. When combined with a
+// SOFTENER_RE and no harder neg-lex (trash/dogshit/garbage/sucks), the
+// classifier treats the whole message as personal preference, not insult.
+const SOFT_NEG_ONLY = new Set(["mid", "ok", "okay", "fine", "meh"]);
+// Hard neg-lex — never benign. "trash", "dogshit", "garbage", "sucks", etc.
+// Defined later via NEG_LEX; cross-reference via NEG_LEX.has().
+
 function splitClauses(folded) {
   const source = String(folded || "").trim();
   if (!source) return [];
@@ -519,27 +537,49 @@ function finalize(verdict, signals, attributedClauses, embedding, reasonText) {
   };
 }
 
-async function classifyKiciaDisrespect(text, options = {}) {
-  const { member = null, userId: providedUserId = null, kb = null, embedding = null } = options || {};
+// ============================================================================
+// INNOCENCE GATE — "innocent until proven guilty" architecture
+// ----------------------------------------------------------------------------
+// Every classification starts at IGNORE. The respect classifier only escalates
+// when EXPLICIT guilt signals are present: clause-local NEG_LEX hits attributed
+// to a Kicia entity, comparative put-downs naming Kicia, or strong semantic
+// + head agreement on a Kicia-topical clause.
+//
+// Before any scoring runs, the innocence gate checks for unambiguously benign
+// patterns and short-circuits to ignore. The semantic head and trained head
+// can only AMPLIFY a verdict; they can never CREATE one from these patterns.
+//
+// Branches (in evaluation order):
+//   1. empty             - no text after folding
+//   2. no-kicia-entity   - no kicia/v3/v2/hook/kiciahook in text
+//   3. premium-only      - bare "premium" / "prem" with no kicia identifier
+//                          and no comparative context
+//   4. mod-bypass        - member has hasModerationBypassMember
+//   5. mod-whitelist     - user is on moderation whitelist
+//   6. constructive      - "wish kicia had X", "i hope kicia adds y"
+//   7. scam-deferral     - SCAM_LIKE_RE / SCAM_LIKE_SPACED_RE — let scam own
+//   8. softener-only     - colloquial hedge + only soft neg-lex (mid/ok/fine)
+//                          with no hard neg-lex (trash/dogshit/garbage/sucks)
+//
+// A branch returns { innocent: true, reason: "<short tag>" }.
+// When nothing matches, returns { innocent: false }.
+//
+// Note: branches 4 and 5 are I/O-bound (permissions + sqlite). They live in
+// the gate for architectural clarity but the actual calls happen in the
+// classify function so we don't await inside a "pure" gate function.
+// ============================================================================
+function checkInnocenceGate({ folded, vocab }) {
+  // 1. Empty text after folding.
+  if (!folded) return { innocent: true, reason: "empty text" };
 
-  const vocab = kb ? buildEntityVocabularyFromKb(kb) : getDefaultVocabulary();
-
-  // .folded preserves v3/v4; the leet-normalized form mangles them
-  const forms = buildNormalizedTextForms(text);
-  const folded = String(forms.folded || "").toLowerCase().trim();
-
-  if (!folded) return ignoreResult("empty text", null);
-
+  // 2. No kicia entity at all in the text.
   if (!hasAnyKiciaEntityInText(folded, vocab)) {
-    return ignoreResult("no kicia entity in text", null);
+    return { innocent: true, reason: "no kicia entity in text" };
   }
 
-  // Premium-only guard: "premium" and "prem" are in the entity set because
-  // "kicia premium" / "kicia prem" are real product names. But a bare mention
-  // of "premium" with no other kicia identifier (kicia/v2/v3/hook/kiciahook)
-  // in the text is too ambiguous to act on without extra context.
-  // We require at least one of: a comparative signal (COMPARATIVE_NEG_RE or
-  // NEGATED_COMPARATIVE_RE) OR a third-party entity hit.
+  // 3. Premium-only guard: "premium" / "prem" without any other kicia
+  //    identifier (kicia/kiciahook/hook/v2/v3) AND without comparative
+  //    context or a third-party entity in text.
   const CORE_KICIA_RE = /\b(?:kicia|kiciahook|hook|v[23])\b/i;
   const premiumOnlyMatch = !CORE_KICIA_RE.test(folded)
     && /\b(?:premium|prem)\b/i.test(folded);
@@ -558,10 +598,73 @@ async function classifyKiciaDisrespect(text, options = {}) {
       return false;
     })();
     if (!hasComparativeContext && !thirdPartyInText) {
-      return ignoreResult("premium-only mention without comparative context", null);
+      return { innocent: true, reason: "premium-only mention without comparative context" };
     }
   }
 
+  // 4 / 5. mod-bypass and mod-whitelist are I/O-bound — checked in the
+  //        classify function. Not branched here.
+
+  // 6. Constructive criticism / feature request.
+  if (CONSTRUCTIVE_RE.test(folded)) {
+    return { innocent: true, reason: "constructive criticism / feature request" };
+  }
+
+  // 7. Scam-deferral: anything with commerce intent (seller verb, payment
+  //    rail, DM solicitation, freebie wording, spaced-verb obfuscation) is
+  //    handled by the scam classifier. The respect head's confidence on
+  //    scam-shaped text is unreliable.
+  if (SCAM_LIKE_RE.test(folded) || SCAM_LIKE_SPACED_RE.test(folded)) {
+    return { innocent: true, reason: "scam-like signal (defer to scam classifier)" };
+  }
+
+  // 8. Softener-only: a colloquial hedge ("ngl", "kinda", "i guess", "imo")
+  //    paired with ONLY soft-neg-lex tokens (mid/ok/fine/meh) and no hard
+  //    neg-lex AND no intensifier. "v3 kinda mid not gonna lie" reads as
+  //    personal preference, not disrespect. When an intensifier is present
+  //    ("kicia is mid honestly" / "kicia is so mid") the softener gate skips —
+  //    the intensifier promotes the complaint past the personal-pref tier.
+  if (SOFTENER_RE.test(folded) && !INTENSIFIER_RE.test(folded)) {
+    const tokens = folded.split(/[^a-z0-9']+/i).filter(Boolean);
+    let hardHit = false;
+    let softHit = false;
+    for (const tok of tokens) {
+      const bare = tok.replace(/^'+|'+$/g, "");
+      if (NEG_LEX.has(bare)) {
+        if (SOFT_NEG_ONLY.has(bare)) softHit = true;
+        else { hardHit = true; break; }
+      }
+    }
+    if (softHit && !hardHit) {
+      return { innocent: true, reason: "softener + soft-neg only (personal preference)" };
+    }
+  }
+
+  return { innocent: false };
+}
+
+async function classifyKiciaDisrespect(text, options = {}) {
+  const { member = null, userId: providedUserId = null, kb = null, embedding = null } = options || {};
+
+  const vocab = kb ? buildEntityVocabularyFromKb(kb) : getDefaultVocabulary();
+
+  // .folded preserves v3/v4; the leet-normalized form mangles them
+  const forms = buildNormalizedTextForms(text);
+  const folded = String(forms.folded || "").toLowerCase().trim();
+
+  // -------------------------------------------------------------------------
+  // PHASE 1 of the innocence gate — pure (no I/O) branches. Empty, no entity,
+  // premium-only, constructive, scam-deferral, softener-only.
+  // -------------------------------------------------------------------------
+  const earlyGate = checkInnocenceGate({ folded, vocab });
+  if (earlyGate.innocent) {
+    return ignoreResult(earlyGate.reason, null);
+  }
+
+  // -------------------------------------------------------------------------
+  // PHASE 2 of the innocence gate — I/O-bound bypass checks (permissions +
+  // moderation whitelist). Kept separate to keep checkInnocenceGate pure.
+  // -------------------------------------------------------------------------
   const userId = providedUserId || member?.id || member?.user?.id || null;
   const permissions = lazyMod("./permissions");
   if (permissions && typeof permissions.hasModerationBypassMember === "function") {
@@ -580,20 +683,10 @@ async function classifyKiciaDisrespect(text, options = {}) {
     } catch {}
   }
 
+  // Branches 6, 7 retained here as defense-in-depth re-checks. The early gate
+  // has already short-circuited these, but keeping the variables in scope keeps
+  // the rest of the function readable.
   const constructive = CONSTRUCTIVE_RE.test(folded);
-  if (constructive) {
-    return ignoreResult("constructive criticism / feature request", null);
-  }
-
-  // Scam-classifier deferral. If the text shows commerce intent (seller verb,
-  // payment rail, DM solicitation, freebie wording, or known spaced-verb
-  // obfuscation), the scam classifier owns the decision. The respect head was
-  // trained on respect-labelled data and produces unreliable scores on
-  // scam-shaped text — letting it fire here leaked low-conf "head says
-  // disrespect" verdicts on actual scams.
-  if (SCAM_LIKE_RE.test(folded) || SCAM_LIKE_SPACED_RE.test(folded)) {
-    return ignoreResult("scam-like signal (defer to scam classifier)", null);
-  }
 
   const clauses = splitClauses(folded);
   const attributedClauses = [];
@@ -796,6 +889,7 @@ module.exports = {
   resetHeadCache,
   __resetForTests,
   __internals: {
+    checkInnocenceGate,
     splitClauses,
     attributeClause,
     clauseLocalPolarity,
@@ -813,6 +907,10 @@ module.exports = {
     COMPARATIVE_NEG_RE,
     COMPARATIVE_PUTDOWN_RE,
     comparativeNegBoost,
+    SOFTENER_RE,
+    SOFT_NEG_ONLY,
+    SCAM_LIKE_RE,
+    SCAM_LIKE_SPACED_RE,
     FALLBACK_KICIA_ENTITIES,
     KICIA_ALIAS_RE
   }

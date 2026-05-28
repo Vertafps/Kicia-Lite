@@ -151,14 +151,6 @@ const CHANNEL_CONFIG_SLOTS = [
     uses: ["clip uploads", "auto-react ✅", "clip-of-the-day source"]
   },
   {
-    key: "clipoftheday",
-    aliases: ["cotd", "clip-of-the-day", "clipotd"],
-    label: "Clip of the Day Channel",
-    defaultId: "",
-    required: false,
-    uses: ["daily clip-of-the-day announcement (9pm UTC+5:30 = 15:30 UTC)"]
-  },
-  {
     key: "bugs",
     aliases: ["bugs-reports", "bug-reports", "bugreports", "bug-report", "bugreport"],
     label: "Bug Reports Channel",
@@ -315,10 +307,6 @@ function getClipsChannelId() {
   return getConfiguredChannelId("clips");
 }
 
-function getClipOfTheDayChannelId() {
-  return getConfiguredChannelId("clipoftheday");
-}
-
 function getBugsChannelId() {
   return getConfiguredChannelId("bugs");
 }
@@ -381,7 +369,6 @@ module.exports = {
   getStatusWidgetChannelId,
   getConfigChannelId,
   getClipsChannelId,
-  getClipOfTheDayChannelId,
   getBugsChannelId,
   getStoredChannelConfigKey,
   getTicketJumpUrl,

@@ -1,6 +1,5 @@
 "use strict";
-const { buildRichPanel, INFO, resolveAvatarURL } = require("./embed");
-const { getClipsChannelId, getClipOfTheDayChannelId } = require("./channel-config");
+const { getClipsChannelId } = require("./channel-config");
 const { recordRuntimeEvent } = require("./runtime-health");
 const { getSetting } = require("./settings");
 const { trySendDM } = require("./utils/respond");
@@ -70,8 +69,6 @@ async function pickClipOfTheDay(guild, { since, until }) {
 
 async function runClipOfTheDay(client) {
   if (getSetting("clipoftheday.enabled") === false) return;
-  const cotdChannelId = getClipOfTheDayChannelId();
-  if (!cotdChannelId) return;
 
   const now = Date.now();
   const since = now - 24 * 60 * 60 * 1000;
@@ -81,33 +78,18 @@ async function runClipOfTheDay(client) {
     try {
       const winner = await pickClipOfTheDay(guild, { since, until });
       if (!winner) continue;
-      const cotdChannel = guild.channels.cache.get(cotdChannelId)
-        || await guild.channels.fetch(cotdChannelId).catch(() => null);
-      if (!cotdChannel?.send) continue;
 
-      const author = winner.message.author;
-      const member = winner.message.member;
-      const displayName = member?.displayName || author?.globalName || author?.username || "user";
-      const avatar = resolveAvatarURL(author);
-      const panel = buildRichPanel({
-        title: "🏆 Clip of the Day",
-        author: { name: displayName, iconURL: avatar || undefined },
-        description: `Most-reacted clip in the last 24 hours.\n\n[Jump to clip](${winner.message.url})`,
-        fields: [
-          { name: "Submitted by", value: `<@${author.id}>`, inline: true },
-          { name: "Reactions", value: String(winner.reactionCount), inline: true }
-        ],
-        color: INFO
-      });
-      await cotdChannel.send({ embeds: [panel], allowedMentions: { parse: [] } });
-
-      // Also DM the configured recipients with a friendly one-liner so they
-      // see the daily winner even if they aren't in the channel.
+      // DM-only delivery — no channel post. Send each recipient the one-line
+      // result. Failures (DMs disabled, circuit open, etc.) are recorded to
+      // runtime-health but don't block other recipients.
       const dmBodyFor = (name) => `hiii ${name}, the clip of the day tdy was this: ${winner.message.url} with ${winner.reactionCount} reaction${winner.reactionCount === 1 ? "" : "s"}`;
       for (const recipient of COTD_DM_RECIPIENTS) {
         try {
           const user = await client.users.fetch(recipient.userId).catch(() => null);
-          if (!user) continue;
+          if (!user) {
+            recordRuntimeEvent("warn", "cotd-dm", `${recipient.name} (${recipient.userId}): user fetch failed`);
+            continue;
+          }
           const dmResult = await trySendDM(user, { content: dmBodyFor(recipient.name) });
           if (!dmResult.sent) {
             recordRuntimeEvent("warn", "cotd-dm", `${recipient.name} (${recipient.userId}): ${dmResult.reason || "send failed"}`);

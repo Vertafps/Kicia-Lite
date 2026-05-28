@@ -109,7 +109,11 @@ const MUST_FLAG_CASES = [
   ["hook is dogshit"        , "hook alias + neg-lex"],
   // newer-version-trashed comparisons — opposite of the pro-Kicia ignore cases
   ["v3 is buns compared to v2",  "NEWER trashed for older · legitimate complaint"],
-  ["v3 sucks compared to v2",    "NEWER trashed for older · variant lex"]
+  ["v3 sucks compared to v2",    "NEWER trashed for older · variant lex"],
+  // intensified slow — slow is in NEG_LEX, kicia is entity
+  ["kicia is slow as hell today", "intensified slow + kicia entity"],
+  // 'mad slow' — mad is not in INTENSIFIER_RE but slow IS in NEG_LEX; acceptable to flag
+  ["v3 mad slow today",           "slow in NEG_LEX + v3 entity · acceptable warn"]
 ];
 
 test.describe("kicia-disrespect: must-flag cases", () => {
@@ -209,7 +213,20 @@ const MUST_NOT_FLAG_CASES = [
   ["v2 sucks compared to v3",         "pro-Kicia · variant lex"],
   // bare premium mentions with no comparative context
   ["premium subscription",            "bare premium mention · no comparative"],
-  ["premium costs 25 bucks",          "premium price · no comparative"]
+  ["premium costs 25 bucks",          "premium price · no comparative"],
+
+  // buyer / pricing questions — scam-deferral via SCAM_LIKE_RE or question veto
+  ["Is v3 prem worth it for 25 euros?",          "buyer question · scam-deferral via worth"],
+  ["25 bucks for lifetime?",                     "pricing question · no kicia entity"],
+  ["Is buying and selling keys prohibited here?", "meta rules · scam-deferral via selling"],
+  ["But u don't have premiun",                   "fact · premium-only typo + no comparative"],
+  ["ahhh so v3 better?",                         "comparison question"],
+  ["how much is v3",                             "buyer · question veto"],
+  ["what's the price of kicia premium",          "buyer · scam-deferral via price of"],
+  ["kicia is fine i guess",                      "soft commentary · no NEG_LEX"],
+  ["i think v3 is okay",                         "tepid · no NEG_LEX"],
+  ["kicia is premium quality",                   "praise using 'premium' as adj — must not net negative"],
+  ["idk if v3 is worth it",                      "uncertainty / buyer · scam-deferral via worth it"]
 ];
 
 test.describe("kicia-disrespect: must-NOT-flag cases", () => {

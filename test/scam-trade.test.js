@@ -82,6 +82,9 @@ const MUST_FLAG_CASES = [
   ["dropping free kicia configs dm me to claim",
                                         "freebie · drop + free + topic + dm claim"],
   ["legit free kicia premium dm me",    "freebie · legit free + topic + dm"],
+  // sanity — real scam phrases must still flag after false-positive fixes
+  ["selling v3 for 25 euros dm me",                      "seller verb + price + dm · still flags"],
+  ["kicia 25 dollars dm me",                             "topic + price + dm · still flags"],
   // multi-char spaced seller verbs (scammer-style mid-word splits)
   ["GUYS IM SEL LING KICKERHOOK V3",    "spaced seller verb + fuzzy topic (real prod miss)"],
   ["guys im sel ling kicia v3",         "spaced 'sel ling' + topic"],
@@ -156,7 +159,22 @@ const MUST_NOT_FLAG_CASES = [
   ["what if i trade my sling for kicia prem",            "hypothetical · what if"],
   ["what if I sold kicia configs",                       "hypothetical · what if + seller verb"],
   ["if i were to trade kicia",                           "hypothetical · if i were to"],
-  ["imagine if i sold kicia",                            "hypothetical · imagine"]
+  ["imagine if i sold kicia",                            "hypothetical · imagine"],
+  // confirmed production false positives — question-form buyer/info messages
+  ["Is v3 prem worth it for 25 euros?",                  "buyer question · worth + price"],
+  ["25 bucks for lifetime?",                             "pricing question · price + topic + ?"],
+  ["Is buying and selling keys prohibited here?",        "meta rules question"],
+  ["But u don't have premiun",                           "fact statement · no commerce intent"],
+  ["ahhh so v3 better?",                                 "comparison question · no commerce"],
+  ["is kicia worth it",                                  "buyer worth-it"],
+  ["is v3 worth the price",                              "buyer worth-the-price"],
+  ["is it allowed to sell kicia here",                   "meta · is it allowed"],
+  ["are we allowed to trade kicia",                      "meta · are we allowed"],
+  ["can i sell kicia in this server",                    "meta · can i sell"],
+  ["is selling configs banned",                          "meta · banned"],
+  ["how much for v3 prem?",                              "buyer question · how much"],
+  ["what's the price of kicia v3?",                      "buyer question · what's the price"],
+  ["does anyone know the price of v3",                   "buyer question · does anyone"]
 ];
 
 test.describe("scam-trade: must-NOT-flag cases", () => {

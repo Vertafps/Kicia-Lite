@@ -99,9 +99,11 @@ const NEG_LEX = new Set([
 const POS_LEX = new Set([
   "good", "great", "goated", "fire", "peak", "clean", "smooth", "solid",
   "stable", "reliable", "fast", "snappy", "lit", "amazing", "awesome",
-  "perfect", "godly", "op", "w", "dub", "legit", "trustworthy", "recommended",
-  "best", "top", "supreme", "polished", "premium", "insane", "sick", "clutch",
-  "cracked"
+  "perfect", "godly", "trustworthy", "recommended",
+  "best", "supreme", "polished", "insane", "sick"
+  // Removed: "premium", "legit", "clutch", "cracked", "top", "dub", "w", "op"
+  // These are too noisy: "premium" is a topic word; "legit/clutch/cracked" appear
+  // in scam pitches; "top/dub/w/op" are too short and collide with normal speech.
 ]);
 
 const INTENSIFIER_RE = /\b(so+|really|literally|actually|fr|deadass|honestly|absolutely|completely)\b/i;
@@ -151,7 +153,7 @@ function isProKiciaVersionComparison(clause) {
 // labels, but scam text shares enough embedding-space neighbours with
 // disrespect samples ("kicia is X" patterns) to leak a high score. We defer
 // to the scam classifier instead of producing a low-confidence respect warn.
-const SCAM_LIKE_RE = /\b(?:sell(?:ing|s)?|sold|wts|wtb|for\s+sale|trade|trading|swap(?:ping)?|paypal|cashapp|venmo|crypto|btc|eth|ltc|usdt|robux|rbx|nitro|cracked|dm\s*me|pm\s*me|hmu|inbox\s*me|free\s+(?:configs?|keys?|kicia|v[23]|premium|lifetime|license|version)|giving\s+away|handing\s+out|drop(?:ping)?\s+free|legit\s+free)\b/i;
+const SCAM_LIKE_RE = /\b(?:sell(?:ing|s)?|sold|wts|wtb|for\s+sale|trade|trading|swap(?:ping)?|paypal|cashapp|venmo|crypto|btc|eth|ltc|usdt|robux|rbx|nitro|cracked|dm\s*me|pm\s*me|hmu|inbox\s*me|free\s+(?:configs?|keys?|kicia|v[23]|premium|lifetime|license|version)|giving\s+away|handing\s+out|drop(?:ping)?\s+free|legit\s+free|worth\s+it|worth\s+(?:the\s+)?(?:price|money|cost|\$?\d+)|how\s+much|what'?s\s+the\s+price|price\s+of|buying\s+and\s+selling|sell(?:ing)?\s+keys?|buy(?:ing)?\s+keys?)\b/i;
 // Pre-densified seller-verb splits ("sel ling", "se lling", "sell ing", etc.)
 // — the scam classifier densifies these before classifying, but respect
 // reads the raw folded text. Match the spaced variants explicitly so we

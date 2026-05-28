@@ -62,7 +62,7 @@ const CYRILLIC_SELLER_RE = /(?:продаю|продам|продается|пр
 const POSSESSIVE_OFFER_RE = /(?:\b(?:got|have|hav|gots?|own|owning)\b[^.\n]{0,30}\b(?:if\s+(?:u|you)\s+want|who\s+wants?|anyone\s+want|lmk|let\s+me\s+know|hmu|dm\s+me|pm\s+me|msg\s+me|for\s+(?:sale|trade|cheap|\d+))|\b(?:who\s+wants?|anyone\s+want)\b[^.\n]{0,20}\bmy\b)/i;
 const TRUSTED_SELLER_RE = /\btrusted(?:\s+seller)?\b/i;
 const MIDDLEMAN_RE = /\b(?:middleman|mm)\b/i;
-const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get)))\b/i;
+const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get))|worth\s+(?:it|the|getting|buying|the\s+(?:price|money|cost)|\$?\d+))\b/i;
 const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu|slide\s+in(?:to)?\s+(?:my\s+)?dms?|msg\s+me\s+asap|pm\s+asap|dm\s+urgent|inbox\s+me)\b/i;
 const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?|cracked\s+kicia)\b/i;
 // "kicia 30 usd" / "v3 30usd dm" style — topic + explicit currency within 30
@@ -119,6 +119,7 @@ const FREEBIE_RE = /\b(?:free|giveaway|giving\s+away|gifting|gift(?:ed|ing)?|han
 // can be ambiguous, so they only fire when paired with topic + DM.
 const SOLICITATION_RE = /\b(?:if\s+anyone\s+wants?|anyone\s+who\s+wants?|whoever\s+wants?|who\s+wants?\s+(?:a|an|some|free)|dm\s+(?:me\s+)?(?:if|when|for|to\s+get|to\s+claim)\b)/i;
 const META_OR_WARNING_RE = /\b(?:do\s+not|don't|dont|stop|avoid|warning|warn|report|reported|allowed|against\s+rules?|not\s+allowed|is\s+this|is\s+that|someone|somebody|user|person|people|they|he|she)\b.{0,80}\b(?:sell|selling|buy|buying|trade|trading|scam|prohibited|illegal|free|giveaway|giving\s+away)\b/i;
+const RULES_QUESTION_RE = /\b(?:is\s+(?:it\s+|that\s+|this\s+)?(?:allowed|prohibited|banned|against))|(?:is\s+\w.{0,40}(?:allowed|prohibited|banned|against\s+rules?))|(?:can|may|could|should)\s+(?:i|we|you)\s+(?:sell|buy|trade|swap)|(?:allowed|prohibited|banned)\s+(?:here|in\s+this\s+server|on\s+this\s+server)|are\s+we\s+allowed/i;
 const JOKE_RE = /\b(?:\/s|\/jk|jk|jking|joking|kidding|kiddin|not\s+srs|not\s+serious|sarcasm|sarcastic)\b|\(jk\)|\(joking\)|\(kidding\)|\blmao\b/i;
 // Fact-statement gate: "X is 25 dollars", "v3 costs 10", "kicia priced at 30" —
 // these are informational price-statements, NOT seller pitches. Used to suppress
@@ -127,6 +128,9 @@ const FACT_STATEMENT_RE = /\b(?:is|are|was|were|costs?|priced\s+at|priced)\s+(?:
 // Hypothetical frame: "what if i trade", "if i were to sell", "imagine if i" —
 // suppresses all commerce signals when the entire sentence is framed as hypothetical.
 const HYPOTHETICAL_RE = /\b(?:what\s+if|what\s+would|if\s+i\s+(?:were\s+to|wanted\s+to|wanna|could)|imagine\s+(?:if|i)|hypothetically|suppose\s+i|say\s+i)\b/i;
+// Question-form veto: messages that start with or end with a question word/mark
+// and have no seller-side signal are buyer/info questions — not seller intent.
+const QUESTION_VETO_RE = /\?\s*$|^\s*(?:is|are|does|do|did|why|how|when|what|where|who|which|can|could|should|will|would|may|might)\b/i;
 
 const DEFAULTS = {
   firstOffenseConfidence: 0.50,
@@ -374,6 +378,16 @@ function computeDirectionScore(text, denseText, rawText) {
   // is still a giveaway scam — the seller-side signal wins.
   if (buyerHit && !seller.hit && !possessiveHit && !cyrillicSellerHit
       && !freebieGiveaway && !solicitationDrop) return -2;
+
+  // Question-form veto: "is v3 worth it for 25 euros?", "25 bucks for lifetime?"
+  // etc. — buyer/info questions must not score +2 via priceProximity even when
+  // BUYER_RE didn't catch them. Return 0 (neutral) when the message looks like
+  // a question and has no seller-side signal of any kind.
+  const isQuestionish = QUESTION_VETO_RE.test(text);
+  if (isQuestionish && !seller.hit && !possessiveHit && !cyrillicSellerHit
+      && !freebieGiveaway && !solicitationDrop && !dmHitLocal) {
+    return 0;
+  }
 
   if (topicIdx >= 0) {
     if (seller.hit) {
@@ -696,7 +710,7 @@ async function classifyScamTrade(text, options = {}) {
   const dense = densifyObfuscated(folded);
   const usedDense = dense !== folded;
 
-  if (META_OR_WARNING_RE.test(folded)) {
+  if (META_OR_WARNING_RE.test(folded) || RULES_QUESTION_RE.test(folded)) {
     return buildIgnore({
       reasonText: "ignore - meta/warning",
       signals: emptySignals(),
@@ -784,6 +798,24 @@ async function classifyScamTrade(text, options = {}) {
         obfuscated,
         jokeMarker: false
       },
+      embedding: options.embedding || null
+    });
+  }
+
+  // Fix E: defense-in-depth question-form guard. If the message looks like a
+  // question AND has no seller-side signal, force ignore regardless of how
+  // computeDirectionScore landed (e.g. if priceProximity scored it +2 on cold
+  // paths before question veto was added).
+  const isQuestionForm = QUESTION_VETO_RE.test(folded);
+  const hasAnySellerSignal = SELLER_RE.test(folded)
+    || (usedDense && SELLER_RE.test(dense))
+    || POSSESSIVE_OFFER_RE.test(folded)
+    || (usedDense && POSSESSIVE_OFFER_RE.test(dense))
+    || CYRILLIC_SELLER_RE.test(raw);
+  if (isQuestionForm && !hasAnySellerSignal && !dmHit) {
+    return buildIgnore({
+      reasonText: "ignore - question form, no seller signal",
+      signals: { ...emptySignals(), topicHit, directionScore: 0 },
       embedding: options.embedding || null
     });
   }
@@ -940,11 +972,13 @@ async function classifyScamTrade(text, options = {}) {
     if (sev) {
       verdict = "timeout";
       severity = sev;
-    } else if (H >= 2 || (H === 1 && directionScore >= 1)) {
+    } else if (directionScore >= 1 && H >= 1) {
       verdict = "warn";
     }
-  } else if (H >= 2 || (H === 1 && directionScore >= 1)) {
+  } else if (directionScore >= 1 && H >= 1) {
     // Sub-threshold: signals fired but confidence didn't clear the gate.
+    // Require real commerce direction (directionScore >= 1) — sem/head alone
+    // on benign Kicia-topical text must not produce warns.
     verdict = "warn";
   }
 
@@ -1029,6 +1063,8 @@ module.exports = {
     TOPIC_NUM_RAIL_RE,
     RAIL_NUM_TOPIC_RE,
     META_OR_WARNING_RE,
+    RULES_QUESTION_RE,
+    QUESTION_VETO_RE,
     JOKE_RE,
     FREEBIE_RE,
     SOLICITATION_RE,

@@ -50,12 +50,44 @@ function clearPersistTimer() {
   persistTimer = null;
 }
 
+// Durable write: temp-file + fsync + atomic rename + directory fsync.
+//
+// The atomic rename alone protects against TORN writes (you never see a
+// half-written DB), but NOT against LOST writes on power loss / hard reboot.
+// Without fsync, ext4/xfs may journal the rename while the temp file's data
+// blocks are still only in the page cache — a sudden reboot then leaves the
+// renamed file pointing at unflushed blocks, silently rolling the DB back to
+// an earlier state (valid SQLite, but missing recent settings). That is the
+// "all my toggles/channels reset after a reboot" failure mode. fsync on the
+// file makes the data durable before the rename; fsync on the directory makes
+// the rename itself durable.
 function writeDatabaseFile(db) {
   ensureDatabaseDirectory();
   const exportBuffer = Buffer.from(db.export());
   const tempPath = `${databasePath}.tmp`;
-  fs.writeFileSync(tempPath, exportBuffer);
+
+  const fd = fs.openSync(tempPath, "w");
+  try {
+    fs.writeSync(fd, exportBuffer, 0, exportBuffer.length, 0);
+    fs.fsyncSync(fd);            // flush file data + metadata to disk
+  } finally {
+    fs.closeSync(fd);
+  }
+
   fs.renameSync(tempPath, databasePath);
+
+  // fsync the containing directory so the rename survives a power loss too.
+  try {
+    const dirFd = fs.openSync(path.dirname(databasePath), "r");
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch {
+    // some platforms (notably Windows) can't fsync a directory handle — the
+    // file-level fsync above is the load-bearing part; this is best-effort.
+  }
 }
 
 function schedulePersist(db, { immediate = false } = {}) {
@@ -623,11 +655,41 @@ function mapModerationActionRow(row) {
   };
 }
 
+// Rolling timestamped backups of the live DB. Called on every successful
+// boot-load (before we rewrite the file) so there's always a recent good
+// snapshot to restore from if the DB ever gets reset by a crash/reboot. Keeps
+// the newest BACKUP_RETENTION copies. Restore is a single `cp` on the box.
+const BACKUP_RETENTION = 15;
+function backupDatabaseFile() {
+  try {
+    if (!fs.existsSync(databasePath)) return;
+    const size = fs.statSync(databasePath).size;
+    if (!size) return; // never back up an empty/zero-byte file
+    const backupDir = path.join(path.dirname(databasePath), "db-backups");
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.copyFileSync(databasePath, path.join(backupDir, `restricted-reactions-${stamp}.sqlite`));
+
+    const backups = fs.readdirSync(backupDir)
+      .filter((f) => f.startsWith("restricted-reactions-") && f.endsWith(".sqlite"))
+      .sort();
+    while (backups.length > BACKUP_RETENTION) {
+      const oldest = backups.shift();
+      try { fs.rmSync(path.join(backupDir, oldest), { force: true }); } catch {}
+    }
+  } catch (err) {
+    recordRuntimeEvent("warn", "emoji-db-backup", err?.message || err);
+  }
+}
+
 async function loadDatabase() {
   ensureDatabaseDirectory();
   const SQL = await getSql();
 
   try {
+    // Snapshot the existing good file before we touch it this boot.
+    backupDatabaseFile();
+
     const db = fs.existsSync(databasePath)
       ? new SQL.Database(fs.readFileSync(databasePath))
       : new SQL.Database();

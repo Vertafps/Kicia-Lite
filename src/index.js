@@ -166,13 +166,34 @@ async function releaseInstanceLock() {
 acquireInstanceLock();
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => {
+    appendForensicLine(`received ${signal}`);
     await releaseInstanceLock();
     process.exit(0);
   });
 }
-process.on("exit", () => {
+// Catch lower-level signals so the bash wrapper sees why we died. SIGKILL
+// can't be caught — if it's that, the wrapper picks up on the process exit.
+for (const signal of ["SIGHUP", "SIGQUIT", "SIGABRT", "SIGUSR2"]) {
+  process.on(signal, () => {
+    appendForensicLine(`received ${signal} (will exit)`);
+    process.exit(128);
+  });
+}
+process.on("exit", (code) => {
+  appendForensicLine(`process exit · code=${code} · uptime=${process.uptime().toFixed(1)}s`);
   try { flushRestrictedEmojiDatabaseNow(); } catch {}
 });
+
+// Forensic exit log — appends to a small dedicated file AND the main kicia.log
+// so post-mortem after a silent crash has rss / uptime / signal context.
+function appendForensicLine(reason) {
+  try {
+    const mem = process.memoryUsage();
+    const line = `[${new Date().toISOString()}] kicialite · ${reason} · uptime=${process.uptime().toFixed(1)}s rss=${Math.round(mem.rss / 1024 / 1024)}MB heap=${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB external=${Math.round(mem.external / 1024 / 1024)}MB`;
+    try { fs.appendFileSync(path.join(os.tmpdir(), "kicialite-exit.log"), line + "\n"); } catch {}
+    process.stderr.write(line + "\n");
+  } catch {}
+}
 
 const gatewayIntents = [
   GatewayIntentBits.Guilds,
@@ -414,11 +435,15 @@ client.on(Events.Invalidated, () => {
 
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
+  appendForensicLine(`unhandled-rejection · ${reason?.message || reason}`);
+  if (reason?.stack) process.stderr.write(reason.stack + "\n");
   recordRuntimeEvent("error", "unhandled-rejection", reason?.message || reason);
 });
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
+  appendForensicLine(`uncaught-exception · ${err?.message || err}`);
+  if (err?.stack) process.stderr.write(err.stack + "\n");
   recordRuntimeEvent("error", "uncaught-exception", err?.message || err);
 });
 

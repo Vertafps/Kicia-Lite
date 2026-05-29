@@ -1,0 +1,5 @@
+# vertafps crontab — install with: crontab /home/vertafps/Kicia-Lite/ops/crontab.txt
+#
+# Auto-start the kicialite tmux session on system boot. Idempotent — won't
+# create a duplicate session if one already exists.
+@reboot /usr/bin/tmux has-session -t kicialite 2>/dev/null || /usr/bin/tmux new-session -d -s kicialite -c /home/vertafps/Kicia-Lite "bash -c '/home/vertafps/Kicia-Lite/start.sh 2>&1 | tee -a /home/vertafps/kicia.log'"

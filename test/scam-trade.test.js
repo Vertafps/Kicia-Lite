@@ -264,7 +264,17 @@ const MUST_NOT_FLAG_CASES = [
   ["v3 kinda mid not gonna lie",                         "H · borderline · kinda mid"],
   ["kicia could be better",                              "H · borderline · could be better"],
   ["i don't like kicia much",                            "H · borderline · don't like"],
-  ["kicia is just ok",                                   "H · borderline · just ok"]
+  ["kicia is just ok",                                   "H · borderline · just ok"],
+
+  // I. Game/trading-community vocab collisions — "premium"/"sub"/"trade" are
+  //    everyday words here and must NOT anchor a Kicia scam flag on their own.
+  //    (Real prod FP: "Anyone want to trade with Unnamed and Premium?")
+  ["Anyone want to trade with Unnamed and Premium?",     "I · game trade · bare premium, no kicia (real prod FP)"],
+  ["anyone trading premium pets?",                       "I · game trade · premium pets"],
+  ["wts premium",                                        "I · bare premium · no kicia context"],
+  ["lf premium members to trade",                        "I · bare premium · trade"],
+  ["selling my premium account",                         "I · premium account · no kicia"],
+  ["trading subs for shoutouts",                         "I · bare sub · no kicia"]
 ];
 
 test.describe("scam-trade: must-NOT-flag cases", () => {

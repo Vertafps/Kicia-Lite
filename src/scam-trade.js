@@ -64,25 +64,41 @@ const TRUSTED_SELLER_RE = /\btrusted(?:\s+seller)?\b/i;
 const MIDDLEMAN_RE = /\b(?:middleman|mm)\b/i;
 const BUYER_RE = /\b(buy(?:ing|s)?|bought|wtb|lf|looking\s+(?:to\s+buy|for)|where.{0,20}(?:buy|get|purchase|find|download)|how.{0,15}(?:much|to\s+(?:buy|get)|do\s+i\s+(?:buy|get))|worth\s+(?:it|the|getting|buying|the\s+(?:price|money|cost)|\$?\d+))\b/i;
 const DM_RE = /\b(dm\s*me|pm\s*me|msg\s*me|message\s*me|go\s+private|in\s+dms?|hmu|slide\s+in(?:to)?\s+(?:my\s+)?dms?|msg\s+me\s+asap|pm\s+asap|dm\s+urgent|inbox\s+me)\b/i;
-const KICIA_TOPIC_RE = /\b(kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?|cracked\s+kicia)\b/i;
+// Single source of truth for the topic-word alternation, shared by every
+// topic-proximity regex below so they can never drift out of sync.
+//
+// IMPORTANT: "premium" / "sub" / "subscription" are deliberately NOT topic
+// anchors. In a game/trading community those words collide with Nitro, game
+// passes, and general vocab ("anyone want to trade Unnamed and Premium?") and
+// were the dominant false-positive source. A genuine Kicia-premium reference
+// ("kicia premium", "v3 premium", "premium configs") always carries a core
+// word (kicia/v3/configs/...), so it still matches via that core word — we
+// only lose the bare, ambiguous "premium" with no Kicia context, which is
+// exactly what we want to drop.
+const TOPIC_WORDS = "kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|cracked\\s+kicia";
+const PRICE_TAIL = "\\$\\s*\\d+|\\d+\\s*\\$|\\d+\\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx)";
+const RAIL_WORDS = "cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|nitro|robux|rbx";
+
+const KICIA_TOPIC_RE = new RegExp(`\\b(?:${TOPIC_WORDS})\\b`, "i");
 // "kicia 30 usd" / "v3 30usd dm" style — topic + explicit currency within 30
 // chars with no seller verb present. Captures implicit seller intent: someone
 // quoting a Kicia product alongside a price IS the sales pitch, even without
 // "selling". Buyer phrasing still vetoes via BUYER_RE before this is consulted.
-const PRICE_NEAR_TOPIC_RE = /(?:\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b)[^.\n]{0,30}(?:\$\s*\d+|\d+\s*\$|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx))/i;
-const TOPIC_NEAR_PRICE_RE = /(?:\$\s*\d+|\d+\s*\$|\d+\s*(?:usd|eur|gbp|dollars?|bucks?|robux|rbx))[^.\n]{0,30}(?:\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b)/i;
+const PRICE_NEAR_TOPIC_RE = new RegExp(`(?:\\b(?:${TOPIC_WORDS})\\b)[^.\\n]{0,30}(?:${PRICE_TAIL})`, "i");
+const TOPIC_NEAR_PRICE_RE = new RegExp(`(?:${PRICE_TAIL})[^.\\n]{0,30}(?:\\b(?:${TOPIC_WORDS})\\b)`, "i");
 // "kicia for 10 paypal only" / "v3 30 cashapp only" — topic + bare number +
 // payment rail clustered within ~30 chars each. Distinct from the currency-
 // suffix forms above because the dollar amount is implicit ("paypal" carries
 // the rail-name signal, the number carries the price). Three-way proximity:
 // topic ↔ number ↔ rail. Either ordering qualifies. Stays gated by topic
 // being present somewhere in the cluster.
-const TOPIC_NUM_RAIL_RE = /\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b[^.\n]{0,30}\b\d+\b[^.\n]{0,15}\b(?:cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|nitro|robux|rbx)\b/i;
-const RAIL_NUM_TOPIC_RE = /\b(?:cashapp|paypal|crypto|btc|eth|ltc|usdt|solana|sol|bnb|xrp|venmo|zelle|nitro|robux|rbx)\b[^.\n]{0,15}\b\d+\b[^.\n]{0,30}\b(?:kicia|kiciahook|hook|v[23]|configs?|keys?|licenses?|lifetimes?|premiums?|subs?|subscriptions?)\b/i;
+const TOPIC_NUM_RAIL_RE = new RegExp(`\\b(?:${TOPIC_WORDS})\\b[^.\\n]{0,30}\\b\\d+\\b[^.\\n]{0,15}\\b(?:${RAIL_WORDS})\\b`, "i");
+const RAIL_NUM_TOPIC_RE = new RegExp(`\\b(?:${RAIL_WORDS})\\b[^.\\n]{0,15}\\b\\d+\\b[^.\\n]{0,30}\\b(?:${TOPIC_WORDS})\\b`, "i");
 // Words to fuzzy-match against tokens >= 4 chars when KICIA_TOPIC_RE misses.
 // Intentionally excludes short tokens like "hook"/"v2"/"v3" — too many false
-// positives at 1-edit distance, and the regex already catches them.
-const TOPIC_FUZZY_WORDS = ["kicia", "kiciahook", "configs", "config", "keys", "key", "license", "lifetime", "premium"];
+// positives at 1-edit distance, and the regex already catches them. "premium"
+// is excluded for the same collision reason as above.
+const TOPIC_FUZZY_WORDS = ["kicia", "kiciahook", "configs", "config", "keys", "key", "license", "lifetime"];
 
 // Returns the position of an exact OR fuzzy topic match, or -1 if no match.
 // Exact regex first; falls back to per-token Levenshtein over alpha tokens.
@@ -392,7 +408,7 @@ function densifyObfuscated(text) {
   return out;
 }
 
-const TOPIC_SUBSTRINGS = ["kicia", "kiciahook", "config", "license", "lifetime", "premium", "subscription", "cracked"];
+const TOPIC_SUBSTRINGS = ["kicia", "kiciahook", "config", "license", "lifetime", "cracked"];
 
 function topicHitInDense(dense) {
   if (!dense) return false;

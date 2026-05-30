@@ -115,8 +115,9 @@ async function handleUploadConfigInteraction(interaction) {
     name: interaction.member?.displayName || interaction.user?.globalName || interaction.user?.username || "user",
     iconURL: interaction.user?.displayAvatarURL?.() || undefined
   };
+  // Title carries the name (owner request: title = "Name: <name>"), so the
+  // redundant "name" field is dropped.
   const fields = [
-    { name: "name", value: String(name).slice(0, 256), inline: true },
     { name: "type", value: String(type), inline: true },
     { name: "script", value: String(script), inline: true },
     { name: "submitted by", value: `<@${interaction.user.id}>`, inline: true }
@@ -128,26 +129,18 @@ async function handleUploadConfigInteraction(interaction) {
   if (video) {
     fields.push({ name: "showcase video", value: `[${video.name}](${video.url})`, inline: false });
   }
-  if (videoLink) {
-    fields.push({ name: "video link", value: videoLink.slice(0, 1000), inline: false });
-  }
 
   const panel = buildRichPanel({
-    title: `Config Submission · ${name}`,
+    title: `Name: ${String(name).slice(0, 240)}`,
     author,
     fields,
     color: INFO
   });
 
-  // Submission header — Discord-native H2 heading + a thin underline so
-  // adjacent configs are clearly distinct without looking like ASCII art.
-  // Stays well under the 2000-char content limit.
-  const HEADER = `## ⚙️ new config — ${String(name).slice(0, 80)}\n-# ────────────────────────────────`;
-
-  // Compose the post. Video link goes in content (Discord auto-embeds it
-  // as a playable widget for supported hosts); attachment goes via files[].
+  // Thin separator keeps adjacent submissions visually distinct. No "new
+  // config" wording (owner request) — just a subtle divider above the embed.
   const sendPayload = {
-    content: videoLink ? `${HEADER}\n${videoLink}` : HEADER,
+    content: "-# ────────────────────────────────",
     embeds: [panel],
     files: [{ attachment: file.url, name: file.name }],
     allowedMentions: { parse: [] }
@@ -172,6 +165,17 @@ async function handleUploadConfigInteraction(interaction) {
 
   // Auto-react with check mark
   posted.react("✅").catch(() => null);
+
+  // Video LINK goes in its OWN plain message. Discord suppresses link
+  // unfurling (the YouTube/TikTok player) when the message also carries a
+  // bot-provided rich embed — so the only reliable way to get the player to
+  // render is a bare URL alone in content. Posted right under the embed.
+  if (videoLink) {
+    await channel.send({ content: videoLink, allowedMentions: { parse: [] } }).catch((err) => {
+      recordRuntimeEvent("warn", "config-upload-videolink", err?.message || err);
+      return null;
+    });
+  }
 
   // Re-bump the sticky so it sits BELOW the new submission. /upload config
   // posts as the bot, so the normal non-bot-message bump hook in index.js

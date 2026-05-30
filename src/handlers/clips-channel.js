@@ -42,6 +42,58 @@ function hasVideoClip(message) {
   return false;
 }
 
+// Immediate-action path for a strong scam-broadcast in the clips channel:
+// delete + 24h timeout (no warning grace) + DM + scam log to ignore-logs.
+async function handleClipsScam(message, scam) {
+  const timeoutMs = Number(getSetting("clips.timeout.ms")) || 24 * 60 * 60 * 1000;
+
+  const deleteResult = await message.delete()
+    .then(() => ({ deleted: true }))
+    .catch((err) => ({ deleted: false, reason: err?.message || "delete failed" }));
+  if (!deleteResult.deleted) {
+    recordRuntimeEvent("warn", "clips-delete-failed", `clips scam: ${deleteResult.reason} (check bot Manage Messages perm)`);
+  }
+
+  let timeoutResult = { applied: false, reason: "timeout failed" };
+  try {
+    if (message.member?.timeout) {
+      await message.member.timeout(timeoutMs, `clips channel: scam broadcast (${scam.reasons.join(", ")})`);
+      timeoutResult = { applied: true };
+    }
+  } catch (err) {
+    timeoutResult = { applied: false, reason: err?.message || "timeout failed" };
+  }
+
+  // clear any pending warning state — they're past warnings now
+  try { await resetClipsWarning(message.author.id); } catch {}
+
+  const dmResult = await trySendDM(message.author, {
+    embeds: [buildPanel({
+      header: "Timeout Applied",
+      body: `I've muted you for ${Math.round(timeoutMs / 3600000)}h for posting a scam/phishing message in the clips channel. If this was a mistake, ping staff.`,
+      color: WARN
+    })]
+  });
+
+  const avatar = resolveAvatarURL(message.author);
+  const displayName = message.member?.displayName || message.author?.globalName || message.author?.username || "user";
+  const dmLabel = dmResult.sent ? "✓ sent" : `✗ ${dmResult.reason || "not sent"}`;
+  const panel = buildRichPanel({
+    title: "Clips Channel · Scam Removed",
+    author: { name: displayName, iconURL: avatar || undefined },
+    fields: [
+      { name: "User", value: `<@${message.author.id}>`, inline: true },
+      { name: "Action", value: `${timeoutResult.applied ? "timeout " + Math.round(timeoutMs / 3600000) + "h" : "timeout failed (" + timeoutResult.reason + ")"} · delete ${deleteResult.deleted ? "ok" : deleteResult.reason || "skipped"} · dm ${dmLabel}`, inline: false },
+      { name: "Signals", value: scam.reasons.join("\n") || "—", inline: false },
+      { name: "Content", value: String(message.content || "").slice(0, 500) || "(image/embed only)" }
+    ],
+    color: DANGER
+  });
+  await sendIgnoreLogPanel(message.guild, panel).catch(() => null);
+
+  return true;
+}
+
 async function maybeHandleClipsMessage(message) {
   if (getSetting("clips.guard.enabled") === false) return false;
   if (!message?.inGuild?.()) return false;
@@ -62,6 +114,21 @@ async function maybeHandleClipsMessage(message) {
     return true;
   }
 
+  // SCAM FAST-PATH: a non-video message in clips that trips the scam-broadcast
+  // detector strongly (free-nitro / steam-gift / mrbeast giveaway / phishing
+  // domain / @everyone-bait) is treated as a scam, not just an off-topic post.
+  // Skip the warning grace entirely and time the user out immediately. Logged
+  // distinctly so staff can see it was a scam, not a wrong-channel slip.
+  try {
+    const { detectScamBroadcast } = require("../scam-broadcast");
+    const scam = detectScamBroadcast(message);
+    if (scam.strong) {
+      return await handleClipsScam(message, scam);
+    }
+  } catch (err) {
+    recordRuntimeEvent("warn", "clips-scam-detect", err?.message || err);
+  }
+
   // non-video message in clips channel - warn or escalate
   const userId = message.author.id;
   const now = Date.now();
@@ -80,6 +147,11 @@ async function maybeHandleClipsMessage(message) {
   const deleteResult = await message.delete()
     .then(() => ({ deleted: true }))
     .catch((err) => ({ deleted: false, reason: err?.message || "delete failed" }));
+  // Surface delete failures loudly — if images are "getting through", it's
+  // almost always the bot missing Manage Messages in the clips channel.
+  if (!deleteResult.deleted) {
+    recordRuntimeEvent("warn", "clips-delete-failed", `clips channel: ${deleteResult.reason} (check bot Manage Messages perm)`);
+  }
 
   const willTimeout = state.count >= threshold;
   let timeoutResult = { applied: false, reason: "warn-only" };

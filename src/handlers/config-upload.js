@@ -137,10 +137,15 @@ async function handleUploadConfigInteraction(interaction) {
     color: INFO
   });
 
-  // Thin separator keeps adjacent submissions visually distinct. No "new
-  // config" wording (owner request) — just a subtle divider above the embed.
+  // Strong separator between submissions: a full divider line + a large H1
+  // heading (Discord renders "# ..." as big bold text) carrying the config
+  // name. This makes each new config visually pop and clearly breaks it off
+  // from the previous one. Name is sanitized so it can't break the markdown
+  // or inject a heading/mention; allowedMentions already blocks pings.
+  const headingName = String(name).replace(/[\r\n#]+/g, " ").trim().slice(0, 100) || "config";
+  const separator = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n# 📁 Name: ${headingName}`;
   const sendPayload = {
-    content: "-# ────────────────────────────────",
+    content: separator,
     embeds: [panel],
     files: [{ attachment: file.url, name: file.name }],
     allowedMentions: { parse: [] }

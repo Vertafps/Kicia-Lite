@@ -144,23 +144,40 @@ async function handleUploadConfigInteraction(interaction) {
   // or inject a heading/mention; allowedMentions already blocks pings.
   const headingName = String(name).replace(/[\r\n#]+/g, " ").trim().slice(0, 100) || "config";
   const separator = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n# 📁 Name: ${headingName}`;
-  // Config message carries ONLY the config file (no video). The showcase
-  // video — whether an uploaded file OR a link — always goes in its own
-  // follow-up message so both render CONSISTENTLY right below the config.
-  // (In a single message Discord floats the video player above non-media
-  // file boxes, and a link can't unfurl inside an embed message — so without
-  // this split, a video file shows ABOVE the config while a video link shows
-  // BELOW it. Splitting it out makes the order identical for both.)
-  const sendPayload = {
-    content: separator,
-    embeds: [panel],
-    files: [{ attachment: file.url, name: file.name }],
-    allowedMentions: { parse: [] }
-  };
 
+  // Layout (owner preference): showcase video ON TOP, config below it.
+  //   message 1: separator/heading + the video (file player OR link unfurl)
+  //   message 2: the config embed + config file
+  // The video gets its own message so a video FILE and a video LINK render
+  // identically — both above the config. (A link can't unfurl inside the
+  // embed message, so it must be its own message; we put the file there too
+  // for consistency.)
+  try {
+    if (video) {
+      await channel.send({
+        content: separator,
+        files: [{ attachment: video.url, name: video.name }],
+        allowedMentions: { parse: [] }
+      });
+    } else {
+      // videoLink — bare URL on its own line so Discord unfurls the player.
+      await channel.send({
+        content: `${separator}\n${videoLink}`,
+        allowedMentions: { parse: [] }
+      });
+    }
+  } catch (err) {
+    recordRuntimeEvent("warn", "config-upload-video", err?.message || err);
+  }
+
+  // The config embed + config file, posted directly under the video.
   let posted;
   try {
-    posted = await channel.send(sendPayload);
+    posted = await channel.send({
+      embeds: [panel],
+      files: [{ attachment: file.url, name: file.name }],
+      allowedMentions: { parse: [] }
+    });
   } catch (err) {
     recordRuntimeEvent("warn", "config-upload-send", err?.message || err);
     try {
@@ -172,25 +189,8 @@ async function handleUploadConfigInteraction(interaction) {
     return true;
   }
 
-  // Auto-react with check mark
+  // Auto-react with check mark on the config embed.
   posted.react("✅").catch(() => null);
-
-  // Showcase video, posted BELOW the config (consistent for file and link).
-  if (video) {
-    await channel.send({
-      files: [{ attachment: video.url, name: video.name }],
-      allowedMentions: { parse: [] }
-    }).catch((err) => {
-      recordRuntimeEvent("warn", "config-upload-videofile", err?.message || err);
-      return null;
-    });
-  } else if (videoLink) {
-    // Bare URL alone in content so Discord unfurls the YouTube/TikTok player.
-    await channel.send({ content: videoLink, allowedMentions: { parse: [] } }).catch((err) => {
-      recordRuntimeEvent("warn", "config-upload-videolink", err?.message || err);
-      return null;
-    });
-  }
 
   // Re-bump the sticky so it sits BELOW the new submission. /upload config
   // posts as the bot, so the normal non-bot-message bump hook in index.js
